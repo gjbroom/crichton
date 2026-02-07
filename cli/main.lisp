@@ -26,19 +26,21 @@
 
 (defun cmd-stop ()
   (format t "Stopping Crichton daemon...~%")
-  (if (crichton/daemon:stop-daemon)
-      (format t "Daemon stopped.~%")
-      (format t "Daemon was not running.~%")))
+  (let ((result (remote-eval-quiet "(crichton/daemon:stop-daemon)")))
+    (if result
+        (format t "Daemon stopped.~%")
+        (format t "Daemon was not running.~%"))))
 
 (defun cmd-status ()
-  (let ((status (crichton/daemon:daemon-status)))
-    (if (getf status :running)
-        (format t "Crichton is running. PID ~D~%" (getf status :pid))
-        (progn
+  (let ((result (remote-eval-quiet "(crichton/daemon:daemon-status)")))
+    (if result
+        (let ((pid (getf result :pid)))
+          (format t "Crichton is running. PID ~D~%" pid))
+        (let ((local-status (crichton/daemon:daemon-status)))
           (format t "Crichton is not running.~%")
-          (when (getf status :stale-pid)
+          (when (getf local-status :stale-pid)
             (format t "WARNING: Stale PID file found (PID ~D). Run 'crichton doctor'.~%"
-                    (getf status :stale-pid)))))))
+                    (getf local-status :stale-pid)))))))
 
 (defun cmd-doctor ()
   "Validate Crichton installation and config."
