@@ -36,9 +36,8 @@
   (when *running*
     (log:warn "Daemon already running.")
     (return-from start-daemon nil))
-  (let ((config-pkg (find-package :crichton/config)))
-    (funcall (find-symbol "ENSURE-DIRECTORIES" config-pkg))
-    (funcall (find-symbol "LOAD-CONFIG" config-pkg)))
+  (crichton/config:ensure-directories)
+  (crichton/config:load-config)
   (crichton/logging:setup-logging)
   (write-pid-file)
   (setf *running* t)

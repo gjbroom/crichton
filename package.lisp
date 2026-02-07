@@ -5,9 +5,12 @@
 (defpackage #:crichton/config
   (:use #:cl)
   (:export #:*agent-home*
+           #:*config*
            #:agent-path
            #:ensure-directories
-           #:load-config))
+           #:load-config
+           #:config-get
+           #:config-section-get))
 
 (defpackage #:crichton/logging
   (:use #:cl)

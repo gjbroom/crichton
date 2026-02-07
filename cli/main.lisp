@@ -46,16 +46,12 @@
   (format t "==============~%")
   (check-item "SBCL version" (lisp-implementation-version))
   (check-item "Home directory"
-              (let ((home (symbol-value
-                           (find-symbol "*AGENT-HOME*" :crichton/config))))
+              (let ((home crichton/config:*agent-home*))
                 (if (probe-file home)
                     (format nil "~A (exists)" (namestring home))
                     (format nil "~A (MISSING)" (namestring home)))))
   (check-item "Config file"
-              (let ((cfg (merge-pathnames
-                          "config.toml"
-                          (symbol-value
-                           (find-symbol "*AGENT-HOME*" :crichton/config)))))
+              (let ((cfg (merge-pathnames "config.toml" crichton/config:*agent-home*)))
                 (if (probe-file cfg) "found" "not found (using defaults)")))
   (check-item "Swank available"
               (if (find-package :swank) "yes" "no (install via quicklisp)")))

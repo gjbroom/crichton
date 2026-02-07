@@ -18,6 +18,8 @@ signing. Informed by a security audit of OpenClaw."
                #:ironclad
                #:shasht
                #:log4cl
+               #:cl-ppcre
+               #:cl-toml
                #:dexador
                #:hunchentoot
                #:swank-client)
