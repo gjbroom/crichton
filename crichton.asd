@@ -45,7 +45,8 @@ signing. Informed by a security audit of OpenClaw."
                                             (:file "system-info")
                                             (:file "timing")
                                             (:file "scheduler")
-                                            (:file "rss")))))
+                                            (:file "rss")
+                                            (:file "token-usage")))))
                (:module "crypto"
                 :components ((:file "wipe")
                              (:file "age")))

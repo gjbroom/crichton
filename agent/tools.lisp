@@ -210,6 +210,48 @@
                   "No active RSS monitors.")))
            (t (format nil "Unknown RSS action: ~A" action))))))))
 
+;;; --- Token/resource usage tool ---
+
+(defun register-usage-tool ()
+  (multiple-value-bind (props required)
+      (make-properties
+       '("action" "string"
+         "The action: summary (aggregate across all meters), meter (single meter detail), list (list meter names), recent (recent calls for a meter)."
+         :enum ("summary" "meter" "list" "recent")
+         :required-p t)
+       '("meter" "string"
+         "Meter name (for 'meter' and 'recent' actions). e.g. 'llm'.")
+       '("count" "integer"
+         "Number of recent records to return (for 'recent'). Default: 10."))
+    (register-tool
+     "resource_usage"
+     "Query metered resource usage, burn rate, and cost estimates. Tracks any service that consumes tokens or API calls (LLM, weather API, etc.). Use 'summary' for aggregate view, 'meter' for one service, 'list' to see meter names, 'recent' for call history."
+     (make-json-schema :type "object" :properties props :required required)
+     (lambda (input)
+       (let ((action (hget input "action" "summary"))
+             (meter-name (hget input "meter"))
+             (count (hget input "count" 10)))
+         (cond
+           ((string-equal action "summary")
+            (with-output-to-string (s)
+              (crichton/skills:usage-report :stream s)))
+           ((string-equal action "meter")
+            (if (null meter-name)
+                "Error: 'meter' parameter required for meter action"
+                (with-output-to-string (s)
+                  (crichton/skills:meter-report meter-name :stream s))))
+           ((string-equal action "list")
+            (let ((names (crichton/skills:list-meters)))
+              (if names
+                  (format nil "Active meters: ~{~A~^, ~}" names)
+                  "No active meters.")))
+           ((string-equal action "recent")
+            (if (null meter-name)
+                "Error: 'meter' parameter required for recent action"
+                (format nil "~{~S~^~%~}"
+                        (crichton/skills:meter-recent meter-name count))))
+           (t (format nil "Unknown action: ~A" action))))))))
+
 ;;; --- Registration ---
 
 (defun register-all-tools ()
@@ -218,4 +260,5 @@
   (register-system-info-tool)
   (register-scheduler-tool)
   (register-rss-tool)
+  (register-usage-tool)
   (log:info "Registered ~D agent tools" (hash-table-count *agent-tools*)))

@@ -117,7 +117,20 @@
            #:rss-monitor-start
            #:rss-monitor-stop
            #:rss-list-monitors
-           #:clear-seen))
+           #:clear-seen
+           ;; token-usage / metered resources
+           #:register-pricing
+           #:record-usage
+           #:ensure-meter
+           #:list-meters
+           #:reset-meter
+           #:reset-all-meters
+           #:meter-snapshot
+           #:all-meters-snapshot
+           #:meter-recent
+           #:aggregate-snapshot
+           #:meter-report
+           #:usage-report))
 
 (defpackage #:crichton/llm
   (:use #:cl)

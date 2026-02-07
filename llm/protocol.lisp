@@ -167,3 +167,21 @@
     (when is-error
       (setf (getf block :is-error) t))
     block))
+
+;;; --- Usage metering hook ---
+;;; Records every send-message call into the general-purpose meter system.
+;;; Works for any provider — the :around method fires regardless of backend.
+
+(defmethod send-message :around ((provider llm-provider) messages &key &allow-other-keys)
+  (let ((result (call-next-method)))
+    (handler-case
+        (let* ((usage (getf result :usage))
+               (model (or (getf result :model)
+                          (provider-model provider)
+                          "unknown"))
+               (input-tokens (or (getf usage :input-tokens) 0))
+               (output-tokens (or (getf usage :output-tokens) 0)))
+          (crichton/skills:record-usage "llm" model input-tokens output-tokens))
+      (error (c)
+        (log:warn "Failed to record LLM usage: ~A" c)))
+    result))
