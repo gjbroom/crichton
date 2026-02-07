@@ -20,9 +20,11 @@ signing. Informed by a security audit of OpenClaw."
                #:log4cl
                #:cl-ppcre
                #:cl-toml
+               #:cl-base64
                #:dexador
                #:hunchentoot
-               #:swank-client)
+               #:swank-client
+               #:xmls)
   :serial t
   :components ((:file "package")
                (:module "config"
@@ -30,13 +32,44 @@ signing. Informed by a security audit of OpenClaw."
                              (:file "loader")))
                (:module "logging"
                 :components ((:file "logger")))
-               (:module "daemon"
-                :components ((:file "lifecycle")
-                             (:file "swank")))
-               (:module "cli"
-                :components ((:file "main")
-                             (:file "remote")))
+               (:module "rpc"
+                :components ((:file "protocol")))
                (:module "wasm"
                 :components ((:file "ffi")
                              (:file "engine")))
+               (:module "skills"
+                :components ((:file "manifest")
+                             (:file "signing")
+                             (:module "builtins"
+                              :components ((:file "weather")
+                                            (:file "system-info")
+                                            (:file "timing")
+                                            (:file "scheduler")
+                                            (:file "rss")))))
+               (:module "crypto"
+                :components ((:file "wipe")
+                             (:file "age")))
+               (:module "credentials"
+                :components ((:file "protocol")
+                             (:file "backend-age-file")
+                             (:file "mediator")))
+               (:module "sessions"
+                 :components ((:file "store")
+                              (:file "retention")))
+                (:module "llm"
+                 :components ((:file "protocol")
+                              (:file "anthropic")
+                              (:file "registry")))
+                (:module "daemon"
+                :components ((:file "lifecycle")
+                             (:file "swank")
+                             (:file "runner-client")))
+               (:module "agent"
+                :components ((:file "tools")
+                             (:file "loop")))
+               (:module "cli"
+                :components ((:file "main")
+                             (:file "remote")))
+               (:module "runner"
+                :components ((:file "server")))
                (:file "crichton")))

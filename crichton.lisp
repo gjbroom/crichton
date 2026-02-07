@@ -6,9 +6,15 @@
 
 (defun main ()
   "CLI entry point. Used by save-lisp-and-die.
-   Detects --foreground flag for systemd Type=simple services."
+   Detects --foreground flag for systemd Type=simple services.
+   Dispatches 'runner' subcommand to the skill runner process."
   (let* ((args sb-ext:*posix-argv*)
+         (command (second args))
          (foreground (member "--foreground" args :test #'string-equal)))
-    (if foreground
-        (crichton/daemon:start-daemon :foreground t)
-        (crichton/cli:main))))
+    (cond
+      ((and command (string-equal command "runner"))
+       (crichton/runner:main (cddr args)))
+      (foreground
+       (crichton/daemon:start-daemon :foreground t))
+      (t
+       (crichton/cli:main)))))

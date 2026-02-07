@@ -68,19 +68,41 @@ sbcl --eval '(push #p"/path/to/crichton/" asdf:*central-registry*)'  \
 
 ```
 crichton/
-├── crichton.asd       # ASDF system definition
-├── package.lisp       # Package declarations
-├── crichton.lisp      # Top-level entry point
+├── crichton.asd            # ASDF system definition
+├── package.lisp            # Package declarations
+├── crichton.lisp           # Top-level entry point
 ├── config/
-│   ├── paths.lisp     # ~/.crichton/ directory layout
-│   └── loader.lisp    # TOML config loading
+│   ├── paths.lisp          # ~/.crichton/ directory layout
+│   └── loader.lisp         # TOML config loading
 ├── logging/
-│   └── logger.lisp    # Structured JSON logging (0600 perms)
+│   └── logger.lisp         # Structured JSON logging (0600 perms)
+├── rpc/
+│   └── protocol.lisp       # NDJSON protocol for daemon↔runner RPC
+├── wasm/
+│   ├── ffi.lisp            # CFFI bindings to wasmtime C API
+│   └── engine.lisp         # Higher-level WASM execution engine
+├── skills/
+│   ├── manifest.lisp       # Skill capability manifest parsing
+│   └── signing.lisp        # Ed25519 skill signing/verification
+├── crypto/
+│   ├── wipe.lisp           # Best-effort secret zeroization
+│   └── age.lisp            # age CLI wrapper for encryption
+├── credentials/
+│   ├── protocol.lisp       # CLOS credential store protocol
+│   ├── backend-age-file.lisp # Age-encrypted file backend
+│   └── mediator.lisp       # Daemon credential mediation API
+├── sessions/
+│   ├── store.lisp          # Encrypted session storage
+│   └── retention.lisp      # Session retention policy + purge
 ├── daemon/
-│   ├── lifecycle.lisp # Start/stop/status + PID management
-│   └── swank.lisp     # SLIME/SLY connectivity
-└── cli/
-    └── main.lisp      # CLI commands: start, stop, status, doctor
+│   ├── lifecycle.lisp      # Start/stop/status + PID management
+│   ├── swank.lisp          # SLIME/SLY connectivity
+│   └── runner-client.lisp  # Daemon-side runner process client
+├── cli/
+│   ├── main.lisp           # CLI: start, stop, status, doctor, cred
+│   └── remote.lisp         # Swank client for remote eval
+└── runner/
+    └── server.lisp         # WASM skill runner process
 ```
 
 ## Design Spec

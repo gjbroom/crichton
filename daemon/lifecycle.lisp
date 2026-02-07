@@ -42,6 +42,12 @@
   (write-pid-file)
   (setf *running* t)
   (start-swank)
+  (crichton/credentials:ensure-credential-store)
+  (handler-case
+      (crichton/sessions:purge-expired-sessions)
+    (error (c)
+      (log:warn "Session purge at startup failed: ~A" c)))
+  (crichton/skills:start-scheduler)
   (log:info "Crichton daemon started (PID ~D)" (sb-posix:getpid))
   (when foreground
     (install-signal-handlers)
@@ -56,6 +62,7 @@
   (unless *running*
     (log:warn "Daemon not running.")
     (return-from stop-daemon nil))
+  (crichton/skills:stop-scheduler)
   (setf *running* nil)
   (bt:with-lock-held (*shutdown-lock*)
     (bt:condition-notify *shutdown-cv*))

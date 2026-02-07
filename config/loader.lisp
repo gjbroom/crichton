@@ -45,7 +45,10 @@
 
 (defun toml-value-to-lisp (value)
   "Convert a cl-toml value to a Lisp value.
-   Hash-tables become plists, cl-toml booleans become T/NIL, rest pass through."
+   Hash-tables become plists, cl-toml booleans become T/NIL, rest pass through.
+   NOTE: String values remain strings — callers expecting keywords (e.g. :provider,
+   :backend, :egress-policy) must normalize themselves. See llm/registry.lisp for
+   the pattern. A future config-section-get-keyword accessor could centralize this."
   (cond
     ((hash-table-p value) (toml-table-to-plist value))
     ((eq value 'cl-toml:true) t)
@@ -83,11 +86,14 @@
 (defun default-config ()
   "Sensible defaults for a fresh install."
   (list :llm (list :provider :anthropic
-                   :model "claude-sonnet-4-20250514")
+                   :model "claude-sonnet-4-20250514"
+                   :api-key-credential "anthropic-api-key")
         :logging (list :level :info
                        :format :json)
         :daemon (list :swank-port 4005
                       :pid-file (namestring (merge-pathnames "daemon.pid" *agent-home*)))
         :sessions (list :retention-days 30
-                        :encrypt t)
-        :network (list :egress-policy :deny-all)))
+                         :encrypt t)
+        :credentials (list :backend :auto)
+        :network (list :egress-policy :deny-all)
+        :weather (list :city "Victoria")))

@@ -23,7 +23,10 @@
   (:export #:start-daemon
            #:stop-daemon
            #:daemon-status
-           #:start-swank))
+           #:start-swank
+           #:ensure-runner
+           #:runner-invoke
+           #:kill-runner))
 
 (defpackage #:crichton/cli
   (:use #:cl)
@@ -31,11 +34,187 @@
            #:remote-eval
            #:remote-eval-quiet))
 
+(defpackage #:crichton/rpc
+  (:use #:cl)
+  (:export #:*max-message-bytes*
+           #:next-id
+           #:bytes-to-base64
+           #:base64-to-bytes
+           #:json-to-string
+           #:string-to-json
+           #:make-request
+           #:make-ok-response
+           #:make-error-response
+           #:write-message
+           #:read-message
+           #:msg-id
+           #:msg-op
+           #:msg-ok-p
+           #:msg-result
+           #:msg-error
+           #:msg-get))
+
 (defpackage #:crichton/wasm
   (:use #:cl)
   (:export #:ensure-wasmtime-loaded
+           #:assert-wasmtime-abi
            #:run-wasm-module
-           #:wat-to-wasm))
+           #:run-wasm-with-host-fns
+           #:run-wasm-bytes-with-host-fns
+           #:wat-to-wasm
+           #:make-functype
+           #:*test-host-log-wat*))
+
+(defpackage #:crichton/skills
+  (:use #:cl)
+  (:local-nicknames (#:bt #:bordeaux-threads))
+  (:export #:parse-skill-manifest
+           #:validate-capabilities
+           #:manifest-skill-name
+           #:manifest-skill-version
+           #:manifest-capabilities
+           #:manifest-error
+           #:manifest-error-path
+           #:manifest-error-problems
+           #:generate-signing-keypair
+           #:sign-skill-bytes
+           #:verify-skill-signature
+           #:load-trusted-keys
+           #:verify-skill-bundle
+           #:weather-report
+           #:weather-conditions
+           #:system-loadavg
+           #:system-memory
+           #:system-thermal-zones
+           #:system-disk-usage
+           #:system-snapshot
+           #:system-report
+           ;; timing
+           #:with-timing
+           #:make-stopwatch
+           #:stopwatch-record
+           #:stopwatch-reset
+           #:stopwatch-snapshot
+           #:with-stopwatch
+           #:get-stopwatch
+           #:list-stopwatches
+           #:clear-stopwatches
+           #:format-duration-us
+           ;; scheduler
+           #:start-scheduler
+           #:stop-scheduler
+           #:schedule-at
+           #:schedule-every
+           #:schedule-daily
+           #:cancel-task
+           #:list-tasks
+           #:scheduler-status
+           ;; rss
+           #:rss-fetch
+           #:rss-check
+           #:rss-report
+           #:rss-check-report
+           #:rss-monitor-start
+           #:rss-monitor-stop
+           #:rss-list-monitors
+           #:clear-seen))
+
+(defpackage #:crichton/llm
+  (:use #:cl)
+  (:local-nicknames (#:bt #:bordeaux-threads))
+  (:export ;; protocol
+           #:llm-provider
+           #:provider-id
+           #:provider-model
+           #:send-message
+           #:stream-message
+           #:list-models
+           #:normalize-messages
+           #:extract-system-message
+           #:response-text
+           ;; content blocks
+           #:content-blocks
+           #:blocks-text
+           #:blocks-tool-uses
+           #:make-tool-result-block
+           ;; conditions
+           #:llm-error
+           #:llm-api-error
+           #:llm-auth-error
+           #:llm-rate-limit-error
+           #:llm-feature-not-supported
+           ;; anthropic
+           #:anthropic-provider
+           #:make-anthropic-provider
+           ;; registry
+           #:*llm-provider*
+           #:make-llm-provider-from-config
+           #:ensure-llm-provider
+           #:chat))
+
+(defpackage #:crichton/agent
+  (:use #:cl)
+  (:export #:run-agent
+           #:ask
+           #:chat-session
+           #:register-all-tools
+           #:all-tool-defs
+           #:dispatch-tool
+           #:register-tool))
+
+(defpackage #:crichton/crypto
+  (:use #:cl)
+  (:export #:age-available-p
+           #:ensure-identity-key
+           #:identity-key-exists-p
+           #:identity-key-path
+           #:identity-recipient
+           #:age-encrypt
+           #:age-decrypt
+           #:encrypt-string
+           #:decrypt-to-string
+           #:encrypt-to-file
+           #:decrypt-from-file
+           #:read-file-bytes
+           #:wipe-bytes
+           #:wipe-string
+           #:with-secret-bytes
+           #:with-secret-string))
+
+(defpackage #:crichton/credentials
+  (:use #:cl)
+  (:export #:credential-store
+           #:credential-not-found
+           #:credential-name
+           #:credential-backend-error
+           #:cred-put
+           #:cred-get
+           #:cred-delete
+           #:cred-exists-p
+           #:cred-list
+           #:age-file-store
+           #:make-age-file-store
+           #:*credential-store*
+           #:ensure-credential-store
+           #:resolve-credential
+           #:resolve-credential-for-skill
+           #:store-credential
+           #:delete-credential
+           #:list-credentials))
+
+(defpackage #:crichton/sessions
+  (:use #:cl)
+  (:export #:create-session
+           #:save-session
+           #:load-session
+           #:list-sessions
+           #:delete-session
+           #:add-message
+           #:purge-expired-sessions))
+
+(defpackage #:crichton/runner
+  (:use #:cl)
+  (:export #:main))
 
 (defpackage #:crichton
   (:use #:cl)

@@ -1,0 +1,169 @@
+;;;; llm/protocol.lisp
+;;;;
+;;;; CLOS protocol for LLM providers.
+;;;; Generic interface so new providers slot in without refactoring.
+
+(in-package #:crichton/llm)
+
+;;; --- Conditions ---
+
+(define-condition llm-error (error)
+  ((provider :initarg :provider :reader llm-error-provider)
+   (message :initarg :message :reader llm-error-message))
+  (:report (lambda (c s)
+             (format s "LLM error (~A): ~A"
+                     (if (slot-boundp c 'provider)
+                         (provider-id (llm-error-provider c))
+                         "unknown")
+                     (llm-error-message c)))))
+
+(define-condition llm-api-error (llm-error)
+  ((status :initarg :status :reader llm-api-error-status)
+   (body :initarg :body :reader llm-api-error-body))
+  (:report (lambda (c s)
+             (format s "LLM API error (~A) HTTP ~D: ~A"
+                     (if (slot-boundp c 'provider)
+                         (provider-id (llm-error-provider c))
+                         "unknown")
+                     (llm-api-error-status c)
+                     (llm-error-message c)))))
+
+(define-condition llm-auth-error (llm-api-error) ()
+  (:report (lambda (c s)
+             (format s "LLM authentication failed (~A): ~A"
+                     (if (slot-boundp c 'provider)
+                         (provider-id (llm-error-provider c))
+                         "unknown")
+                     (llm-error-message c)))))
+
+(define-condition llm-rate-limit-error (llm-api-error) ()
+  (:report (lambda (c s)
+             (format s "LLM rate limited (~A): ~A"
+                     (if (slot-boundp c 'provider)
+                         (provider-id (llm-error-provider c))
+                         "unknown")
+                     (llm-error-message c)))))
+
+(define-condition llm-feature-not-supported (llm-error)
+  ((feature :initarg :feature :reader llm-unsupported-feature))
+  (:report (lambda (c s)
+             (format s "LLM feature ~A not supported by ~A"
+                     (llm-unsupported-feature c)
+                     (if (slot-boundp c 'provider)
+                         (provider-id (llm-error-provider c))
+                         "unknown")))))
+
+;;; --- Base class ---
+
+(defclass llm-provider ()
+  ((provider-id :initarg :provider-id :reader provider-id
+                :type keyword)
+   (model :initarg :model :accessor provider-model
+          :type string)))
+
+;;; --- Generic protocol ---
+
+(defgeneric send-message (provider messages &key system max-tokens temperature
+                                                tools tool-choice)
+  (:documentation
+   "Send messages to the LLM and return a response plist.
+    MESSAGES is a list of plists: ((:role :user :content \"...\") ...)
+    Returns a plist:
+      (:content \"response text\"
+       :stop-reason :end-turn|:max-tokens|:tool-use
+       :usage (:input-tokens N :output-tokens N)
+       :id \"msg_...\")"))
+
+(defgeneric stream-message (provider messages on-event &key system max-tokens
+                                                            temperature tools tool-choice)
+  (:documentation
+   "Stream a response from the LLM, calling ON-EVENT for each chunk.
+    ON-EVENT receives plists like (:type :delta :text \"...\") or (:type :done ...).
+    Not all providers support streaming."))
+
+(defgeneric list-models (provider)
+  (:documentation "Return a list of available model name strings."))
+
+;;; --- Default methods ---
+
+(defmethod stream-message ((p llm-provider) messages on-event &key &allow-other-keys)
+  (declare (ignore messages on-event))
+  (error 'llm-feature-not-supported :feature :streaming :provider p))
+
+(defmethod list-models ((p llm-provider))
+  (error 'llm-feature-not-supported :feature :list-models :provider p))
+
+;;; --- Message helpers ---
+
+(defun normalize-messages (messages)
+  "Normalize a list of message plists. Ensures :role is a keyword and :content exists."
+  (mapcar (lambda (msg)
+            (let ((role (getf msg :role))
+                  (content (getf msg :content)))
+              (unless role (error "Message missing :role"))
+              (unless content (error "Message missing :content"))
+              (list :role (if (keywordp role) role
+                              (intern (string-upcase (string role)) :keyword))
+                    :content content)))
+          messages))
+
+(defun extract-system-message (messages)
+  "Split out any leading :system role messages from MESSAGES.
+   Returns (values system-string remaining-messages).
+   Anthropic requires system as a separate parameter."
+  (let ((system-parts nil)
+        (rest messages))
+    (loop while (and rest (eq :system (getf (first rest) :role)))
+          do (push (getf (first rest) :content) system-parts)
+             (pop rest))
+    (values (when system-parts
+              (format nil "~{~A~^~%~%~}" (nreverse system-parts)))
+            rest)))
+
+(defun response-text (response)
+  "Extract the text content from a provider response plist.
+   Works for both string :content and content block lists."
+  (let ((content (getf response :content)))
+    (if (stringp content)
+        content
+        (blocks-text content))))
+
+;;; --- Content block helpers ---
+;;; With tool use, message :content can be either a string or a list of
+;;; content block plists. These helpers normalize between the two forms.
+
+(defun content-blocks (content)
+  "Normalize CONTENT to a list of content block plists.
+   String → ((:type :text :text \"...\")).
+   List of plists → returned as-is.
+   NIL → NIL."
+  (cond
+    ((null content) nil)
+    ((stringp content) (list (list :type :text :text content)))
+    ((listp content) content)
+    (t (list (list :type :text :text (princ-to-string content))))))
+
+(defun blocks-text (blocks)
+  "Extract concatenated text from a list of content block plists.
+   Ignores non-text blocks (tool_use, tool_result)."
+  (with-output-to-string (out)
+    (dolist (block (content-blocks blocks))
+      (when (eq :text (getf block :type))
+        (let ((text (getf block :text)))
+          (when text (write-string text out)))))))
+
+(defun blocks-tool-uses (blocks)
+  "Extract all tool_use blocks from a list of content block plists.
+   Returns a list of plists with :type :tool-use :id :name :input."
+  (remove-if-not (lambda (block)
+                   (eq :tool-use (getf block :type)))
+                 (content-blocks blocks)))
+
+(defun make-tool-result-block (tool-use-id content &key (is-error nil))
+  "Build a tool_result content block plist."
+  (let ((block (list :type :tool-result
+                     :tool-use-id tool-use-id
+                     :content content)))
+    (when is-error
+      (setf (getf block :is-error) t))
+    block))
