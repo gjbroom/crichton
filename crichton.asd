@@ -36,4 +36,7 @@ signing. Informed by a security audit of OpenClaw."
                (:module "cli"
                 :components ((:file "main")
                              (:file "remote")))
+               (:module "wasm"
+                :components ((:file "ffi")
+                             (:file "engine")))
                (:file "crichton")))

@@ -31,6 +31,12 @@
            #:remote-eval
            #:remote-eval-quiet))
 
+(defpackage #:crichton/wasm
+  (:use #:cl)
+  (:export #:ensure-wasmtime-loaded
+           #:run-wasm-module
+           #:wat-to-wasm))
+
 (defpackage #:crichton
   (:use #:cl)
   (:export #:main))

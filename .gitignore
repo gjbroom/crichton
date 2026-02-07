@@ -15,3 +15,7 @@ quicklisp/
 
 # Runtime state
 *.pid
+
+# Vendored binaries (too large for git)
+vendor/wasmtime/lib/
+vendor/wasmtime/include/
