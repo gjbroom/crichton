@@ -1,0 +1,17 @@
+# SBCL/ASDF build artifacts
+*.fasl
+*.lx64fsl
+
+# save-lisp-and-die binary
+crichton
+
+# Quicklisp local state
+quicklisp/
+
+# Editor
+*~
+\#*\#
+.#*
+
+# Runtime state
+*.pid
