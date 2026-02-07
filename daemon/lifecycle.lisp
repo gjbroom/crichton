@@ -42,7 +42,7 @@
   (write-pid-file)
   (setf *running* t)
   (start-swank)
-  (log:info "Crichton daemon started" :pid (sb-posix:getpid))
+  (log:info "Crichton daemon started (PID ~D)" (sb-posix:getpid))
   (when foreground
     (install-signal-handlers)
     (bt:with-lock-held (*shutdown-lock*)

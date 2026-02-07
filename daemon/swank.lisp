@@ -26,7 +26,7 @@
           (let ((create-server (find-symbol "CREATE-SERVER" :swank)))
             (funcall create-server :port actual-port :dont-close dont-close)
             (setf *swank-port* actual-port)
-            (log:info "Swank server started" :port actual-port)
+            (log:info "Swank server started on port ~D" actual-port)
             actual-port))
       (error (c)
         (log:warn "Could not start Swank: ~A" c)
