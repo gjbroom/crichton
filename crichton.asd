@@ -24,7 +24,8 @@ signing. Informed by a security audit of OpenClaw."
                #:dexador
                #:hunchentoot
                #:swank-client
-               #:xmls)
+               #:xmls
+               #:websocket-driver-client)
   :serial t
   :components ((:file "package")
                (:module "config"
@@ -68,6 +69,10 @@ signing. Informed by a security audit of OpenClaw."
                (:module "agent"
                 :components ((:file "tools")
                              (:file "loop")))
+               (:module "channels"
+                :components ((:file "protocol")
+                             (:file "discord")
+                             (:file "manager")))
                (:module "cli"
                 :components ((:file "main")
                              (:file "remote")))

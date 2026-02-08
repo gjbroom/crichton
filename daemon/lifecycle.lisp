@@ -48,6 +48,10 @@
     (error (c)
       (log:warn "Session purge at startup failed: ~A" c)))
   (crichton/skills:start-scheduler)
+  (handler-case
+      (crichton/channels:start-channels)
+    (error (c)
+      (log:warn "Channel startup failed: ~A" c)))
   (log:info "Crichton daemon started (PID ~D)" (sb-posix:getpid))
   (when foreground
     (install-signal-handlers)
@@ -62,6 +66,10 @@
   (unless *running*
     (log:warn "Daemon not running.")
     (return-from stop-daemon nil))
+  (handler-case
+      (crichton/channels:stop-channels)
+    (error (c)
+      (log:warn "Channel shutdown error: ~A" c)))
   (crichton/skills:stop-scheduler)
   (setf *running* nil)
   (bt:with-lock-held (*shutdown-lock*)

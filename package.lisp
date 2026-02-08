@@ -225,6 +225,33 @@
            #:add-message
            #:purge-expired-sessions))
 
+(defpackage #:crichton/channels
+  (:use #:cl)
+  (:local-nicknames (#:bt #:bordeaux-threads))
+  (:export #:channel-connect
+           #:channel-disconnect
+           #:channel-send
+           #:channel-set-handler
+           #:channel-name
+           #:channel-message
+           #:make-channel-message
+           #:channel-message-id
+           #:channel-message-text
+           #:channel-message-author-id
+           #:channel-message-author-name
+           #:channel-message-channel-id
+           #:channel-message-guild-id
+           #:channel-message-raw
+           #:start-channels
+           #:stop-channels))
+
+(defpackage #:crichton/channels/discord
+  (:use #:cl)
+  (:local-nicknames (#:bt #:bordeaux-threads)
+                    (#:wsd #:websocket-driver))
+  (:export #:discord-channel
+           #:make-discord-channel))
+
 (defpackage #:crichton/runner
   (:use #:cl)
   (:export #:main))
