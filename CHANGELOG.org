@@ -29,7 +29,11 @@ For development details, see the git commit history and BEADS issue tracker.
 
 ** Changed
 
-- Converted =AGENTS.md= to =AGENTS.org= (org-mode format) for consistency with documentation preference
+- Converted all project documentation to org-mode format:
+  - =AGENTS.md= → =AGENTS.org=
+  - =README.md= → =README.org=
+  - =AGENT_SPEC.md= → =AGENT_SPEC.org=
+- Markdown files now contain breadcrumbs pointing to org-mode versions
 
 ** Fixed
 
