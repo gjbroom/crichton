@@ -19,3 +19,16 @@
        ;; CLI commands: suppress console logging (systemd captures output)
        (crichton/logging:suppress-console-logging)
        (crichton/cli:main)))))
+
+(defun reload-config (&optional path)
+  "Hot-reload configuration from ~/.crichton/config.toml (or PATH if specified).
+
+   This is a convenience wrapper around crichton/config:reload-config for use
+   from the SWANK REPL. Call this after editing config.toml to apply changes
+   without restarting the daemon.
+
+   Example:
+     (crichton:reload-config)
+
+   Returns a plist with :success (T/NIL) and :message describing the result."
+  (crichton/config:reload-config path))

@@ -9,6 +9,7 @@
            #:agent-path
            #:ensure-directories
            #:load-config
+           #:reload-config
            #:config-get
            #:config-section-get))
 
@@ -282,4 +283,5 @@
 
 (defpackage #:crichton
   (:use #:cl)
-  (:export #:main))
+  (:export #:main
+           #:reload-config))

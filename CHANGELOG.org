@@ -32,6 +32,12 @@ For development details, see the git commit history and BEADS issue tracker.
   - Emacs keybindings (Ctrl-A, Ctrl-E, Ctrl-K, etc.)
   - Persistent history across sessions in =~/.crichton/history=
   - History limited to 1000 entries
+- Hot-reload configuration support via =(crichton:reload-config)= (cricht-xqy)
+  - Reload =config.toml= changes without restarting the daemon
+  - Callable from SWANK REPL during development
+  - Automatically reinitializes LLM provider and logging settings
+  - Validates changes and rolls back on error
+  - Non-reloadable settings (Swank port) are detected and rejected
 
 ** Changed
 
