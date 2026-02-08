@@ -54,6 +54,73 @@
   (let ((days-in-months #(0 31 59 90 120 151 181 212 243 273 304 334)))
     (+ (aref days-in-months (- month 1)) day)))
 
+;;; --- Lunar phase calculations ---
+
+(defun lunar-phase-for-date (year month day)
+  "Compute lunar phase (0.0-1.0) and phase name for a given date.
+   Returns (values phase-fraction phase-name illumination-percent).
+   
+   Uses the known new moon of January 6, 2000 (JD 2451550.1)
+   and the lunar synodic month of 29.530588861 days.
+   
+   Phase values:
+   - 0.0-0.125: New Moon / Waxing Crescent
+   - 0.125-0.25: Waxing Crescent
+   - 0.25-0.375: First Quarter / Waxing Gibbous
+   - 0.375-0.5: Waxing Gibbous
+   - 0.5-0.625: Full Moon / Waning Gibbous
+   - 0.625-0.75: Waning Gibbous
+   - 0.75-0.875: Last Quarter / Waning Crescent
+   - 0.875-1.0: Waning Crescent"
+  
+  ;; Reference new moon: January 6, 2000, 18:14:00 UTC (JD 2451550.261)
+  ;; Lunar synodic month: 29.530588861 days
+  (let* ((reference-jd 2451550.261d0)
+         (synodic-month 29.530588861d0)
+         
+         ;; Calculate Julian Day Number for the given date
+         ;; Simplified formula (accurate for years 1900-2100)
+         (a (floor (/ (- 14 month) 12)))
+         (y (+ year 4800 (- a)))
+         (m (+ month (* 12 a) -3))
+         (jdn (+ day
+                (floor (/ (+ (* 153 m) 2) 5))
+                (* 365 y)
+                (floor (/ y 4))
+                (- (floor (/ y 100)))
+                (floor (/ y 400))
+                -32045))
+         (jd (coerce jdn 'double-float))
+         
+         ;; Days since reference new moon
+         (days-since-ref (- jd reference-jd))
+         
+         ;; Lunar phase: fractional position in synodic month [0, 1)
+         (phase (mod (/ days-since-ref synodic-month) 1.0d0))
+         
+         ;; Illumination: ranges from 0 (new) to 1 (full) and back
+         ;; Uses cosine to smooth the brightness curve
+         (illumination (* 50.0d0 (+ 1.0d0 (cos (* 2.0d0 pi phase)))))
+         
+         ;; Determine phase name
+         (phase-name
+          (cond
+            ((< phase 0.0625d0) "New Moon")
+            ((< phase 0.1875d0) "Waxing Crescent")
+            ((< phase 0.3125d0) "First Quarter")
+            ((< phase 0.4375d0) "Waxing Gibbous")
+            ((< phase 0.5625d0) "Full Moon")
+            ((< phase 0.6875d0) "Waning Gibbous")
+            ((< phase 0.8125d0) "Last Quarter")
+            (t "Waning Crescent"))))
+    
+    (values phase phase-name (round illumination))))
+
+(defun lunar-phase-description (phase-name illumination)
+  "Return a human-readable description of the lunar phase.
+   E.g., 'Waxing Crescent (42% illuminated)'."
+  (format nil "~A (~D% illuminated)" phase-name illumination))
+
 ;;; --- Sunrise/Sunset using USNO Algorithm ---
 
 (defun sunrise-sunset-for-date (year month day latitude longitude)
@@ -198,22 +265,29 @@
 
 (defun ephemeris-plist (year month day latitude longitude)
   "Compute ephemeris data for a given date and location.
-   Returns a plist with :sunrise :sunset :solar-noon :day-length (all as HH:MM:SS strings)."
+    Returns a plist with :sunrise :sunset :solar-noon :day-length,
+    and lunar data: :lunar-phase :lunar-phase-name :lunar-illumination."
   (multiple-value-bind (sunrise sunset day-length solar-noon)
       (sunrise-sunset-for-date year month day latitude longitude)
-    (list :sunrise (format-time-hms sunrise)
-          :sunset (format-time-hms sunset)
-          :solar-noon (format-time-hms solar-noon)
-          :day-length (when day-length
-                       (format nil "~D:~2,'0D:~2,'0D"
-                               (floor day-length)
-                               (floor (* (mod day-length 1.0d0) 60.0d0))
-                               (floor (* (mod (* (mod day-length 1.0d0) 60.0d0) 1.0d0)
-                                        60.0d0)))))))
+    (multiple-value-bind (phase phase-name illumination)
+        (lunar-phase-for-date year month day)
+      (declare (ignore phase))
+      (list :sunrise (format-time-hms sunrise)
+            :sunset (format-time-hms sunset)
+            :solar-noon (format-time-hms solar-noon)
+            :day-length (when day-length
+                         (format nil "~D:~2,'0D:~2,'0D"
+                                 (floor day-length)
+                                 (floor (* (mod day-length 1.0d0) 60.0d0))
+                                 (floor (* (mod (* (mod day-length 1.0d0) 60.0d0) 1.0d0)
+                                          60.0d0))))
+            :lunar-phase-name phase-name
+            :lunar-illumination illumination))))
 
 (defun current-ephemeris (latitude longitude)
   "Get ephemeris data for today at given location.
-   Returns a plist with :sunrise :sunset :solar-noon :day-length."
+    Returns a plist with :sunrise :sunset :solar-noon :day-length,
+    and lunar data: :lunar-phase-name :lunar-illumination."
   (multiple-value-bind (s mi h d mo y)
       (decode-universal-time (get-universal-time))
     (declare (ignore s mi h))
@@ -226,7 +300,11 @@
       (declare (ignore s mi h rest))
       (let ((eph (ephemeris-plist y mo d latitude longitude)))
         (format stream "~&Ephemeris data for ~A°, ~A°~%" latitude longitude)
+        (format stream "~&Solar Data:~%")
         (format stream "  Sunrise:    ~A UTC~%" (getf eph :sunrise))
         (format stream "  Sunset:     ~A UTC~%" (getf eph :sunset))
         (format stream "  Solar Noon: ~A UTC~%" (getf eph :solar-noon))
-        (format stream "  Day Length: ~A~%" (getf eph :day-length))))))
+        (format stream "  Day Length: ~A~%" (getf eph :day-length))
+        (format stream "~&Lunar Data:~%")
+        (format stream "  Phase:        ~A~%" (getf eph :lunar-phase-name))
+        (format stream "  Illumination: ~D%~%" (getf eph :lunar-illumination))))))

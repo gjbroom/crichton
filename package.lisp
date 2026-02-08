@@ -116,10 +116,12 @@
            ;; current time
            #:current-time-plist
            #:current-time-report
-           ;; ephemeris (sunrise/sunset/solar data)
+           ;; ephemeris (sunrise/sunset/solar data + lunar phases)
            #:ephemeris-plist
            #:current-ephemeris
            #:ephemeris-report
+           #:lunar-phase-for-date
+           #:lunar-phase-description
            ;; rss
            #:rss-fetch
            #:rss-check

@@ -171,12 +171,12 @@
                   (let ((pl (crichton/skills:current-time-plist)))
                     (format s "Unix timestamp: ~D~%" (getf pl :unix-seconds)))))))
 
-           ;;; --- Ephemeris tool ---
+           ;;; --- Ephemeris tool (solar + lunar) ---
 
            (defun register-ephemeris-tool ()
              (register-tool
               "ephemeris"
-              "Get solar ephemeris data (sunrise, sunset, solar noon, day length) for today at the configured location. Useful for understanding daylight hours and solar position. No input required."
+              "Get solar and lunar ephemeris data for today. Includes sunrise, sunset, solar noon, day length, lunar phase, and illumination percentage. Uses the configured location. No input required."
               (make-json-schema :type "object" :properties (make-hash-table :test #'equal))
               (lambda (input)
                 (declare (ignore input))
