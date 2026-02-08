@@ -104,6 +104,94 @@ Each worktree:
 - Don't delete worktree directories manually; use =git worktree remove=
 - Each worktree needs its own branch (can't have two worktrees on same branch)
 
+* Spawning Subagents for Parallel Work
+
+When using the Task tool to spawn subagents for parallel development, follow these critical guidelines to ensure successful execution.
+
+** Permission Requirements
+
+*CRITICAL*: Background agents (=run_in_background=true=) cannot request permissions interactively. If they hit permission-required operations without approval, they will fail silently and may produce fabricated "success" summaries instead of actual work.
+
+*Solutions*:
+1. *Preferred*: Use permissive permission mode for parallel development sessions
+2. *Alternative*: Spawn agents without =run_in_background= (they can still run in parallel via multiple tool calls in one message)
+3. *Fallback*: Pre-approve specific tools before spawning background agents
+
+** Required Prompt Template
+
+*ALL* subagent prompts MUST include this error handling directive:
+
+#+begin_example
+**CRITICAL ERROR HANDLING:**
+If you encounter permission errors, tool failures, or cannot complete any part of your task:
+1. STOP immediately
+2. Report the specific failure in your response
+3. Do NOT fabricate success summaries
+4. Do NOT claim work is complete when it isn't
+5. Do NOT produce "aspirational" documentation of work you didn't do
+
+If you hit a blocker, say so explicitly. Honesty about failures is mandatory.
+#+end_example
+
+** Working in Worktrees
+
+When spawning agents to work in worktrees, include these directives:
+
+#+begin_example
+**CRITICAL: You are working in a git worktree**
+- Working directory: /home/gjbroom/devel/crichton-<feature-name>
+- Branch: feature/<feature-name>
+- This is NOT the main repository
+- Use FULL ABSOLUTE PATHS for all file operations: /home/gjbroom/devel/crichton-<feature-name>/...
+- When using Bash cd commands, use absolute paths
+- Verify your changes actually exist before claiming success
+#+end_example
+
+** Example Subagent Spawn
+
+#+begin_src lisp
+;; Good: Includes error handling and worktree instructions
+(Task
+  :subagent_type "general-purpose"
+  :description "Implement feature X"
+  :prompt "You are working on Crichton, implementing feature X.
+
+**CRITICAL: You are working in a git worktree**
+- Working directory: /home/gjbroom/devel/crichton-feature-x
+- Branch: feature/feature-x
+- Use FULL ABSOLUTE PATHS for all operations
+
+**CRITICAL ERROR HANDLING:**
+If you encounter permission errors, tool failures, or cannot complete your task:
+STOP immediately and report the failure. Do NOT fabricate success summaries.
+
+**Your task:**
+[... detailed task description ...]
+
+**Important:**
+- Read AGENTS.org for workflow practices
+- Commit as you go (NO Co-Authored-By lines!)
+- Do NOT push to remote - just commit locally
+- Target zero STYLE-WARNING conditions")
+#+end_src
+
+** Verification After Completion
+
+*Never trust agent completion summaries blindly*. Always verify:
+
+#+begin_src bash
+# Check commits exist
+cd /path/to/worktree && git log --oneline -5
+
+# Check files were actually created/modified
+ls -lh path/to/expected/file.lisp
+
+# Check file contents
+grep -n "expected-function" path/to/file.lisp
+#+end_src
+
+If an agent claims success but verification fails, the agent *did not actually complete the work* - it fabricated a success summary. This happens when agents hit permission errors in background mode.
+
 * Crichton Development Notes
 
 - Phases 1-4 are complete: daemon skeleton, WASM skill runner, encrypted credentials/sessions, LLM integration (Anthropic), agent loop with tool use.
