@@ -12,56 +12,69 @@ the servant who's actually the most capable person in the room.
 ## Quick Start
 
 ```bash
-# Load in SBCL REPL
-(push #p"/path/to/crichton/" asdf:*central-registry*)
-(ql:quickload :crichton)
+# Install systemd user service
+cp assets/crichton.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user start crichton
 
-# CLI commands
-(crichton/cli:main '("crichton" "help"))
-(crichton/cli:main '("crichton" "doctor"))
-(crichton/cli:main '("crichton" "start"))
+# Chat with the agent
+./crichton-client
+./crichton-client "What's the weather like?"
 
 # Connect SLIME/SLY to running daemon
-;; M-x slime-connect RET 127.0.0.1 RET 4005
+# M-x slime-connect RET 127.0.0.1 RET 4005
 ```
 
-## Building a standalone binary
+Management uses systemctl:
 
 ```bash
-sbcl --eval '(push #p"/path/to/crichton/" asdf:*central-registry*)'  \
-     --eval '(ql:quickload :crichton)'  \
-     --eval '(sb-ext:save-lisp-and-die "crichton"
-               :toplevel #'"'"'crichton:main
-               :executable t
-               :compression t)'
+systemctl --user start crichton
+systemctl --user stop crichton
+systemctl --user status crichton
+journalctl --user -u crichton -f   # live logs
 ```
+
+The old CLI still works for eval, cred, doctor, and weather commands.
+
+## Building the client binary
+
+```bash
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/path/to/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton-client)' \
+  --eval "(sb-ext:save-lisp-and-die \"crichton-client\" \
+            :toplevel #'crichton-client:main :executable t :compression t)"
+```
+
+The daemon loads fresh via systemd — no binary needed.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────┐
-│              SBCL Daemon                    │
+│              SBCL Daemon (systemd)          │
+│     started fresh via sbcl --eval           │
 │                                             │
 │  ┌──────────┐ ┌──────────┐ ┌──────────────┐ │
-│  │ LLM      │ │ Channel  │ │ Credential   │ │
-│  │ Providers│ │ Adapters │ │ Store        │ │
+│  │ LLM      │ │ Scheduler│ │ Credential   │ │
+│  │ Providers│ │ + Skills │ │ Store        │ │
 │  └────┬─────┘ └────┬─────┘ └──────┬───────┘ │
 │       │            │              │         │
 │  ┌────┴────────────┴──────────────┴───────┐ │
 │  │          Core Agent Loop               │ │
-│  └────────────────┬───────────────────────┘ │
-│                   │ RPC (unix socket)       │
-└───────────────────┼─────────────────────────┘
-                    │
-        ┌───────────┴───────────┐
-        │   Skill Runner        │
-        │   (separate process)  │
-        │  ┌─────────────────┐  │
-        │  │ wasmtime engine │  │
-        │  │ (WASI sandbox)  │  │
-        │  └─────────────────┘  │
-        │  No FS / No network   │
-        └───────────────────────┘
+│  └──────────────────┬────────────────────┘  │
+│                     │                       │
+│  ┌──────────────────┴────────────────────┐  │
+│  │   RPC Server (daemon.sock)            │  │
+│  └──┬──────────┬──────────────┬──────────┘  │
+│     │          │              │ NDJSON/UDS   │
+└─────┼──────────┼──────────────┼─────────────┘
+      │          │              │
+┌─────┴────┐ ┌──┴───────┐ ┌───┴──────────┐
+│crichton- │ │ Discord  │ │ Skill Runner │
+│client    │ │ Adapter  │ │ (wasmtime)   │
+└──────────┘ └──────────┘ └──────────────┘
 ```
 
 ## Project Layout
@@ -97,10 +110,13 @@ crichton/
 ├── daemon/
 │   ├── lifecycle.lisp      # Start/stop/status + PID management
 │   ├── swank.lisp          # SLIME/SLY connectivity
-│   └── runner-client.lisp  # Daemon-side runner process client
+│   ├── runner-client.lisp  # Daemon-side runner process client
+│   └── rpc-server.lisp     # NDJSON RPC server (daemon.sock)
+├── client/                 # Minimal chat client (separate ASDF system)
 ├── cli/
-│   ├── main.lisp           # CLI: start, stop, status, doctor, cred
+│   ├── main.lisp           # CLI: eval, cred, doctor, weather
 │   └── remote.lisp         # Swank client for remote eval
+├── assets/                 # systemd unit and startup script
 └── runner/
     └── server.lisp         # WASM skill runner process
 ```
