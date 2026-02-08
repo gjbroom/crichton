@@ -27,34 +27,18 @@ For development details, see the git commit history and BEADS issue tracker.
 
 ** Added
 
-- Battery level monitoring with proactive alerts (cricht-1ln)
-  - Automatic detection of laptop batteries via =/sys/class/power_supply=
-  - Reports charge level, charging status, and time remaining
-  - Periodic monitoring (every 5 minutes by default)
-  - Configurable alert thresholds (default: 20%, 10%, 5%)
-  - Alerts trigger only when discharging to avoid notification spam
-  - Gracefully handles desktop systems (no battery present)
-  - Available as =battery= agent tool with status/start_monitoring/stop_monitoring actions
-  - Configuration via =[battery]= section in =config.toml=
-- Hot-reload configuration without daemon restart (cricht-xqy)
-  - Call =(crichton:reload-config)= from SWANK REPL to reload =~/.crichton/config.toml=
-  - Validates configuration before applying changes
-  - Automatically clears cached LLM provider to use new settings
-  - Gracefully handles reload failures with rollback
-  - Reports which config sections were reloaded and which require restart
-  - Most settings can be reloaded (model, credentials, retention, channels)
-  - Port bindings require daemon restart
 - Readline support in =crichton-client= for command history and line editing (cricht-zpk)
   - Arrow up/down navigation through command history
   - Emacs keybindings (Ctrl-A, Ctrl-E, Ctrl-K, etc.)
   - Persistent history across sessions in =~/.crichton/history=
   - History limited to 1000 entries
-- Hot-reload configuration support via =(crichton:reload-config)= (cricht-xqy)
-  - Reload =config.toml= changes without restarting the daemon
-  - Callable from SWANK REPL during development
-  - Automatically reinitializes LLM provider and logging settings
-  - Validates changes and rolls back on error
-  - Non-reloadable settings (Swank port) are detected and rejected
+- Battery monitoring and proactive alerts (cricht-1ln)
+  - Automatic detection of battery presence via =/sys/class/power_supply/=
+  - Periodic monitoring of charge level, status, and power consumption
+  - Proactive notifications at configurable thresholds (default: 20%, 10%, 5%)
+  - LLM-accessible =battery= tool for querying battery status
+  - Configuration via =[battery]= section in =config.toml=
+  - Graceful handling of systems without batteries (desktops)
 
 ** Changed
 
