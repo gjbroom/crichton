@@ -94,6 +94,12 @@
 
 ;;; --- Setup ---
 
+(defun suppress-console-logging ()
+  "Remove all console appenders from log4cl. For CLI commands that should
+   only log to journalctl (via systemd) and not pollute terminal output."
+  (dolist (a (log4cl:all-appenders log4cl:*root-logger*))
+    (log4cl:remove-appender log4cl:*root-logger* a)))
+
 (defun setup-logging (&key (level :info) (log-dir nil))
   "Initialize JSON lines logging to LOG-DIR (default: ~/.crichton/logs/).
    Idempotent — removes previous appender on re-invocation."

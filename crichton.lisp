@@ -17,4 +17,6 @@
       (foreground
        (crichton/daemon:start-daemon :foreground t))
       (t
+       ;; CLI commands: suppress console logging (systemd captures output)
+       (crichton/logging:suppress-console-logging)
        (crichton/cli:main)))))
