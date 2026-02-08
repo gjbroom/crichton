@@ -12,9 +12,9 @@
   ```
   sbcl --noinform --non-interactive \
     --eval '(require :asdf)' \
-    --eval '(push #p"/home/gjbroom/devel/ai/crichton/" asdf:*central-registry*)' \
+    --eval '(push #p"/home/gjbroom/devel/crichton/" asdf:*central-registry*)' \
     --eval '(asdf:load-system :crichton)' \
-    --eval "(sb-ext:save-lisp-and-die #p\"/home/gjbroom/devel/ai/crichton/crichton\" :toplevel #'crichton:main :executable t :compression t)"
+    --eval "(sb-ext:save-lisp-and-die #p\"/home/gjbroom/devel/crichton/crichton\" :toplevel #'crichton:main :executable t :compression t)"
   ```
 
 ## Crichton Development Notes
