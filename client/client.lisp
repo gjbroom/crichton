@@ -112,11 +112,7 @@
 
 (defun chat-repl (&key socket-path)
   "Interactive chat REPL. Connect to daemon, loop reading user input."
-  (handler-case
-      (connect-daemon socket-path)
-    (error (c)
-      (format *error-output* "~A~%" c)
-      (return-from chat-repl)))
+  (connect-daemon socket-path)
   (unwind-protect
        (progn
          (format t "Connected to Crichton daemon. Type :quit to exit.~%~%")
