@@ -27,6 +27,12 @@ For development details, see the git commit history and BEADS issue tracker.
 
 ** Added
 
+- Readline support in =crichton-client= for command history and line editing (cricht-zpk)
+  - Arrow up/down navigation through command history
+  - Emacs keybindings (Ctrl-A, Ctrl-E, Ctrl-K, etc.)
+  - Persistent history across sessions in =~/.crichton/history=
+  - History limited to 1000 entries
+
 ** Changed
 
 - Converted all project documentation to org-mode format:
