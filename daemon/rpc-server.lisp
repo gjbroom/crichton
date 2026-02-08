@@ -1,0 +1,161 @@
+;;;; daemon/rpc-server.lisp
+;;;;
+;;;; NDJSON-over-Unix-socket RPC server for the Crichton daemon.
+;;;; Listens on ~/.crichton/daemon.sock, dispatches requests using
+;;;; the rpc/protocol.lisp wire format.
+
+(in-package #:crichton/daemon)
+
+(defvar *rpc-server-socket* nil "The listening Unix domain socket.")
+(defvar *rpc-server-thread* nil "The accept loop thread.")
+(defvar *rpc-running* nil "T while the RPC accept loop is active.")
+(defvar *chat-sessions* (make-hash-table :test #'equal)
+  "In-memory message lists keyed by session-id.")
+(defvar *chat-session-locks* (make-hash-table :test #'equal)
+  "Per-session locks keyed by session-id.")
+
+(defun daemon-socket-path ()
+  "Return the path to the daemon RPC socket."
+  (namestring (merge-pathnames "daemon.sock" crichton/config:*agent-home*)))
+
+;;; --- Per-session locking ---
+
+(defvar *chat-session-locks-lock* (bt:make-lock "chat-session-locks-lock"))
+
+(defun get-session-lock (session-id)
+  "Return the lock for SESSION-ID, creating one if needed."
+  (bt:with-lock-held (*chat-session-locks-lock*)
+    (or (gethash session-id *chat-session-locks*)
+        (setf (gethash session-id *chat-session-locks*)
+              (bt:make-lock (format nil "chat-session-~A" session-id))))))
+
+;;; --- Chat handler ---
+
+(defun handle-chat-request (id msg)
+  "Handle a 'chat' request: run the agent loop with session tracking."
+  (let ((text (crichton/rpc:msg-get msg "text"))
+        (session-id (crichton/rpc:msg-get msg "session_id")))
+    (unless text
+      (return-from handle-chat-request
+        (crichton/rpc:make-error-response id "bad_request" "Missing required field: text")))
+    (let* ((session-id (or session-id
+                           (getf (crichton/sessions:create-session) :id)))
+           (lock (get-session-lock session-id)))
+      (bt:with-lock-held (lock)
+        (let ((msgs (gethash session-id *chat-sessions*)))
+          (handler-case
+              (multiple-value-bind (response-text all-messages)
+                  (crichton/agent:run-agent text :messages msgs)
+                (setf (gethash session-id *chat-sessions*) all-messages)
+                (let ((result (make-hash-table :test #'equal)))
+                  (setf (gethash "text" result) response-text
+                        (gethash "session_id" result) session-id)
+                  (crichton/rpc:make-ok-response id result)))
+            (error (c)
+              (crichton/rpc:make-error-response
+               id "agent_error"
+               (format nil "~A" c)))))))))
+
+;;; --- Request dispatch ---
+
+(defun rpc-dispatch (msg)
+  "Dispatch a parsed NDJSON request and return a response hash-table."
+  (let ((id (crichton/rpc:msg-id msg))
+        (op (crichton/rpc:msg-op msg)))
+    (handler-case
+        (cond
+          ((string-equal op "ping")
+           (crichton/rpc:make-ok-response id "pong"))
+
+          ((string-equal op "chat")
+           (handle-chat-request id msg))
+
+          ((string-equal op "status")
+           (crichton/rpc:make-ok-response id (daemon-status)))
+
+          ((string-equal op "stop")
+           (bt:make-thread (lambda () (stop-daemon))
+                           :name "rpc-stop-daemon")
+           (crichton/rpc:make-ok-response id t))
+
+          (t
+           (crichton/rpc:make-error-response
+            id "unknown_op"
+            (format nil "Unknown operation: ~A" op))))
+      (error (c)
+        (crichton/rpc:make-error-response
+         id "internal_error"
+         (format nil "~A" c))))))
+
+;;; --- Connection handler ---
+
+(defun handle-rpc-connection (socket)
+  "Service a single RPC client connection until EOF or error."
+  (let ((stream (sb-bsd-sockets:socket-make-stream
+                 socket :input t :output t
+                 :element-type 'character
+                 :buffering :line
+                 :external-format :utf-8)))
+    (unwind-protect
+         (loop
+           (let ((msg (handler-case
+                          (crichton/rpc:read-message stream)
+                        (error (c)
+                          (log:error "RPC protocol error: ~A" c)
+                          (return)))))
+             (when (null msg)
+               (return))
+             (let ((response (rpc-dispatch msg)))
+               (handler-case
+                   (crichton/rpc:write-message stream response)
+                 (error (c)
+                   (log:error "RPC write error: ~A" c)
+                   (return))))))
+      (close stream)
+      (sb-bsd-sockets:socket-close socket))))
+
+;;; --- Server lifecycle ---
+
+(defun start-rpc-server (&key socket-path)
+  "Start the daemon RPC server on a Unix domain socket."
+  (let ((path (or socket-path (daemon-socket-path))))
+    (crichton/agent:register-all-tools)
+    (when (probe-file path)
+      (delete-file path))
+    (let ((server (make-instance 'sb-bsd-sockets:local-socket
+                                 :type :stream)))
+      (sb-bsd-sockets:socket-bind server path)
+      #+sbcl (sb-posix:chmod path #o600)
+      (sb-bsd-sockets:socket-listen server 5)
+      (setf *rpc-server-socket* server
+            *rpc-running* t)
+      (setf *rpc-server-thread*
+            (bt:make-thread
+             (lambda ()
+               (log:info "RPC server listening on ~A" path)
+               (loop while *rpc-running*
+                     do (handler-case
+                            (let ((client (sb-bsd-sockets:socket-accept server)))
+                              (bt:make-thread
+                               (lambda () (handle-rpc-connection client))
+                               :name "rpc-client"))
+                          (error (c)
+                            (when *rpc-running*
+                              (log:error "RPC accept error: ~A" c)
+                              (sleep 0.1))))))
+             :name "rpc-accept-loop"))
+      (log:info "RPC server started"))))
+
+(defun stop-rpc-server ()
+  "Stop the daemon RPC server."
+  (setf *rpc-running* nil)
+  (when *rpc-server-socket*
+    (handler-case
+        (sb-bsd-sockets:socket-close *rpc-server-socket*)
+      (error (c)
+        (log:warn "Error closing RPC server socket: ~A" c)))
+    (setf *rpc-server-socket* nil))
+  (let ((path (daemon-socket-path)))
+    (when (probe-file path)
+      (delete-file path)))
+  (log:info "RPC server stopped"))

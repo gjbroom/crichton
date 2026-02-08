@@ -9,7 +9,7 @@
   :long-description "A local AI agent daemon with encrypted credentials,
 WASM-isolated skill execution, network egress control, and Ed25519 code
 signing. Informed by a security audit of OpenClaw."
-  :author "Gord Broom <gjbroom@camosun.ca>"
+  :author "Gord Broom <gjbroom@thebrooms.ca>"
   :license "MIT"
   :version "0.1.0"
   :depends-on (#:cffi
@@ -70,6 +70,7 @@ signing. Informed by a security audit of OpenClaw."
                (:module "agent"
                 :components ((:file "tools")
                              (:file "loop")))
+               (:file "daemon/rpc-server")
                (:module "channels"
                 :components ((:file "protocol")
                              (:file "discord")

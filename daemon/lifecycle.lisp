@@ -49,6 +49,10 @@
       (log:warn "Session purge at startup failed: ~A" c)))
   (crichton/skills:start-scheduler)
   (handler-case
+      (start-rpc-server)
+    (error (c)
+      (log:warn "RPC server startup failed: ~A" c)))
+  (handler-case
       (crichton/channels:start-channels)
     (error (c)
       (log:warn "Channel startup failed: ~A" c)))
@@ -72,6 +76,10 @@
       (crichton/channels:stop-channels)
     (error (c)
       (log:warn "Channel shutdown error: ~A" c)))
+  (handler-case
+      (stop-rpc-server)
+    (error (c)
+      (log:warn "RPC server shutdown error: ~A" c)))
   (crichton/skills:stop-scheduler)
   (setf *running* nil)
   (bt:with-lock-held (*shutdown-lock*)

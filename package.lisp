@@ -30,7 +30,10 @@
            #:kill-runner
            #:*running*
            #:*shutdown-lock*
-           #:*shutdown-cv*))
+           #:*shutdown-cv*
+           #:start-rpc-server
+           #:stop-rpc-server
+           #:daemon-socket-path))
 
 (defpackage #:crichton/cli
   (:use #:cl)

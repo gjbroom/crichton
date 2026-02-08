@@ -1,0 +1,14 @@
+[Unit]
+Description=Crichton AI Agent Daemon
+After=network.target
+
+[Service]
+Type=simple
+Environment=HOME=/home/gjbroom
+ExecStart=/home/gjbroom/devel/crichton/assets/start-daemon.sh
+ExecStop=/bin/kill -SIGTERM $MAINPID
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
