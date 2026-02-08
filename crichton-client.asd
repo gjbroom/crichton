@@ -8,7 +8,8 @@
   :author "Gord Broom <gjbroom@thebrooms.ca>"
   :license "MIT"
   :version "0.1.0"
-  :depends-on (#:shasht)
+  :depends-on (#:shasht
+               #:cl-readline)
   :serial t
   :components ((:module "client"
                 :components ((:file "package")
