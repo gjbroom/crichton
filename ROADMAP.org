@@ -1,0 +1,300 @@
+#+TITLE: Crichton Project Roadmap
+#+AUTHOR: Gordon J. Broom
+#+DATE: 2026-02-08
+#+STARTUP: overview
+
+* Overview
+
+Crichton is a secure background AI agent daemon built in SBCL Common Lisp,
+designed with security-first principles derived from a real-world audit of
+OpenClaw. This roadmap tracks completed work and future development.
+
+See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
+
+* Version History
+
+** DONE v0.1 "Secure Core" [7/7]
+   CLOSED: [2026-02-08 Sat]
+
+   The MVP focuses on proving security properties, not feature breadth.
+   All core security requirements from the spec are complete.
+
+*** DONE [#A] Phase 1: Daemon Skeleton
+    CLOSED: [2026-02-06 Thu]
+    - [X] SBCL project scaffold (ASDF system)
+    - [X] Config loading (~/.crichton/config.toml)
+    - [X] Structured logging to ~/.crichton/logs/
+    - [X] SLIME/SLY swank server for live development (port 4005)
+    - [X] Systemd integration for daemon lifecycle
+
+*** DONE [#A] Phase 2: WASM Skill Runner
+    CLOSED: [2026-02-06 Thu]
+    - [X] CFFI bindings to wasmtime C API
+    - [X] Runner process with RPC protocol
+    - [X] Host function implementation (log, kv, http-allowlist)
+    - [X] Capability manifest parsing (TOML)
+    - [X] Ed25519 signature verification
+
+*** DONE [#A] Phase 3: Credential & Session Storage
+    CLOSED: [2026-02-07 Fri]
+    - [X] Age encryption for credentials
+    - [X] Age-encrypted session storage
+    - [X] Credential mediation API
+    - [X] Session retention policy
+
+*** DONE [#A] Phase 4: LLM Integration
+    CLOSED: [2026-02-07 Fri]
+    - [X] Anthropic Claude API client
+    - [X] Generic provider protocol (CLOS)
+    - [X] Tool/function calling support
+    - [X] Agent loop with tool use
+
+*** DONE [#A] Phase 5: Built-in Skills
+    CLOSED: [2026-02-08 Sat]
+    - [X] Weather skill (ephemeris calculations)
+    - [X] System-info skill (CPU, memory, disk, temperature)
+    - [X] Timing skill (current time, timezone)
+    - [X] Scheduler skill (periodic task execution)
+    - [X] RSS skill (feed reading and monitoring)
+    - [X] Token-usage skill (LLM metering)
+
+*** DONE [#A] Microkernel Architecture Migration
+    CLOSED: [2026-02-08 Sat]
+    - [X] Daemon starts fresh via systemd (no save-lisp-and-die)
+    - [X] RPC server on daemon.sock (NDJSON over Unix socket)
+    - [X] Minimal client binary (crichton-client)
+    - [X] Remove legacy crichton CLI
+    - [X] Fix memory stability issues (cricht-bt3)
+
+*** DONE [#B] Channel Integration (Partial)
+    CLOSED: [2026-02-08 Sat]
+    - [X] Discord bot adapter (basic functionality)
+    - [ ] Discord authentication (cricht-fj5) — deferred to v0.2
+
+* Planned Features
+
+** TODO v0.2 "Polish & Channels" [0/8]
+
+   Focus on user experience improvements and completing channel integration.
+
+*** TODO [#A] Discord Channel Completion
+    - [ ] Discord bot authentication and authorization (cricht-fj5)
+    - [ ] User whitelist in config
+    - [ ] Fine-grained permissions per user
+    - [ ] Update credential store with new Discord token
+
+*** TODO [#A] Interface Improvements
+    - [ ] Readline support in crichton-client (cricht-zpk)
+    - [ ] Command history (up-arrow navigation)
+    - [ ] Line editing shortcuts (Ctrl-A, Ctrl-E, etc.)
+    - [ ] Persistent history across sessions
+
+*** TODO [#B] Configuration Management
+    - [ ] Hot-reload configuration without daemon restart (cricht-xqy)
+    - [ ] Callable from SWANK REPL
+    - [ ] Graceful handling of partial reload failures
+
+*** TODO [#B] Scheduling Enhancements
+    - [ ] User-facing task creation interface (cricht-c44)
+    - [ ] Agent tool for schedule management
+    - [ ] List/modify/delete scheduled tasks
+
+*** TODO [#B] System Monitoring
+    - [ ] Continuous monitoring with notifications (cricht-vtw)
+    - [ ] Battery level monitoring and alerts (cricht-1ln)
+    - [ ] Threshold configuration in config.toml
+    - [ ] Integration with notification system (Pushover)
+
+*** TODO [#B] Persistence
+    - [ ] Local persistent data store (cricht-056)
+    - [ ] SQLite or age-encrypted JSONL
+    - [ ] Persist scheduler tasks across restarts
+    - [ ] Persist RSS seen-item tracking
+    - [ ] Persist token-usage statistics
+
+*** TODO [#C] Mastodon Integration
+    - [ ] Mastodon bot adapter
+    - [ ] Channel protocol implementation
+    - [ ] OAuth authentication flow
+
+*** TODO [#C] Documentation
+    - [ ] User guide (org-mode)
+    - [ ] Skill development guide
+    - [ ] Security model documentation
+    - [ ] API reference
+
+** TODO v0.3 "Skills & Integrations" [0/6]
+
+   Expanding skill library and third-party integrations.
+
+*** TODO [#B] Org-Mode Skill
+    - [ ] Org-Mode file read/write skill (cricht-1gm)
+    - [ ] Parse org structure (headlines, properties, timestamps)
+    - [ ] Generate valid org syntax
+    - [ ] Support for TODO lists, tables, literate programming
+
+*** TODO [#B] RSS Writing
+    - [ ] RSS feed generation skill (cricht-hit)
+    - [ ] Generate valid RSS 2.0 or Atom XML
+    - [ ] Publishing interface for agent-generated content
+
+*** TODO [#B] Pushover Notifications
+    - [ ] Pushover.net push notification skill (cricht-ass)
+    - [ ] Store credentials in age-encrypted store
+    - [ ] Support priority levels (-2 to 2)
+    - [ ] Emergency notifications with retry/expire
+    - [ ] Register as agent tool
+
+*** TODO [#B] HOOBS Home Automation
+    - [ ] HOOBS skill implementation (cricht-oj0)
+    - [ ] REST API integration
+    - [ ] Authentication and session management
+    - [ ] Accessory control (lights, thermostat, locks)
+    - [ ] Room-level operations
+    - [ ] Audit logging for control operations
+
+*** TODO [#B] GitHub Integration
+    - [ ] GitHub skill (cricht-059)
+    - [ ] Repository operations
+    - [ ] Issue/PR management
+    - [ ] Webhook support
+
+*** TODO [#C] Amp Orchestration
+    - [ ] Amp LLM coding/testing orchestration skill (cricht-058)
+    - [ ] Multi-agent coordination
+    - [ ] Code generation and testing workflows
+
+** TODO v0.4 "Security Hardening" [0/5]
+
+   Advanced security features and production hardening.
+
+*** TODO [#B] Alternative Credential Backends
+    - [ ] libsecret credential backend (cricht-055)
+    - [ ] OS keychain integration (macOS Security.framework)
+    - [ ] Credential backend selection in config
+
+*** TODO [#B] Session Encryption Toggle
+    - [ ] Fix session encryption hazard (cricht-054)
+    - [ ] Safe toggle between encrypted/unencrypted modes
+    - [ ] Migration path for existing sessions
+
+*** TODO [#C] Token Rotation
+    - [ ] Automated credential rotation
+    - [ ] Configurable rotation schedules
+    - [ ] Rotation event logging
+
+*** TODO [#C] Audit & Compliance
+    - [ ] Comprehensive audit logging
+    - [ ] Log integrity (append-only mode)
+    - [ ] Remote log shipping
+    - [ ] Compliance reporting
+
+*** TODO [#C] Advanced Egress Control
+    - [ ] Per-skill network policies
+    - [ ] Domain + method + path constraints
+    - [ ] Rate limiting per skill
+    - [ ] Egress policy audit trail
+
+** TODO v0.5+ "Future Exploration" [0/4]
+
+   Experimental features for future consideration (not committed).
+
+*** TODO [#C] Multi-Instance Coordination
+    - [ ] Multiple Crichton instances trusting each other
+    - [ ] Federated agent network
+    - [ ] Fine-grained inter-instance permissions
+    - [ ] Use case: laptop + Raspberry Pi coordination
+
+*** TODO [#C] Peripheral Access
+    - [ ] I2C/USB peripheral access
+    - [ ] Mediated permissions model
+    - [ ] Dedicated microservice for hardware access
+    - [ ] Useful for Raspberry Pi deployments
+
+*** TODO [#C] Web UI
+    - [ ] Browser-based interface
+    - [ ] Chat interface
+    - [ ] Configuration management
+    - [ ] Skill marketplace (with signing requirements)
+
+*** TODO [#C] Additional LLM Providers
+    - [ ] OpenAI integration
+    - [ ] Ollama local models
+    - [ ] Custom model endpoints
+
+* Code Quality & Refactoring
+
+** TODO Technical Debt [0/7]
+
+*** TODO [#C] Refactor cmd-cred subcommands
+    - [ ] Split into per-subcommand helpers (cricht-eeh)
+    - [ ] Reduce cyclomatic complexity
+
+*** TODO [#C] Simplify Discord gateway event dispatch
+    - [ ] Extract op handlers (cricht-ozg)
+    - [ ] Reduce nesting in handle-message-create
+
+*** TODO [#C] Refactor WASM engine functions
+    - [ ] De-duplicate run-wasm-with-host-fns variants (cricht-sei)
+    - [ ] Extract shared host-fn registration
+    - [ ] Reduce nesting (8+ levels currently)
+
+*** TODO [#C] Refactor ephemeris calculations
+    - [ ] Split sunrise-sunset-for-date into step helpers (cricht-wbd)
+    - [ ] Improve testability of astronomical algorithms
+
+*** TODO [#C] Improve error handling
+    - [ ] Consistent error types across modules
+    - [ ] Better restart strategies
+    - [ ] User-friendly error messages
+
+*** TODO [#C] Test coverage
+    - [ ] Unit tests for core security functions
+    - [ ] Integration tests for skills
+    - [ ] End-to-end workflow tests
+
+*** TODO [#C] Performance optimization
+    - [ ] Profile hot paths
+    - [ ] Optimize WASM invocation overhead
+    - [ ] Connection pooling for HTTP clients
+
+* Explicitly NOT Planned for v0.1-v0.2
+
+The following were considered but explicitly deferred or rejected:
+
+- Public marketplace for skills (security risk - requires extensive review process)
+- Auto-install of skills (security risk - manual review required)
+- LAN/remote access mode (security complexity - local-only for now)
+- Arbitrary-language skill runtimes (stick to WASM for security)
+- Mobile apps (desktop/server focus)
+- Shell-based skills (security risk - WASM only)
+
+* Metrics
+
+** v0.1 Statistics (as of 2026-02-08)
+
+- Implementation time: ~2 days intensive development
+- Phases completed: 1-5 (daemon, WASM, credentials, LLM, skills)
+- Built-in skills: 6
+- Open issues: 23
+- Closed issues: 15
+- Lines of code: ~8000 (estimated)
+- Security findings addressed: 13/13 from OpenClaw audit
+
+** Architecture Highlights
+
+- Language: Common Lisp (SBCL)
+- Microkernel: Daemon + separate skill runner
+- Sandboxing: WASM (wasmtime) with capability manifests
+- Encryption: age (credentials & sessions)
+- Signing: Ed25519 (ironclad)
+- Logging: Structured JSON, 0600 permissions
+- Management: systemd user service
+
+* See Also
+
+- [[file:AGENT_SPEC.md][AGENT_SPEC.md]] - Full design specification
+- [[file:AGENTS.md][AGENTS.md]] - Agent workflow and development notes
+- [[file:README.md][README.md]] - Quick start guide
+- [[file:.beads/issues.jsonl][.beads/issues.jsonl]] - Issue tracking (use =bd= command)
+- [[file:FEATURE_REQUESTS.org][FEATURE_REQUESTS.org]] - User feature requests and notes
