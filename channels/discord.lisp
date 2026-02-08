@@ -296,6 +296,11 @@ Store it with: (crichton/credentials:store-credential \"discord-bot-token\" '(:t
   (setf (stop-flag ch) t)
   (when (discord-ws ch)
     (ignore-errors (wsd:close-connection (discord-ws ch))))
+  ;; Wait for threads to signal completion with timeout
+  (when (or (heartbeat-thread ch) (gateway-thread ch))
+    (bt:with-lock-held ((stop-lock ch))
+      (bt:wait-on-condition (stop-cv ch) (stop-lock ch) :timeout 5)))
+  ;; Cleanup threads
   (when (heartbeat-thread ch)
     (ignore-errors (bt:destroy-thread (heartbeat-thread ch)))
     (setf (heartbeat-thread ch) nil))
