@@ -282,3 +282,37 @@
       (decode-universal-time ut)
     (format nil "~4,'0D-~2,'0D-~2,'0D ~2,'0D:~2,'0D:~2,'0D"
             y mo d h mi s)))
+
+;;; --- Current time reporting ---
+
+(defun current-time-plist ()
+  "Return current time as a plist with both ISO string and universal-time formats."
+  (let ((now (get-universal-time)))
+    (multiple-value-bind (s mi h d mo y dow)
+        (decode-universal-time now)
+      (let ((day-names #("Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" "Sunday")))
+        (list :iso (format-ut now)
+              :unix-seconds now
+              :year y
+              :month mo
+              :day d
+              :hour h
+              :minute mi
+              :second s
+              :day-of-week (aref day-names dow)
+              :dow-num dow)))))
+
+(defun current-time-report (&key (stream t))
+  "Print current time in a human-friendly format."
+  (let ((now (get-universal-time)))
+    (multiple-value-bind (s mi h d mo y dow)
+        (decode-universal-time now)
+      (let ((day-names #("Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" "Sunday")))
+        (format stream "~A~%" (format-ut now))
+        (format stream "~A, ~A ~D, ~D~%" 
+                (aref day-names dow) 
+                (svref #("" "January" "February" "March" "April" "May" "June"
+                         "July" "August" "September" "October" "November" "December")
+                       mo)
+                d y)
+        (format stream "~2,'0D:~2,'0D:~2,'0D~%" h mi s)))))

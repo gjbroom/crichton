@@ -157,9 +157,23 @@
            (t
             (format nil "Unknown scheduler action: ~A" action))))))))
 
-;;; --- RSS tool ---
+           ;;; --- Current time tool ---
 
-(defun register-rss-tool ()
+           (defun register-time-tool ()
+           (register-tool
+           "time"
+           "Get the current date and time. Returns the current date and time in both human-readable and Unix timestamp formats. Useful for understanding when events happen relative to the current moment."
+           (make-json-schema :type "object" :properties (make-hash-table :test #'equal))
+           (lambda (input)
+           (declare (ignore input))
+           (with-output-to-string (s)
+           (crichton/skills:current-time-report :stream s)
+           (let ((pl (crichton/skills:current-time-plist)))
+           (format s "Unix timestamp: ~D~%" (getf pl :unix-seconds)))))))
+
+           ;;; --- RSS tool ---
+
+           (defun register-rss-tool ()
   (multiple-value-bind (props required)
       (make-properties
        '("action" "string"
@@ -259,6 +273,7 @@
   (register-weather-tool)
   (register-system-info-tool)
   (register-scheduler-tool)
+  (register-time-tool)
   (register-rss-tool)
   (register-usage-tool)
   (log:info "Registered ~D agent tools" (hash-table-count *agent-tools*)))

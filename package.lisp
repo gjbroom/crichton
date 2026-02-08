@@ -110,6 +110,9 @@
            #:cancel-task
            #:list-tasks
            #:scheduler-status
+           ;; current time
+           #:current-time-plist
+           #:current-time-report
            ;; rss
            #:rss-fetch
            #:rss-check
