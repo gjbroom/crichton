@@ -70,6 +70,19 @@
          (shasht:write-json ht s)))
      :external-format :utf-8)))
 
+(defun safe-intern-keyword (key)
+  "Intern KEY as a keyword after validating length and character set.
+   Rejects keys that could exhaust the keyword package via untrusted JSON."
+  (let ((ukey (string-upcase key)))
+    (when (or (> (length ukey) 64)
+              (zerop (length ukey))
+              (not (every (lambda (c)
+                            (or (alpha-char-p c) (digit-char-p c)
+                                (char= c #\-) (char= c #\_)))
+                          ukey)))
+      (error "Invalid JSON key for keyword interning: ~S" key))
+    (intern ukey :keyword)))
+
 (defun json-bytes-to-session (bytes)
   "Deserialize JSON bytes to a session plist."
   (let* ((json-string (sb-ext:octets-to-string bytes :external-format :utf-8))
@@ -78,7 +91,7 @@
       (let (result)
         (maphash (lambda (k v)
                    (push v result)
-                   (push (intern (string-upcase k) :keyword) result))
+                   (push (safe-intern-keyword k) result))
                  ht)
         result))))
 

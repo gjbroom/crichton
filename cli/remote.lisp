@@ -13,7 +13,7 @@
 
 (in-package #:crichton/cli)
 
-(defun remote-eval (form-string &key (host "127.0.0.1") (port 4005) (timeout 10))
+(defun remote-eval (form-string &key (host "127.0.0.1") (port 4005))
   "Evaluate FORM-STRING in the running Crichton daemon via Swank.
    Returns the result as a string, or signals an error."
   (handler-case
