@@ -104,9 +104,8 @@
          (log-path (merge-pathnames "daemon.jsonl" dir)))
     (ensure-directories-exist dir)
     #+sbcl (sb-posix:chmod (namestring dir) #o700)
-    (when *json-appender*
-      (log4cl:remove-appender log4cl:*root-logger* *json-appender*)
-      (close-log-file))
+    (dolist (a (log4cl:all-appenders log4cl:*root-logger*))
+      (log4cl:remove-appender log4cl:*root-logger* a))
     (close-log-file)
     (setf *json-log-stream* (open-log-file log-path))
     (let ((appender (make-instance 'json-lines-appender :log-path log-path)))
