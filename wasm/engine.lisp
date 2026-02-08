@@ -241,6 +241,7 @@
 (defun define-host-fn (linker engine functype module-name module-name-len
                        func-name func-name-len callback)
   "Register a host function in the linker. Signals error if it fails."
+  (declare (ignore engine))
   (let ((def-err (wasmtime-linker-define-func
                   linker
                   module-name module-name-len
@@ -520,7 +521,7 @@
     ((env :pointer) (caller :pointer)
      (args :pointer) (nargs :size)
      (results :pointer) (nresults :size))
-  (declare (ignore env results nresults))
+  (declare (ignore env nresults))
   (handler-case
       (progn
         (unless (>= nargs 2)
@@ -558,7 +559,7 @@
     ((env :pointer) (caller :pointer)
      (args :pointer) (nargs :size)
      (results :pointer) (nresults :size))
-  (declare (ignore env results nresults))
+  (declare (ignore env nresults))
   (handler-case
       (progn
         (unless (>= nargs 4)
@@ -596,7 +597,7 @@
     ((env :pointer) (caller :pointer)
      (args :pointer) (nargs :size)
      (results :pointer) (nresults :size))
-  (declare (ignore env results nresults))
+  (declare (ignore env nresults))
   (handler-case
       (progn
         (unless (>= nargs 8)
@@ -634,7 +635,7 @@
     ((env :pointer) (caller :pointer)
      (args :pointer) (nargs :size)
      (results :pointer) (nresults :size))
-  (declare (ignore env results nresults))
+  (declare (ignore env nresults))
   (handler-case
       (progn
         (unless (>= nargs 2)
