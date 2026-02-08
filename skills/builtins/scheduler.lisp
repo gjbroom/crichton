@@ -67,7 +67,7 @@
   "Compute the next universal-time for HOUR:MINUTE today or tomorrow."
   (multiple-value-bind (s m h day month year)
       (decode-universal-time (get-universal-time))
-    (declare (ignore s))
+    (declare (ignore s m h))
     (let ((today-ut (encode-universal-time 0 minute hour day month year)))
       (if (> today-ut (get-universal-time))
           today-ut
