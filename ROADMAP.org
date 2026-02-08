@@ -73,7 +73,7 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
 
 * Planned Features
 
-** TODO v0.2 "Polish & Channels" [1/8]
+** TODO v0.2 "Polish & Channels" [2/8]
 
    Focus on user experience improvements and completing channel integration.
 
@@ -90,10 +90,11 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
     - [X] Line editing shortcuts (Ctrl-A, Ctrl-E, etc.)
     - [X] Persistent history across sessions
 
-*** TODO [#B] Configuration Management
-    - [ ] Hot-reload configuration without daemon restart (cricht-xqy)
-    - [ ] Callable from SWANK REPL
-    - [ ] Graceful handling of partial reload failures
+*** DONE [#B] Configuration Management
+    CLOSED: [2026-02-08 Sat]
+    - [X] Hot-reload configuration without daemon restart (cricht-xqy)
+    - [X] Callable from SWANK REPL
+    - [X] Graceful handling of partial reload failures
 
 *** TODO [#B] Scheduling Enhancements
     - [ ] User-facing task creation interface (cricht-c44)
@@ -102,8 +103,8 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
 
 *** TODO [#B] System Monitoring
     - [ ] Continuous monitoring with notifications (cricht-vtw)
-    - [ ] Battery level monitoring and alerts (cricht-1ln)
-    - [ ] Threshold configuration in config.toml
+    - [X] Battery level monitoring and alerts (cricht-1ln)
+    - [X] Threshold configuration in config.toml
     - [ ] Integration with notification system (Pushover)
 
 *** TODO [#B] Persistence
