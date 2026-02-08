@@ -54,13 +54,13 @@
       (log:warn "Channel startup failed: ~A" c)))
   (log:info "Crichton daemon started (PID ~D)" (sb-posix:getpid))
   (when foreground
-    (install-signal-handlers))
-  ;; Block until stop-daemon is called (both foreground and background modes).
-  ;; The daemon must stay running by definition.
-  (bt:with-lock-held (*shutdown-lock*)
-    (loop while *running*
-          do (bt:condition-wait *shutdown-cv* *shutdown-lock*)))
-  (log:info "Crichton daemon exiting.")
+    (install-signal-handlers)
+    ;; Block until stop-daemon is called (foreground mode only, e.g., systemd Type=simple).
+    ;; The daemon must stay running by definition in this mode.
+    (bt:with-lock-held (*shutdown-lock*)
+      (loop while *running*
+            do (bt:condition-wait *shutdown-cv* *shutdown-lock*)))
+    (log:info "Crichton daemon exiting."))
   t)
 
 (defun stop-daemon ()

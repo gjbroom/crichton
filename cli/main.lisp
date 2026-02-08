@@ -25,9 +25,32 @@
 
 (defun cmd-start (&optional foreground)
   (format t "Starting Crichton daemon~:[...~; (foreground)...~]~%" foreground)
-  (if (crichton/daemon:start-daemon :foreground foreground)
-      (format t "Daemon started. PID ~D~%" (sb-posix:getpid))
-      (format t "Daemon already running.~%")))
+  (if foreground
+      ;; Foreground mode: block in this process (for systemd Type=simple)
+      (crichton/daemon:start-daemon :foreground t)
+      ;; Background mode: spawn daemon as subprocess and return
+      (handler-case
+          (let ((exe #P"/home/gjbroom/bin/crichton"))
+            ;; Check if daemon already running first
+            (let ((result (remote-eval-quiet "(crichton/daemon:daemon-status)")))
+              (if result
+                  (format t "Daemon already running. PID ~D~%" (getf result :pid))
+                  (progn
+                    ;; Spawn new process with --foreground flag
+                    (sb-ext:run-program exe (list "--foreground")
+                                      :search t
+                                      :output nil
+                                      :error nil
+                                      :wait nil)
+                    ;; Give daemon a moment to start
+                    (sleep 0.5)
+                    ;; Check if it started successfully
+                    (let ((status (remote-eval-quiet "(crichton/daemon:daemon-status)")))
+                      (if (getf status :running)
+                          (format t "Daemon started. PID ~D~%" (getf status :pid))
+                          (format t "Daemon failed to start. Check logs.~%")))))))
+        (error (c)
+          (format t "Error spawning daemon: ~A~%" c)))))
 
 (defun cmd-stop ()
   (format t "Stopping Crichton daemon...~%")

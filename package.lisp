@@ -27,7 +27,10 @@
            #:start-swank
            #:ensure-runner
            #:runner-invoke
-           #:kill-runner))
+           #:kill-runner
+           #:*running*
+           #:*shutdown-lock*
+           #:*shutdown-cv*))
 
 (defpackage #:crichton/cli
   (:use #:cl)
