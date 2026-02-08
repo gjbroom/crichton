@@ -134,8 +134,9 @@
    - sunset-hours: time of sunset in hours UTC
    - day-length-hours: length of day in hours
    - solar-noon-hours: time of solar noon in hours UTC"
-  
-  ;; Step 1: Calculate day of year
+   (declare (ignore year))
+   
+   ;; Step 1: Calculate day of year
   (let* ((n (day-of-year month day))
          (lng-hour (/ longitude 15.0d0)))
     
@@ -195,11 +196,9 @@
            ;; cosDec = cos(asin(sinDec))
            (sin-dec-rise (* 0.39782d0 (sin-deg l-rise)))
            (sin-dec-set (* 0.39782d0 (sin-deg l-set)))
-           (sin-dec-noon (* 0.39782d0 (sin-deg l-noon)))
            
            (cos-dec-rise (cos (asin sin-dec-rise)))
            (cos-dec-set (cos (asin sin-dec-set)))
-           (cos-dec-noon (cos (asin sin-dec-noon)))
            
            ;; Step 6: Calculate Sun's local hour angle
            ;; cosH = (cos(zenith) - (sinDec * sin(latitude))) / (cosDec * cos(latitude))
@@ -208,9 +207,7 @@
            (cos-h-rise (/ (- (cos-deg zenith) (* sin-dec-rise (sin-deg latitude)))
                          (* cos-dec-rise (cos-deg latitude))))
            (cos-h-set (/ (- (cos-deg zenith) (* sin-dec-set (sin-deg latitude)))
-                        (* cos-dec-set (cos-deg latitude))))
-           (cos-h-noon (/ (- (cos-deg 0.0d0) (* sin-dec-noon (sin-deg latitude)))
-                         (* cos-dec-noon (cos-deg latitude)))))
+                        (* cos-dec-set (cos-deg latitude)))))
       
       ;; Check for polar regions (no sunrise/sunset)
       (if (or (> (abs cos-h-rise) 1.0d0) (> (abs cos-h-set) 1.0d0))
@@ -225,7 +222,6 @@
                  ;; For sunset: H = acos(cosH), then H = H / 15
                  (h-rise (/ (normalize-degrees (- 360.0d0 (acos-deg cos-h-rise))) 15.0d0))
                  (h-set (/ (acos-deg cos-h-set) 15.0d0))
-                 (h-noon (/ (acos-deg cos-h-noon) 15.0d0))
                  
                  ;; Step 8: Calculate local mean time
                  ;; T = H + RA - (0.06571 * t) - 6.622
