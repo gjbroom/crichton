@@ -1,0 +1,138 @@
+#+TITLE: Crichton Changelog
+#+AUTHOR: Gordon J. Broom
+#+DATE: 2026-02-08
+#+STARTUP: content
+
+* About This Changelog
+
+This file tracks *user-visible* changes to Crichton across releases.
+
+*What to include:*
+- New features and skills
+- Changed behavior users would notice
+- Bug fixes affecting user experience
+- Deprecated or removed features
+- Security updates
+- Configuration changes
+
+*What NOT to include:*
+- Internal refactorings
+- Code cleanup
+- Implementation details
+- Things only visible in =git log=
+
+For development details, see the git commit history and BEADS issue tracker.
+
+* Unreleased (v0.2 development)
+
+** Added
+
+** Changed
+
+** Fixed
+
+** Deprecated
+
+** Removed
+
+** Security
+
+* v0.1 "Secure Core" - 2026-02-08
+
+Initial release implementing all core security requirements from the design spec.
+
+** Added
+
+*** Daemon & Infrastructure
+- SBCL-based daemon with systemd integration
+- Microkernel architecture: daemon starts fresh via systemd, no save-lisp-and-die
+- Minimal =crichton-client= binary for chat interface
+- SLIME/SLY connectivity on port 4005 for live development
+- RPC server on =~/.crichton/daemon.sock= using NDJSON over Unix sockets
+- Configuration via =~/.crichton/config.toml=
+- Structured JSON logging to =~/.crichton/logs/= with 0600 permissions
+
+*** Security Features
+- WASM skill sandbox using wasmtime (skills run in separate process)
+- Capability manifests for skills (TOML format)
+- Ed25519 code signing for skill verification
+- Age-encrypted credential storage (=~/.crichton/credentials.age=)
+- Age-encrypted session storage with configurable retention policy
+- Network egress control (skills have no direct network access)
+- Allowlist-based HTTP for skills via host functions
+
+*** LLM Integration
+- Anthropic Claude API client
+- Tool/function calling support
+- Agent loop with tool use
+- Configurable model selection (default: =claude-sonnet-4-20250514=)
+
+*** Built-in Skills
+- *weather*: Ephemeris calculations (sunrise/sunset using USNO algorithm)
+- *system-info*: CPU, memory, disk usage, temperature monitoring
+- *timing*: Current time and timezone information
+- *scheduler*: Periodic task execution (e.g., RSS feed monitoring)
+- *rss*: RSS feed reading and monitoring
+- *token-usage*: LLM API usage metering and reporting
+
+All built-in skills follow dual interface pattern:
+- Programmatic plist-returning functions
+- Human-friendly formatted report functions
+
+*** Commands
+- =crichton-client= (interactive chat)
+- =crichton-client "message"= (single-shot query)
+- =systemctl --user start/stop/status crichton= (daemon management)
+
+** Security
+
+All 13 security findings from OpenClaw audit addressed:
+
+- [CRITICAL] Skills isolated in WASM sandbox, separate process
+- [HIGH] Credentials encrypted at rest with age
+- [HIGH] Network egress controlled via allowlist
+- [HIGH] Ed25519 code signing enforced
+- [MEDIUM] Sessions encrypted and inaccessible to skills
+- [MEDIUM] No shell interpretation in command execution
+- [MEDIUM] Logs in user-private directory (0600)
+- [MEDIUM] No skill marketplace (manual installation only)
+- [LOW] Environment variables not exposed to skills
+- [LOW] Capability manifests required for all skills
+
+* Version Naming Scheme
+
+Each version has a codename reflecting its focus:
+
+- *v0.1 "Secure Core"*: Security-first MVP, proving all safety properties
+- *v0.2 "Polish & Channels"*: User experience and communication
+- *v0.3 "Skills & Integrations"*: Expanding skill library
+- *v0.4 "Security Hardening"*: Advanced security features
+- *v0.5+ "Future Exploration"*: Experimental features
+
+See [[file:ROADMAP.org][ROADMAP.org]] for planned features by version.
+
+* Changelog Format
+
+This changelog follows [[https://keepachangelog.com/][Keep a Changelog]] principles:
+
+- Newest versions at the top (after Unreleased section)
+- Each version includes release date in ISO format (YYYY-MM-DD)
+- Changes grouped by type: Added, Changed, Fixed, Deprecated, Removed, Security
+- User-focused language (not developer jargon)
+- Reference BEADS issues where relevant (e.g., "Fixed cricht-xxx")
+
+* Contributing to This Changelog
+
+When completing work on a feature or bug fix:
+
+1. Add an entry to the *Unreleased* section under the appropriate category
+2. Write from the user's perspective ("Added readline support" not "Implemented ILineEditor")
+3. Be concise but clear about what changed and why it matters
+4. Reference the BEAD ID if applicable
+
+When cutting a new release:
+
+1. Rename "Unreleased" to the version number and add the release date
+2. Create a new empty "Unreleased" section at the top
+3. Review all entries for clarity and user focus
+4. Update the git tag to reference the changelog

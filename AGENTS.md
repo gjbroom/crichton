@@ -8,7 +8,8 @@
 
 - **Session startup**: Read this file (AGENTS.md) and MEMORY.md at the start of each session to understand project context and user preferences. Run `bd ready` to see what work is outstanding.
 - **Issue tracking**: Use BEADS (`bd` command) for all issue tracking. Beads live in `.beads/` (prefix: `cricht-`). File new beads for bugs, feature requests, style warnings, and cleanup items. Do not create ISSUES.md or TODO files.
-- **Documentation**: The user prefers Emacs org-mode files (.org) over Markdown files (.md).  Use org-mode format instead (see https://orgmode.org/ for information on this format) 
+- **Documentation**: The user prefers Emacs org-mode files (.org) over Markdown files (.md).  Use org-mode format instead (see https://orgmode.org/ for information on this format)
+- **Changelog**: When completing user-visible features or bug fixes, add an entry to the "Unreleased" section of `CHANGELOG.org`. Focus on what changed from the user's perspective, not implementation details. Internal refactorings don't need changelog entries (git log is sufficient).
 - **Git commits**: Commit changes to git as you go. Every meaningful change gets a commit. The user expects this and will call you out for forgetting. Do NOT add "Co-Authored-By" lines to commit messages.
 - **Binary rebuild**: Rebuild the client binary via `save-lisp-and-die` at suitable stopping points — after finishing a feature implementation or fixing a bug. The daemon starts fresh via systemd (no binary needed).
   - **Client binary** (symlinked from `~/bin/crichton-client`):
