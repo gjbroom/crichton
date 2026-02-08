@@ -39,6 +39,7 @@
   (crichton/config:ensure-directories)
   (crichton/config:load-config)
   (crichton/logging:setup-logging)
+  (cl+ssl:reload)
   (write-pid-file)
   (setf *running* t)
   (start-swank)
