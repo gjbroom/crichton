@@ -29,6 +29,8 @@ For development details, see the git commit history and BEADS issue tracker.
 
 ** Changed
 
+- Converted =AGENTS.md= to =AGENTS.org= (org-mode format) for consistency with documentation preference
+
 ** Fixed
 
 ** Deprecated
