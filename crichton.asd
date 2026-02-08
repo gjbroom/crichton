@@ -78,5 +78,6 @@ signing. Informed by a security audit of OpenClaw."
                 :components ((:file "main")
                              (:file "remote")))
                (:module "runner"
-                :components ((:file "server")))
+                :components ((:file "skill-context")
+                             (:file "server")))
                (:file "crichton")))

@@ -44,34 +44,53 @@
 
 (defun handle-invoke (id msg)
   "Handle an 'invoke' request: load WASM, call export, return result.
-   Request fields:
-     wat       - WAT source string (mutually exclusive with wasm_b64)
-     wasm_b64  - base64-encoded WASM bytes (mutually exclusive with wat)
-     export    - export function name to call
-     args      - list of i32 arguments (optional)
-     nresults  - number of expected results (default 1)"
+    Request fields:
+      wat       - WAT source string (mutually exclusive with wasm_b64)
+      wasm_b64  - base64-encoded WASM bytes (mutually exclusive with wat)
+      export    - export function name to call
+      args      - list of i32 arguments (optional)
+      nresults  - number of expected results (default 1)
+      manifest  - (optional) capability manifest (parsed plist)"
   (let* ((wat (crichton/rpc:msg-get msg "wat"))
          (wasm-b64 (crichton/rpc:msg-get msg "wasm_b64"))
          (export-name (crichton/rpc:msg-get msg "export"))
          (raw-args (crichton/rpc:msg-get msg "args"))
-         (nresults (or (crichton/rpc:msg-get msg "nresults") 1)))
+         (nresults (or (crichton/rpc:msg-get msg "nresults") 1))
+         (manifest (crichton/rpc:msg-get msg "manifest")))
     (unless export-name
       (error "Missing required field: export"))
     (unless (or wat wasm-b64)
       (error "Missing required field: wat or wasm_b64"))
     (let ((args-list (when raw-args
-                       (coerce raw-args 'list))))
+                       (coerce raw-args 'list)))
+          (context (when manifest
+                     (make-skill-context-from-manifest manifest))))
       (let ((result
-              (if wat
-                  (crichton/wasm:run-wasm-with-host-fns
-                   wat export-name
-                   :args args-list
-                   :nresults nresults)
-                  (let ((wasm-bytes (crichton/rpc:base64-to-bytes wasm-b64)))
-                    (crichton/wasm:run-wasm-bytes-with-host-fns
-                     wasm-bytes export-name
-                     :args args-list
-                     :nresults nresults)))))
+              (if context
+                  ;; Run with skill context
+                  (call-with-skill-context context
+                    (lambda ()
+                      (if wat
+                          (crichton/wasm:run-wasm-with-host-fns
+                           wat export-name
+                           :args args-list
+                           :nresults nresults)
+                          (let ((wasm-bytes (crichton/rpc:base64-to-bytes wasm-b64)))
+                            (crichton/wasm:run-wasm-bytes-with-host-fns
+                             wasm-bytes export-name
+                             :args args-list
+                             :nresults nresults)))))
+                  ;; Run without context
+                  (if wat
+                      (crichton/wasm:run-wasm-with-host-fns
+                       wat export-name
+                       :args args-list
+                       :nresults nresults)
+                      (let ((wasm-bytes (crichton/rpc:base64-to-bytes wasm-b64)))
+                        (crichton/wasm:run-wasm-bytes-with-host-fns
+                         wasm-bytes export-name
+                         :args args-list
+                         :nresults nresults))))))
         (crichton/rpc:make-ok-response id result)))))
 
 ;;; --- Connection handler ---

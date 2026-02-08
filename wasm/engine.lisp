@@ -514,15 +514,6 @@
 ;;; Reads a key from the WASM memory, looks it up in the skill's KV store,
 ;;; writes the value back into WASM memory, returns pointer.
 
-(defvar *skill-kv-stores* (make-hash-table :test #'equal)
-  "Hash of skill-id -> (hash-table of key -> value) for KV storage.")
-
-(defun get-skill-kv-store (skill-id)
-  "Get or create the KV store for a skill."
-  (or (gethash skill-id *skill-kv-stores*)
-      (setf (gethash skill-id *skill-kv-stores*)
-            (make-hash-table :test #'equal))))
-
 (cffi:defcallback host-kv-get-callback :pointer
     ((env :pointer) (caller :pointer)
      (args :pointer) (nargs :size)
@@ -538,13 +529,21 @@
                (key-len (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 1)))
                (key (read-wasm-string caller key-ptr key-len)))
           
-          ;; Look up key in skill's KV store (stub for now)
-          (declare (ignore key))
-          ;; TODO: connect to actual skill context
-          (log:debug "kv_get called for key (not yet implemented)")
-          
-          ;; Return -1 (not found) for now
-          (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -1)))
+          ;; Look up key in skill's KV store via skill context
+          (handler-case
+              (let* ((kv-store (crichton/runner:skill-kv-store))
+                     (value (gethash key kv-store)))
+                (if value
+                    (progn
+                      ;; TODO: write value back to WASM memory and return pointer
+                      ;; For now, return 0 (success but no data)
+                      (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 0))
+                    ;; Not found
+                    (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -1)))
+            (error (c)
+              (log:error "kv_get skill lookup error: ~A" c)
+              ;; Return error code
+              (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -2)))))
     (error (c)
       (log:error "Host kv-get callback error: ~A" c)))
   (cffi:null-pointer))
@@ -571,12 +570,16 @@
                (key (read-wasm-string caller key-ptr key-len))
                (val (read-wasm-string caller val-ptr val-len)))
           
-          ;; TODO: connect to skill context and store
-          (declare (ignore key val))
-          (log:debug "kv_set called (not yet implemented)")
-          
-          ;; Return 1 (success) for now
-          (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 1)))
+          ;; Store key-value pair in skill's KV store via skill context
+          (handler-case
+              (let ((kv-store (crichton/runner:skill-kv-store)))
+                (setf (gethash key kv-store) val)
+                ;; Return 1 (success)
+                (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 1))
+            (error (c)
+              (log:error "kv_set skill store error: ~A" c)
+              ;; Return error code
+              (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -2)))))
     (error (c)
       (log:error "Host kv-set callback error: ~A" c)))
   (cffi:null-pointer))

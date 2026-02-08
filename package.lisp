@@ -267,7 +267,15 @@
 
 (defpackage #:crichton/runner
   (:use #:cl)
-  (:export #:main))
+  (:export #:main
+           ;; skill context
+           #:skill-context
+           #:make-skill-context-from-manifest
+           #:call-with-skill-context
+           #:current-skill-context
+           #:skill-http-allowlist
+           #:skill-kv-store
+           #:skill-resolve-secret))
 
 (defpackage #:crichton
   (:use #:cl)
