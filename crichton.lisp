@@ -21,17 +21,14 @@
        (crichton/cli:main)))))
 
 (defun reload-config (&optional path)
-  "Hot-reload configuration without restarting the daemon.
-   Convenience wrapper for SWANK REPL usage.
+  "Hot-reload configuration from ~/.crichton/config.toml (or PATH if specified).
 
-   Usage:
+   This is a convenience wrapper around crichton/config:reload-config for use
+   from the SWANK REPL. Call this after editing config.toml to apply changes
+   without restarting the daemon.
+
+   Example:
      (crichton:reload-config)
-     => (:SUCCESS T :MESSAGE \"Configuration reloaded successfully\" ...)
 
-   Returns a plist with:
-     :success  - T if reload succeeded
-     :message  - Human-readable status
-     :errors   - List of validation errors (if any)
-     :reloaded - Config sections that were reloaded
-     :skipped  - Config sections requiring daemon restart"
+   Returns a plist with :success (T/NIL) and :message describing the result."
   (crichton/config:reload-config path))
