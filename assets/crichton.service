@@ -5,7 +5,11 @@ After=network.target
 [Service]
 Type=simple
 Environment=HOME=/home/gjbroom
-ExecStart=/home/gjbroom/devel/crichton/assets/start-daemon.sh
+ExecStart=/usr/bin/sbcl --noinform --non-interactive \
+  --eval "(require :asdf)" \
+  --eval "(push #p\"/home/gjbroom/devel/crichton/\" asdf:*central-registry*)" \
+  --eval "(asdf:load-system :crichton)" \
+  --eval "(crichton/daemon:start-daemon :foreground t)"
 ExecStop=/bin/kill -SIGTERM $MAINPID
 Restart=on-failure
 RestartSec=5

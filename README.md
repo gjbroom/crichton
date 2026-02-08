@@ -34,8 +34,6 @@ systemctl --user status crichton
 journalctl --user -u crichton -f   # live logs
 ```
 
-The old CLI still works for eval, cred, doctor, and weather commands.
-
 ## Building the client binary
 
 ```bash
@@ -83,7 +81,7 @@ The daemon loads fresh via systemd — no binary needed.
 crichton/
 ├── crichton.asd            # ASDF system definition
 ├── package.lisp            # Package declarations
-├── crichton.lisp           # Top-level entry point
+├── crichton.lisp           # Legacy CLI entry point
 ├── config/
 │   ├── paths.lisp          # ~/.crichton/ directory layout
 │   └── loader.lisp         # TOML config loading
@@ -116,7 +114,7 @@ crichton/
 ├── cli/
 │   ├── main.lisp           # CLI: eval, cred, doctor, weather
 │   └── remote.lisp         # Swank client for remote eval
-├── assets/                 # systemd unit and startup script
+├── assets/                 # systemd unit file
 └── runner/
     └── server.lisp         # WASM skill runner process
 ```
