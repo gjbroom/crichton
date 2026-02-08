@@ -49,6 +49,10 @@
       (log:warn "Session purge at startup failed: ~A" c)))
   (crichton/skills:start-scheduler)
   (handler-case
+      (crichton/skills:start-battery-monitoring)
+    (error (c)
+      (log:warn "Battery monitoring startup failed: ~A" c)))
+  (handler-case
       (start-rpc-server)
     (error (c)
       (log:warn "RPC server startup failed: ~A" c)))

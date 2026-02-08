@@ -9,6 +9,7 @@
            #:agent-path
            #:ensure-directories
            #:load-config
+           #:reload-config
            #:config-get
            #:config-section-get))
 
@@ -146,7 +147,17 @@
            #:meter-recent
            #:aggregate-snapshot
            #:meter-report
-           #:usage-report))
+           #:usage-report
+           ;; battery monitoring
+           #:find-batteries
+           #:battery-info
+           #:all-batteries-info
+           #:primary-battery-info
+           #:battery-status
+           #:battery-report
+           #:check-battery-and-alert
+           #:start-battery-monitoring
+           #:stop-battery-monitoring))
 
 (defpackage #:crichton/llm
   (:use #:cl)
@@ -282,4 +293,5 @@
 
 (defpackage #:crichton
   (:use #:cl)
-  (:export #:main))
+  (:export #:main
+           #:reload-config))

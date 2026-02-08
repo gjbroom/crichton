@@ -280,6 +280,36 @@
                         (crichton/skills:meter-recent meter-name count))))
            (t (format nil "Unknown action: ~A" action))))))))
 
+;;; --- Battery tool ---
+
+(defun register-battery-tool ()
+  (multiple-value-bind (props required)
+      (make-properties
+       '("action" "string"
+         "The battery action: status (current battery info), start_monitoring (enable periodic checks), stop_monitoring (disable periodic checks)."
+         :enum ("status" "start_monitoring" "stop_monitoring")
+         :required-p t))
+    (register-tool
+     "battery"
+     "Monitor battery level and charging status on laptop systems. Get current battery percentage, charging state, and time remaining. Can start/stop periodic monitoring with proactive alerts at configurable thresholds. Linux only (reads /sys/class/power_supply/)."
+     (make-json-schema :type "object" :properties props :required required)
+     (lambda (input)
+       (let ((action (hget input "action" "status")))
+         (cond
+           ((string-equal action "status")
+            (with-output-to-string (s)
+              (crichton/skills:battery-report :stream s)))
+           ((string-equal action "start_monitoring")
+            (if (crichton/skills:start-battery-monitoring)
+                "Battery monitoring started. Will check periodically and alert on low battery."
+                "Battery monitoring not available (no batteries detected)."))
+           ((string-equal action "stop_monitoring")
+            (if (crichton/skills:stop-battery-monitoring)
+                "Battery monitoring stopped."
+                "Battery monitoring was not running."))
+           (t
+            (format nil "Unknown battery action: ~A" action))))))))
+
 ;;; --- Registration ---
 
 (defun register-all-tools ()
@@ -291,4 +321,5 @@
   (register-ephemeris-tool)
   (register-rss-tool)
   (register-usage-tool)
+  (register-battery-tool)
   (log:info "Registered ~D agent tools" (hash-table-count *agent-tools*)))
