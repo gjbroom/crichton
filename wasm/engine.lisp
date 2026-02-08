@@ -116,14 +116,16 @@
 
 (defun make-functype (param-kinds result-kinds)
   "Build a wasm_functype_t* from lists of kind constants (e.g. +wasm-i32+).
-   Caller must eventually call wasm-functype-delete on the result."
+   Caller must eventually call wasm-functype-delete on the result.
+   Note: wasm_valtype_vec_new takes ownership of the data array,
+   so we must heap-allocate it (not stack-allocate with with-foreign-object)."
   (let ((nparams (length param-kinds))
         (nresults (length result-kinds)))
     (cffi:with-foreign-objects ((params-vec '(:struct wasm-valtype-vec))
                                 (results-vec '(:struct wasm-valtype-vec)))
       (if (zerop nparams)
           (wasm-valtype-vec-new-empty params-vec)
-          (cffi:with-foreign-object (param-arr :pointer nparams)
+          (let ((param-arr (cffi:foreign-alloc :pointer :count nparams)))
             (loop for kind in param-kinds
                   for i from 0
                   do (setf (cffi:mem-aref param-arr :pointer i)
@@ -131,7 +133,7 @@
             (wasm-valtype-vec-new params-vec nparams param-arr)))
       (if (zerop nresults)
           (wasm-valtype-vec-new-empty results-vec)
-          (cffi:with-foreign-object (result-arr :pointer nresults)
+          (let ((result-arr (cffi:foreign-alloc :pointer :count nresults)))
             (loop for kind in result-kinds
                   for i from 0
                   do (setf (cffi:mem-aref result-arr :pointer i)
