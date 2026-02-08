@@ -73,7 +73,7 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
 
 * Planned Features
 
-** TODO v0.2 "Polish & Channels" [0/8]
+** TODO v0.2 "Polish & Channels" [1/8]
 
    Focus on user experience improvements and completing channel integration.
 
@@ -83,11 +83,12 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
     - [ ] Fine-grained permissions per user
     - [ ] Update credential store with new Discord token
 
-*** TODO [#A] Interface Improvements
-    - [ ] Readline support in crichton-client (cricht-zpk)
-    - [ ] Command history (up-arrow navigation)
-    - [ ] Line editing shortcuts (Ctrl-A, Ctrl-E, etc.)
-    - [ ] Persistent history across sessions
+*** DONE [#A] Interface Improvements
+    CLOSED: [2026-02-08 Sat]
+    - [X] Readline support in crichton-client (cricht-zpk)
+    - [X] Command history (up-arrow navigation)
+    - [X] Line editing shortcuts (Ctrl-A, Ctrl-E, etc.)
+    - [X] Persistent history across sessions
 
 *** TODO [#B] Configuration Management
     - [ ] Hot-reload configuration without daemon restart (cricht-xqy)
