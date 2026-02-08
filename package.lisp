@@ -15,6 +15,7 @@
 (defpackage #:crichton/logging
   (:use #:cl)
   (:export #:setup-logging
+           #:suppress-console-logging
            #:with-redaction))
 
 (defpackage #:crichton/daemon
