@@ -4,97 +4,186 @@
 ;;;; Computes sunrise, sunset, solar noon, day length, and twilight times
 ;;;; for any location and date.
 ;;;;
-;;;; Implements standard solar algorithms from NOAA and Jean Meeus.
+;;;; Implements the USNO algorithm (Almanac for Computers, 1990)
+;;;; from edwilliams.org.
 ;;;; Accuracies within ~1 minute for sunrise/sunset.
 ;;;;
 ;;;; Daemon-side built-in — runs inside the TCB, not in WASM.
 
 (in-package #:crichton/skills)
 
-;;; --- Julian day calculations ---
+;;; --- Utilities ---
 
-(defun julian-day (year month day)
-  "Compute Julian Day Number for a given calendar date (UTC).
-   Returns a float (fractional days since J2000.0 epoch)."
-  (let* ((a (floor (- 14 month) 12))
-         (y (+ year 4800 (- a)))
-         (m (+ month (* 12 a) -3)))
-    (+ day
-       (floor (+ 153 m) 5)
-       (* 365 y)
-       (floor y 4)
-       (- (floor y 100))
-       (floor y 400)
-       -32045
-       -2451545.0)))  ; Convert to J2000.0 epoch
+(defun deg->rad (degrees)
+  "Convert degrees to radians."
+  (* degrees (/ pi 180.0d0)))
 
-(defun julian-centuries (jd)
-  "Compute Julian centuries from J2000.0 epoch for a given JD."
-  (/ (- jd 0.0d0) 36525.0d0))
+(defun rad->deg (radians)
+  "Convert radians to degrees."
+  (* radians (/ 180.0d0 pi)))
 
-;;; --- Solar position calculations (NOAA algorithm) ---
+(defun sin-deg (degrees)
+  "Sine of degrees."
+  (sin (deg->rad degrees)))
 
-(defun fractional-year (day-of-year)
-  "Compute fractional year in radians for a given day of year (1-366)."
-  (* 2.0d0 pi (/ (- day-of-year 1.0d0) 365.0d0)))
+(defun cos-deg (degrees)
+  "Cosine of degrees."
+  (cos (deg->rad degrees)))
+
+(defun asin-deg (x)
+  "Arcsine, returning degrees."
+  (rad->deg (asin x)))
+
+(defun acos-deg (x)
+  "Arccosine, returning degrees."
+  (rad->deg (acos x)))
+
+(defun atan-deg (y x)
+  "Arctangent (atan2), returning degrees."
+  (rad->deg (atan y x)))
+
+(defun normalize-degrees (deg)
+  "Normalize degrees to range [0, 360)."
+  (let ((d (mod deg 360.0d0)))
+    (if (< d 0) (+ d 360.0d0) d)))
+
+;;; --- Day of year calculations ---
 
 (defun day-of-year (month day)
   "Compute day of year (1-366) from month and day."
   (let ((days-in-months #(0 31 59 90 120 151 181 212 243 273 304 334)))
     (+ (aref days-in-months (- month 1)) day)))
 
-(defun solar-declination-noaa (fractional-year)
-  "Compute solar declination (degrees) using NOAA algorithm."
-  (* 0.4093d0 (sin (- (* 2.0d0 fractional-year) 1.3955d0))))
-
-(defun equation-of-time-noaa (fractional-year)
-  "Compute equation of time (minutes) using NOAA algorithm."
-  (+ (* 229.18d0 
-        (+ (* 0.75933d0 (cos fractional-year))
-           (* -2.9833d0 (cos (* 2.0d0 fractional-year)))
-           (* -0.3868d0 (sin (* 2.0d0 fractional-year)))
-           (* -0.00769d0 (sin (* 4.0d0 fractional-year)))))
-     (* -7.99d0 (sin (- (* 2.0d0 fractional-year) 1.3855d0)))
-     (* 9.4724d0 (sin (+ (* 4.0d0 fractional-year) 1.3568d0)))))
-
-(defun hour-angle-sunrise (lat decl)
-  "Compute the hour angle (degrees) at sunrise/sunset.
-   LAT and DECL are in degrees. Returns NIL for polar regions."
-  (let* ((lat-rad (/ lat 180.0d0 pi))
-         (decl-rad (/ decl 180.0d0 pi))
-         (cos-h (- (cos lat-rad) 
-                  (* (tan lat-rad) (tan decl-rad)))))
-    (cond
-      ((> (abs cos-h) 1.0d0) nil)
-      (t (* 180.0d0 pi (acos cos-h))))))
-
-;;; --- Sunrise/sunset computation ---
+;;; --- Sunrise/Sunset using USNO Algorithm ---
 
 (defun sunrise-sunset-for-date (year month day latitude longitude)
   "Compute sunrise and sunset times (in hours UTC) for a given date and location.
+   Based on USNO algorithm (Almanac for Computers, 1990).
+   
    Returns (values sunrise-hours sunset-hours day-length-hours solar-noon-hours).
-   Returns (values NIL NIL NIL NIL) for polar regions with 24-hr day/night."
-  (let* ((doy (day-of-year month day))
-         (fy (fractional-year doy))
-         (decl (solar-declination-noaa fy))
-         (eot (equation-of-time-noaa fy))
-         (h (hour-angle-sunrise latitude decl)))
-    (unless h
-      ;; Polar region: 24-hour day or night
-      (let ((solar-noon (+ 12.0d0 (/ (+ longitude (* eot 4.0d0)) 60.0d0))))
-        (if (>= decl 0.0d0)
-            (values 0.0d0 24.0d0 24.0d0 solar-noon)  ; 24-hour day
-            (values nil nil 0.0d0 solar-noon))))      ; 24-hour night
+   Returns (values NIL NIL NIL NIL) for polar regions with 24-hr day/night.
+   
+   - sunrise-hours: time of sunrise in hours UTC
+   - sunset-hours: time of sunset in hours UTC
+   - day-length-hours: length of day in hours
+   - solar-noon-hours: time of solar noon in hours UTC"
+  
+  ;; Step 1: Calculate day of year
+  (let* ((n (day-of-year month day))
+         (lng-hour (/ longitude 15.0d0)))
     
-    (let* ((h-hours (/ h 15.0d0))
-           (solar-noon (+ 12.0d0 (/ (+ longitude (* eot 4.0d0)) 60.0d0)))
-           (sunrise (- solar-noon h-hours))
-           (sunset (+ solar-noon h-hours))
-           (day-length (- sunset sunrise)))
-      (values (mod sunrise 24.0d0)
-              (mod sunset 24.0d0)
-              day-length
-              solar-noon))))
+    ;; Calculate for both sunrise and sunset to get both times and solar noon
+    ;; For sunrise: t = N + ((6 - lngHour) / 24)
+    ;; For sunset: t = N + ((18 - lngHour) / 24)
+    ;; For solar noon: approximately N + (12 - lngHour)/24
+    
+    (let* ((t-rise (+ n (/ (- 6.0d0 lng-hour) 24.0d0)))
+           (t-set (+ n (/ (- 18.0d0 lng-hour) 24.0d0)))
+           (t-noon (+ n (/ (- 12.0d0 lng-hour) 24.0d0)))
+           
+           ;; Step 2: Calculate Sun's mean anomaly M = (0.9856 * t) - 3.289
+           (m-rise (* (- (* 0.9856d0 t-rise) 3.289d0)))
+           (m-set (* (- (* 0.9856d0 t-set) 3.289d0)))
+           (m-noon (* (- (* 0.9856d0 t-noon) 3.289d0)))
+           
+           ;; Step 3: Calculate Sun's true longitude
+           ;; L = M + (1.916 * sin(M)) + (0.020 * sin(2 * M)) + 282.634
+           (l-rise (normalize-degrees (+ m-rise (* 1.916d0 (sin-deg m-rise))
+                                         (* 0.020d0 (sin-deg (* 2.0d0 m-rise)))
+                                         282.634d0)))
+           (l-set (normalize-degrees (+ m-set (* 1.916d0 (sin-deg m-set))
+                                        (* 0.020d0 (sin-deg (* 2.0d0 m-set)))
+                                        282.634d0)))
+           (l-noon (normalize-degrees (+ m-noon (* 1.916d0 (sin-deg m-noon))
+                                         (* 0.020d0 (sin-deg (* 2.0d0 m-noon)))
+                                         282.634d0)))
+           
+           ;; Step 4: Calculate Sun's right ascension
+           ;; RA = atan(0.91764 * tan(L))
+           ;; Must be adjusted to correct quadrant
+           (ra-rise-raw (atan-deg (* 0.91764d0 (tan (deg->rad l-rise))) 1.0d0))
+           (ra-set-raw (atan-deg (* 0.91764d0 (tan (deg->rad l-set))) 1.0d0))
+           (ra-noon-raw (atan-deg (* 0.91764d0 (tan (deg->rad l-noon))) 1.0d0))
+           
+           ;; Adjust RA to correct quadrant
+           (l-quad-rise (floor (/ l-rise 90.0d0)))
+           (l-quad-set (floor (/ l-set 90.0d0)))
+           (l-quad-noon (floor (/ l-noon 90.0d0)))
+           
+           (ra-quad-rise (floor (/ ra-rise-raw 90.0d0)))
+           (ra-quad-set (floor (/ ra-set-raw 90.0d0)))
+           (ra-quad-noon (floor (/ ra-noon-raw 90.0d0)))
+           
+           (ra-rise (+ ra-rise-raw (- (* 90.0d0 l-quad-rise) (* 90.0d0 ra-quad-rise))))
+           (ra-set (+ ra-set-raw (- (* 90.0d0 l-quad-set) (* 90.0d0 ra-quad-set))))
+           (ra-noon (+ ra-noon-raw (- (* 90.0d0 l-quad-noon) (* 90.0d0 ra-quad-noon))))
+           
+           ;; Convert RA to hours (divide by 15)
+           (ra-hours-rise (/ ra-rise 15.0d0))
+           (ra-hours-set (/ ra-set 15.0d0))
+           (ra-hours-noon (/ ra-noon 15.0d0))
+           
+           ;; Step 5: Calculate Sun's declination
+           ;; sinDec = 0.39782 * sin(L)
+           ;; cosDec = cos(asin(sinDec))
+           (sin-dec-rise (* 0.39782d0 (sin-deg l-rise)))
+           (sin-dec-set (* 0.39782d0 (sin-deg l-set)))
+           (sin-dec-noon (* 0.39782d0 (sin-deg l-noon)))
+           
+           (cos-dec-rise (cos (asin sin-dec-rise)))
+           (cos-dec-set (cos (asin sin-dec-set)))
+           (cos-dec-noon (cos (asin sin-dec-noon)))
+           
+           ;; Step 6: Calculate Sun's local hour angle
+           ;; cosH = (cos(zenith) - (sinDec * sin(latitude))) / (cosDec * cos(latitude))
+           ;; For standard sunrise/sunset, zenith = 90°50' ≈ 90.833°
+           (zenith 90.833d0)
+           (cos-h-rise (/ (- (cos-deg zenith) (* sin-dec-rise (sin-deg latitude)))
+                         (* cos-dec-rise (cos-deg latitude))))
+           (cos-h-set (/ (- (cos-deg zenith) (* sin-dec-set (sin-deg latitude)))
+                        (* cos-dec-set (cos-deg latitude))))
+           (cos-h-noon (/ (- (cos-deg 0.0d0) (* sin-dec-noon (sin-deg latitude)))
+                         (* cos-dec-noon (cos-deg latitude)))))
+      
+      ;; Check for polar regions (no sunrise/sunset)
+      (if (or (> (abs cos-h-rise) 1.0d0) (> (abs cos-h-set) 1.0d0))
+          ;; Polar region: 24-hour day or night
+          (if (>= sin-dec-rise 0.0d0)
+              (values 0.0d0 24.0d0 24.0d0 12.0d0)  ; 24-hour day, solar noon at 12 UTC
+              (values nil nil 0.0d0 12.0d0))         ; 24-hour night
+          
+          ;; Normal case: both sunrise and sunset
+          (let* (;; Step 7: Calculate H and convert to hours
+                 ;; For sunrise: H = 360 - acos(cosH), then H = H / 15
+                 ;; For sunset: H = acos(cosH), then H = H / 15
+                 (h-rise (/ (normalize-degrees (- 360.0d0 (acos-deg cos-h-rise))) 15.0d0))
+                 (h-set (/ (acos-deg cos-h-set) 15.0d0))
+                 (h-noon (/ (acos-deg cos-h-noon) 15.0d0))
+                 
+                 ;; Step 8: Calculate local mean time
+                 ;; T = H + RA - (0.06571 * t) - 6.622
+                 (t-rise (+ h-rise ra-hours-rise (* -0.06571d0 t-rise) -6.622d0))
+                 (t-set (+ h-set ra-hours-set (* -0.06571d0 t-set) -6.622d0))
+                 (t-noon (+ ra-hours-noon (* -0.06571d0 t-noon) -6.622d0))
+                 
+                 ;; Step 9: Adjust back to UTC
+                 ;; UT = T - lngHour
+                 (ut-rise (- t-rise lng-hour))
+                 (ut-set (- t-set lng-hour))
+                 (ut-noon (- t-noon lng-hour))
+                 
+                 ;; Normalize to [0, 24)
+                 (sunrise-utc (mod ut-rise 24.0d0))
+                 (sunset-utc (mod ut-set 24.0d0))
+                 (solar-noon-utc (mod ut-noon 24.0d0))
+                 
+                 ;; Day length is sunset - sunrise
+                 (day-length (- (if (< sunset-utc sunrise-utc)
+                                     (+ sunset-utc 24.0d0)
+                                     sunset-utc)
+                               sunrise-utc)))
+            
+            (values sunrise-utc sunset-utc day-length solar-noon-utc))))))
 
 (defun format-time-hms (hours)
   "Format decimal hours as HH:MM:SS string."
