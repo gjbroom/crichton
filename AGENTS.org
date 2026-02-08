@@ -24,6 +24,86 @@
       --eval "(sb-ext:save-lisp-and-die #p\"/home/gjbroom/devel/crichton/crichton-client\" :toplevel #'crichton-client:main :executable t :compression t)"
     #+end_src
 
+* Parallel Development with Git Worktrees
+
+For working on multiple features simultaneously without conflicts, use *git worktrees*. Each worktree is a separate working directory pointing to a different branch, all sharing the same =.git= repository.
+
+** Creating Worktrees for Parallel Features
+
+When spawning background agents to work on different features in parallel:
+
+#+begin_src bash
+# From main repo: /home/gjbroom/devel/crichton
+cd /home/gjbroom/devel/crichton
+
+# Create worktree for feature 1
+git worktree add ../crichton-readline feature/readline-support
+
+# Create worktree for feature 2
+git worktree add ../crichton-monitoring feature/system-monitoring
+
+# Create worktree for feature 3
+git worktree add ../crichton-orgmode feature/orgmode-skill
+
+# List all worktrees
+git worktree list
+#+end_src
+
+Each worktree:
+- Has its own working directory (=../crichton-<feature>=)
+- Points to its own feature branch
+- Shares the same =.git= repository (no duplication)
+- Agents can work independently without clobbering each other
+
+** Workflow for Parallel Development
+
+1. *Create feature branches and worktrees*:
+   #+begin_src bash
+   git checkout master
+   git branch feature/new-feature
+   git worktree add ../crichton-new-feature feature/new-feature
+   #+end_src
+
+2. *Spawn background agent in worktree*:
+   - Agent works in =../crichton-new-feature= directory
+   - Agent commits to =feature/new-feature= branch
+   - No conflicts with other agents in other worktrees
+
+3. *When agent completes*:
+   #+begin_src bash
+   # Switch to main repo
+   cd /home/gjbroom/devel/crichton
+
+   # Merge completed feature
+   git checkout master
+   git merge feature/new-feature
+
+   # Clean up worktree
+   git worktree remove ../crichton-new-feature
+   git branch -d feature/new-feature
+   #+end_src
+
+4. *Push merged changes*:
+   #+begin_src bash
+   git push origin master
+   #+end_src
+
+** Benefits
+
+- *True parallelism*: Multiple agents work simultaneously without conflicts
+- *Isolation*: Each feature development is independent
+- *Efficiency*: Shared =.git= means no repository duplication
+- *Clean merges*: Feature branches merge cleanly into master
+- *Productivity*: Work on 3-5 features in parallel
+
+** Important Notes
+
+- Always create worktrees from the main repository directory
+- Worktree paths are relative to current directory (use =../crichton-<name>=)
+- Clean up worktrees after merging: =git worktree remove <path>=
+- Don't delete worktree directories manually; use =git worktree remove=
+- Each worktree needs its own branch (can't have two worktrees on same branch)
+
 * Crichton Development Notes
 
 - Phases 1-4 are complete: daemon skeleton, WASM skill runner, encrypted credentials/sessions, LLM integration (Anthropic), agent loop with tool use.
