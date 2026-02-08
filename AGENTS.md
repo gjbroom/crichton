@@ -7,7 +7,7 @@
 ## Workflow Practices
 
 - **Issue tracking**: Use BEADS (`bd` command) for all issue tracking. Beads live in `.beads/` (prefix: `cricht-`). File new beads for bugs, feature requests, style warnings, and cleanup items. Do not create ISSUES.md or TODO files.
-- **Git commits**: Commit changes to git as you go. Every meaningful change gets a commit. The user expects this and will call you out for forgetting.
+- **Git commits**: Commit changes to git as you go. Every meaningful change gets a commit. The user expects this and will call you out for forgetting. Do NOT add "Co-Authored-By" lines to commit messages.
 - **CLI binary rebuild**: Rebuild the Crichton CLI binary via `save-lisp-and-die` at suitable stopping points — after finishing a feature implementation or fixing a bug. The binary is at `crichton/crichton` (symlinked from `~/bin/crichton`). Rebuild command:
   ```
   sbcl --noinform --non-interactive \
