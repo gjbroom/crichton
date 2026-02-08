@@ -2,9 +2,20 @@
 ;;;;
 ;;;; Minimal chat client for the Crichton daemon.
 ;;;; Connects via Unix domain socket, speaks NDJSON.
-;;;; No heavy dependencies — only sb-bsd-sockets + shasht.
+;;;; No heavy dependencies — only sb-bsd-sockets + shasht + cl-readline.
 
 (in-package #:crichton-client)
+
+;;; --- Readline configuration ---
+
+(defvar *history-file*
+  (namestring (merge-pathnames "history"
+                               (merge-pathnames ".crichton/"
+                                                (user-homedir-pathname))))
+  "Path to the readline history file.")
+
+(defvar *history-max-entries* 1000
+  "Maximum number of history entries to keep.")
 
 ;;; --- State ---
 
@@ -108,19 +119,59 @@
       (setf *session-id* new-sid))
     (values response-text new-sid)))
 
+;;; --- History management ---
+
+(defun load-history ()
+  "Load readline history from file if it exists."
+  (when (probe-file *history-file*)
+    (handler-case
+        (rl:read-history *history-file*)
+      (error (c)
+        (format *error-output* "Warning: Could not load history: ~A~%" c)))))
+
+(defun save-history ()
+  "Save readline history to file, truncating to max entries if needed."
+  (handler-case
+      (progn
+        ;; Ensure the .crichton directory exists
+        (let ((history-dir (directory-namestring *history-file*)))
+          (unless (probe-file history-dir)
+            (ensure-directories-exist history-dir)))
+        ;; Write current history
+        (rl:write-history *history-file*)
+        ;; Manual truncation: read the file, keep last N lines, rewrite
+        (when (probe-file *history-file*)
+          (let ((lines (with-open-file (in *history-file* :direction :input
+                                           :if-does-not-exist nil)
+                         (when in
+                           (loop for line = (read-line in nil nil)
+                                 while line
+                                 collect line)))))
+            (when (> (length lines) *history-max-entries*)
+              (let ((truncated (subseq lines (- (length lines) *history-max-entries*))))
+                (with-open-file (out *history-file* :direction :output
+                                     :if-exists :supersede)
+                  (dolist (line truncated)
+                    (write-line line out))))))))
+      (error (c)
+        (format *error-output* "Warning: Could not save history: ~A~%" c))))
+
 ;;; --- REPL ---
 
 (defun chat-repl (&key socket-path)
-  "Interactive chat REPL. Connect to daemon, loop reading user input."
+  "Interactive chat REPL with readline support. Connect to daemon, loop reading user input."
   (connect-daemon socket-path)
   (unwind-protect
        (progn
+         ;; Initialize readline
+         (rl:register-function :complete nil)  ; Disable tab completion for now
+         (load-history)
+
          (format t "Connected to Crichton daemon. Type :quit to exit.~%~%")
          (loop
-           (format t "> ")
-           (finish-output)
-           (let ((line (read-line *standard-input* nil nil)))
+           (let ((line (rl:readline :prompt "> " :add-history t)))
              (when (null line)
+               ;; EOF (Ctrl-D)
                (terpri)
                (return))
              (let ((trimmed (string-trim '(#\Space #\Tab) line)))
@@ -135,6 +186,7 @@
                        (format t "~&~A~%~%" response-text))
                    (error (c)
                      (format *error-output* "Error: ~A~%" c))))))))
+    (save-history)
     (disconnect)))
 
 ;;; --- CLI entry point ---
