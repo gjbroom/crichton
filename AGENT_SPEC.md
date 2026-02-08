@@ -1,0 +1,355 @@
+# Crichton — Design Spec
+
+*Named for "The Admirable Crichton" — the quietly competent servant who's actually running everything.*
+
+**Date:** 2026-02-06
+**Authors:** Gord (GJB), Amp, WC, CC
+**Status:** Decisions locked — Phase 1 implementation started
+**Goal:** A secure background AI agent, informed by real vulnerabilities found in OpenClaw
+**Repository:** `crichton/` (SBCL/ASDF project)
+
+---
+
+## Design Principles
+
+Derived from OpenClaw audit findings:
+
+1. **Skills must be isolated** — no same-process execution (OpenClaw: CRITICAL finding)
+2. **Credentials must be encrypted at rest** — not just file permissions (OpenClaw: plaintext with 0600)
+3. **Network egress must be controlled** — skills cannot phone home (OpenClaw: unrestricted)
+4. **Code must be signed** — no unsigned skill execution (OpenClaw: none)
+5. **Defense in depth** — no single trust boundary (OpenClaw: "disk access is the trust boundary")
+
+---
+
+## Decisions (Locked)
+
+### BEAD-020: Language/Runtime — SBCL (Common Lisp)
+
+**Decision**: Steel Bank Common Lisp
+
+**Rationale**:
+- **Live-coding**: Connect SLIME/SLY to the running daemon, redefine functions, inspect state, fix bugs without restart. This is the killer feature for a long-running agent daemon.
+- **Image-based development**: `save-lisp-and-die` produces a standalone executable containing the entire system state. Restart from a saved image in milliseconds.
+- **Condition system**: Restartable errors — the daemon can encounter problems and offer recovery strategies rather than crashing.
+- **Performance**: SBCL compiles to native code. Competitive with Go for most workloads.
+- **CFFI**: Mature foreign function interface for calling C libraries (wasmtime, OS keychains, libsecret, etc.)
+- **Personal fit**: Gord is a CL practitioner. This is a personal tool, not a teaching demo.
+
+**WASM integration path**: SBCL CFFI → wasmtime C API (or wasmer C API). No existing CL bindings exist — we'll build thin CFFI wrappers as part of the project. This is standard CL practice.
+
+**Key CL libraries to leverage**:
+- `cffi` — FFI to wasmtime, libsecret, OS keychain APIs
+- `bordeaux-threads` — portable threading
+- `usocket` / `sb-bsd-sockets` — networking
+- `ironclad` — pure CL crypto (Ed25519 signing, age encryption)
+- `cl-json` or `shasht` — JSON handling
+- `hunchentoot` or `clack` — HTTP server (for webhook endpoints)
+- `log4cl` — structured logging
+- `dexador` — HTTP client (for LLM API calls)
+
+### BEAD-023: Architecture — Local Monolith + Sandboxed Runners
+
+**Decision**: Single SBCL daemon process + separate WASM skill-runner process(es)
+
+```
+┌─────────────────────────────────────────────┐
+│              SBCL Daemon                     │
+│                                              │
+│  ┌──────────┐ ┌──────────┐ ┌──────────────┐ │
+│  │ LLM      │ │ Channel  │ │ Credential   │ │
+│  │ Providers│ │ Adapters │ │ Store        │ │
+│  └────┬─────┘ └────┬─────┘ └──────┬───────┘ │
+│       │            │              │          │
+│  ┌────┴────────────┴──────────────┴───────┐  │
+│  │          Core Agent Loop               │  │
+│  └────────────────┬───────────────────────┘  │
+│                   │ RPC (unix socket)        │
+└───────────────────┼──────────────────────────┘
+                    │
+        ┌───────────┴───────────┐
+        │   Skill Runner        │
+        │   (separate process)  │
+        │                       │
+        │  ┌─────────────────┐  │
+        │  │ wasmtime engine │  │
+        │  │ (WASI sandbox)  │  │
+        │  └─────────────────┘  │
+        │  No FS / No network   │
+        │  Only host functions  │
+        └───────────────────────┘
+```
+
+**Trust boundary**: The RPC interface between daemon and skill-runner. Skills never run in the daemon process. The runner process can be killed/resource-limited independently.
+
+### BEAD-024: MVP Feature Set (v0.1 — "Secure Core")
+
+The MVP proves the security properties, not feature breadth.
+
+**v0.1 delivers**:
+
+1. **SBCL Daemon + CLI**
+   - Start/stop/status
+   - Config validation (`doctor` command)
+   - SLIME/SLY connectivity for live development
+   - `save-lisp-and-die` for standalone deployment
+
+2. **WASM Skill Sandbox**
+   - Skills are WASM modules (WASI) invoked via RPC
+   - Capability manifest per skill (e.g., `can-read-files: []`, `can-call-http: []`)
+   - Host functions: `log`, `kv-get`, `kv-set`, `http-request-allowlisted`
+   - Skills cannot touch FS, network, or env unless explicitly granted
+
+3. **Encrypted Credential Storage**
+   - OS keychain where available (libsecret on Linux, Security.framework on macOS)
+   - `age`-encrypted file fallback for headless/server environments
+   - Credentials never exposed to skills — daemon mediates all access
+
+4. **Encrypted Session Storage**
+   - Conversation transcripts encrypted at rest (age)
+   - Configurable retention policy (7/30/90 days, or no-store mode)
+   - Sessions inaccessible to skills
+
+5. **Network Egress Control**
+   - Skills have NO direct network access
+   - All HTTP goes through daemon-owned allowlist API
+   - Domain + method + path constraints per skill
+   - Every outbound request logged with skill identity
+
+6. **Code Signing for Skills**
+   - Ed25519 signatures (via `ironclad`)
+   - Only run skills signed by trusted keys
+   - Trust store: `~/.agent/trusted-keys/`
+   - Marketplace OFF, no auto-install
+
+7. **Secure Logging**
+   - User-private log directory (`0700` dir, `0600` files)
+   - Structured log format (JSON lines)
+   - No secrets in logs (redaction built-in)
+   - Append-only mode for tamper evidence (future: remote shipping)
+
+**Explicitly NOT in v0.1**:
+- Public marketplace or auto-install
+- LAN/remote access mode
+- Arbitrary-language skill runtimes
+- Web UI
+- Mobile apps
+
+### BEAD-025: Skill Isolation — WASM (WASI) + Runner Process
+
+**Decision**: WASM sandbox via wasmtime C API, called from a separate runner process
+
+**Why WASM**:
+- By default, WASM can't touch FS/network/env unless host functions are provided
+- Portable — works on Linux, macOS, Windows
+- Capability-based security is natural: you define what the skill can do via host function exports
+- Aligns with Gord's view that WASM will supplant JS as the plugin lingua franca
+
+**Skill capability manifest** (TOML in skill bundle):
+```toml
+[skill]
+name = "weather-lookup"
+version = "1.0.0"
+author = "gord@example.com"
+signature = "base64-ed25519-sig..."
+
+[capabilities]
+http_domains = ["api.openweathermap.org"]
+read_files = []
+write_files = []
+env_vars = []
+max_memory_mb = 64
+max_cpu_seconds = 30
+```
+
+**Host functions exposed to WASM skills**:
+- `log(level, message)` — structured logging
+- `kv_get(key) -> value` — skill-scoped key-value store
+- `kv_set(key, value)` — skill-scoped key-value store
+- `http_request(method, url, headers, body) -> response` — only if URL matches allowlist
+- `get_secret(name) -> value` — only if declared in manifest, requires daemon approval
+
+### BEAD-026: Credential Encryption — OS Keychain + age Fallback
+
+**Decision**: OS keychain primary, age-encrypted file fallback
+
+| Platform | Primary | Fallback |
+|----------|---------|----------|
+| Linux (desktop) | libsecret (gnome-keyring / kwallet) via CFFI | age-encrypted `~/.agent/credentials.age` |
+| Linux (headless) | — | age-encrypted file + passphrase prompt or env var |
+| macOS | Security.framework via CFFI | age-encrypted file |
+
+**Key management**:
+- age identity key stored in `~/.agent/identity.key` (0600)
+- Passphrase-protected option for headless environments
+- Credentials decrypted only when needed, never held in memory longer than necessary
+- Skills NEVER see credentials — daemon resolves secrets and injects only allowlisted values via host functions
+
+### BEAD-021: LLM Providers — Anthropic + OpenAI
+
+**Decision**: Anthropic (Claude) and OpenAI (GPT) initially
+
+**Provider interface**: Generic CLOS protocol so new providers (Ollama, local models) slot in without refactoring.
+
+```lisp
+(defgeneric send-message (provider messages &key tools temperature))
+(defgeneric stream-message (provider messages &key tools temperature callback))
+(defgeneric list-models (provider))
+```
+
+### BEAD-022: Messaging Platforms — Discord (v0.1), Mastodon (v0.2)
+
+**Decision**: Discord first (fastest bot onboarding, mature API). Mastodon for v0.2 (federated, aligns with open-source ethos).
+
+**Channel adapter interface**: Generic CLOS protocol.
+
+```lisp
+(defgeneric connect (channel config))
+(defgeneric disconnect (channel))
+(defgeneric send (channel destination message))
+(defgeneric receive-callback (channel handler))
+```
+
+---
+
+## Architecture Requirements (from Audit)
+
+### Skill Isolation (from Audit Q1-Q5)
+
+OpenClaw runs skills in the same Node.js process via `jiti`. A malicious skill owns the whole Gateway.
+
+**Requirement**: Skills run in separate processes with restricted capabilities.
+**Solution**: WASM (WASI) in runner process. Host functions are the only interface. ✅
+
+### Credential Storage (from Audit Q6-Q9)
+
+OpenClaw stores credentials as plaintext JSON with 0600 permissions.
+
+**Requirement**: Credentials encrypted at rest, decrypted only when needed, never exposed to skills.
+**Solution**: OS keychain + age fallback. Daemon mediates all access. ✅
+
+### Network Policy (from Audit Q10-Q12)
+
+OpenClaw skills have unrestricted network access. ClawHub malware exfiltrated to 91.92.242.30.
+
+**Requirement**: Skills get no network access by default. Allowlisted domains only.
+**Solution**: No network in WASM sandbox. HTTP via host function with domain allowlist. ✅
+
+### Authentication (from Audit Q13-Q15)
+
+OpenClaw gets this mostly right: crypto.randomBytes, timingSafeEqual, Ed25519 device tokens.
+
+**Requirement**: Keep what works. Add mutual TLS, token rotation.
+**Solution**: `ironclad` for crypto. Ed25519 device tokens. Token rotation scheduled. ✅
+
+### Session Security (from Audit Q16-Q18)
+
+OpenClaw stores full conversation history as plaintext JSONL, accessible to skills.
+
+**Requirement**: Sessions encrypted, inaccessible to skills, with configurable retention.
+**Solution**: age-encrypted session store. Skills cannot access. Retention policy configurable. ✅
+
+### Command Execution (from Audit Q19-Q21)
+
+OpenClaw has good env var sanitization and allowlists, but shell injection can bypass them.
+
+**Requirement**: No shell interpretation. Direct exec with argument arrays only.
+**Solution**: `sb-ext:run-program` with argument lists. No shell. ✅
+
+### Logging (from Audit Q26-Q27)
+
+OpenClaw logs to world-readable `/tmp/openclaw/` with no chmod.
+
+**Requirement**: Logs stored in user-private directory with 0600 permissions.
+**Solution**: `~/.agent/logs/` with 0700 dir, 0600 files. Structured JSON lines. ✅
+
+### Marketplace (from Audit Q22-Q23)
+
+ClawHub allows anyone with a 1-week-old GitHub account to publish. No code signing.
+
+**Requirement**: Marketplace disabled by default. Code signing mandatory.
+**Solution**: No marketplace in v0.1. Ed25519 signing required. ✅
+
+### Environment Variables (from Audit Q25)
+
+Skills can read `process.env` directly (same process).
+
+**Requirement**: Skills cannot access host process environment.
+**Solution**: WASM sandbox has no env access. Secrets injected via host function with scoping. ✅
+
+---
+
+## Audit-to-Spec Tracker
+
+| Audit Finding | Spec Requirement | Status | Auditor |
+|---|---|---|---|
+| No skill sandboxing (Q3) | WASM + runner process | **Decided** | CC |
+| No code signing (Q2) | Ed25519 signed skill bundles | **Decided** | CC |
+| Plaintext credentials (Q7) | OS keychain + age fallback | **Decided** | CC |
+| Unrestricted network (Q11) | WASM has no network; daemon-proxied allowlist | **Decided** | CC |
+| Session data exposed (Q17) | age-encrypted sessions, inaccessible to skills | **Decided** | CC |
+| Shell injection possible (Q20) | No shell; `sb-ext:run-program` with arg lists | **Decided** | CC |
+| No skill permissions (Q5) | Capability manifest (TOML) per skill | **Decided** | CC |
+| Prerequisites auto-install (Q4) | No auto-install; no marketplace in v0.1 | **Decided** | CC |
+| Logs in world-readable `/tmp` (Q26) | Private `~/.agent/logs/` with 0600 | **Decided** | Amp |
+| No log integrity (Q27) | Append-only mode; future remote shipping | **Decided** | Amp |
+| ClawHub no code signing (Q22) | Marketplace off; Ed25519 mandatory | **Decided** | Amp |
+| No marketplace kill switch (Q23) | No marketplace in v0.1 | **Decided** | Amp |
+| process.env exposed to skills (Q25) | WASM sandbox has no env access | **Decided** | Amp |
+| .env loaded from CWD (Q25) | Only load from `~/.agent/` | **Decided** | Amp |
+
+---
+
+## Implementation Priorities
+
+### Phase 1: Daemon skeleton
+- SBCL project scaffold (ASDF system, Quicklisp deps)
+- Config loading (`~/.agent/config.toml`)
+- Structured logging to `~/.agent/logs/`
+- SLIME/SLY swank server for live development
+- CLI: start, stop, status, doctor
+
+### Phase 2: WASM skill runner
+- CFFI bindings to wasmtime C API
+- Runner process with unix socket RPC
+- Host function implementation (log, kv, http-allowlist)
+- Capability manifest parsing
+- Ed25519 signature verification (via ironclad)
+
+### Phase 3: Credential & session storage
+- CFFI bindings to libsecret (Linux) / Security.framework (macOS)
+- age encryption for fallback + session storage
+- Credential mediation API (daemon resolves, skill requests by name)
+
+### Phase 4: LLM integration
+- Anthropic Claude API client
+- OpenAI API client
+- Generic provider protocol (CLOS)
+- Tool/function calling support
+
+### Phase 5: Channel integration
+- Discord bot adapter
+- Channel protocol (CLOS)
+- Message routing (channel → agent → skill → response → channel)
+
+### Phase 6: Mastodon + polish
+- Mastodon bot adapter
+- Session retention policies
+- Token rotation
+- Documentation
+
+---
+
+## Risks and Guardrails
+
+- **WASM escape / host function abuse**: Keep host functions tiny, validate all inputs, never provide raw FS access
+- **"Trusted built-in connectors" becoming the new plugin risk**: Treat built-ins as part of the TCB; keep them few and audited
+- **Allowlist drift**: Make egress allowlists explicit and reviewable; log every outbound request
+- **Signing key management**: Start with one project root key; document rotation and key pinning early
+- **CFFI wasmtime bindings**: No existing CL bindings — budget time for building thin wrappers. wasmtime's C API is well-documented and stable.
+
+---
+
+*This spec is complete for architecture decisions. Next step: implementation beads for Phase 1 (daemon skeleton).*
+
+**— Amp, 2026-02-06**
