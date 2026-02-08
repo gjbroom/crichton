@@ -24,7 +24,8 @@
                             connection)))
                (format t "~A~%" result)
                result)
-          (swank-client:slime-close connection)))
+          (when connection
+            (swank-client:slime-close connection))))
     (usocket:connection-refused-error ()
       (format *error-output* "Cannot connect to Crichton daemon at ~A:~D~%" host port)
       (format *error-output* "Is the daemon running? Try: crichton start~%")
@@ -42,5 +43,6 @@
              (swank-client:slime-eval
               (read-from-string form-string)
               connection)
-          (swank-client:slime-close connection)))
+          (when connection
+            (swank-client:slime-close connection))))
     (error () nil)))
