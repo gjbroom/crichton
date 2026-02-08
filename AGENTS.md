@@ -31,7 +31,7 @@
 
 ## Build & Check
 
-- **Load/compile check**: `sbcl --noinform --non-interactive --eval '(require :asdf)' --eval '(push #p"/home/gjbroom/devel/ai/crichton/" asdf:*central-registry*)' --eval '(asdf:load-system :crichton :force t)'`
+- **Load/compile check**: `sbcl --noinform --non-interactive --eval '(require :asdf)' --eval '(push #p"/home/gjbroom/devel/crichton/" asdf:*central-registry*)' --eval '(asdf:load-system :crichton :force t)'`
 - Pre-existing style warnings in scheduler.lisp and cli/remote.lisp are tracked as cricht-048 and cricht-049.
 
 ## Landing the Plane (Session Completion)

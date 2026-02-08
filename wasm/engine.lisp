@@ -146,20 +146,40 @@
 
 (defun read-wasm-string (caller ptr len)
   "Read LEN bytes from WASM linear memory at offset PTR using CALLER.
-   Returns a Lisp string."
-  (cffi:with-foreign-object (ext '(:struct wasmtime-extern))
-    (unless (wasmtime-caller-export-get caller "memory" 6 ext)
-      (error "WASM module does not export 'memory'"))
-    (let* ((mem-ptr (wasmtime-extern-memory-ptr ext))
-           (ctx (wasmtime-caller-context caller))
-           (base (wasmtime-memory-data ctx mem-ptr))
-           (mem-size (wasmtime-memory-data-size ctx mem-ptr)))
-      (when (> (+ ptr len) mem-size)
-        (error "WASM memory access out of bounds: offset ~A + len ~A > size ~A"
-               ptr len mem-size))
-      (cffi:foreign-string-to-lisp (cffi:inc-pointer base ptr)
-                                   :count len
-                                   :encoding :utf-8))))
+    Returns a Lisp string. Includes bounds validation and error handling.
+    Returns empty string if bounds check fails."
+  (handler-case
+      (cffi:with-foreign-object (ext '(:struct wasmtime-extern))
+        (unless (wasmtime-caller-export-get caller "memory" 6 ext)
+          (error "WASM module does not export 'memory'"))
+        (let* ((mem-ptr (wasmtime-extern-memory-ptr ext))
+               (ctx (wasmtime-caller-context caller))
+               (base (wasmtime-memory-data ctx mem-ptr))
+               (mem-size (wasmtime-memory-data-size ctx mem-ptr)))
+          ;; Validate base pointer is not null
+          (when (cffi:null-pointer-p base)
+            (log:error "read-wasm-string: base pointer is null")
+            (return-from read-wasm-string ""))
+          ;; Validate bounds: ptr + len <= mem-size
+          (when (> (+ ptr len) mem-size)
+            (log:error "read-wasm-string: out of bounds - offset ~A + len ~A > size ~A"
+                       ptr len mem-size)
+            (return-from read-wasm-string ""))
+          ;; Validate ptr is non-negative
+          (when (< ptr 0)
+            (log:error "read-wasm-string: negative offset ~A" ptr)
+            (return-from read-wasm-string ""))
+          ;; Validate len is non-negative
+          (when (< len 0)
+            (log:error "read-wasm-string: negative length ~A" len)
+            (return-from read-wasm-string ""))
+          ;; Perform safe memory read with error handling
+          (cffi:foreign-string-to-lisp (cffi:inc-pointer base ptr)
+                                       :count len
+                                       :encoding :utf-8)))
+    (error (c)
+      (log:error "read-wasm-string: memory access violation: ~A" c)
+      "")))
 
 (cffi:defcallback host-log-callback :pointer
     ((env :pointer) (caller :pointer)
@@ -167,17 +187,49 @@
      (results :pointer) (nresults :size))
   (declare (ignore env results nresults))
   (handler-case
-      (when (>= nargs 3)
+      (progn
+        ;; Validate argument count
+        (unless (>= nargs 3)
+          (log:debug "host-log-callback: expected nargs >= 3, got ~A" nargs)
+          (return-from host-log-callback (cffi:null-pointer)))
+        
+        ;; Extract and validate level (should be 0-3, allow larger values for extension)
         (let* ((level (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 0)))
                (ptr   (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 1)))
-               (len   (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 2)))
-               (msg   (read-wasm-string caller ptr len)))
-          (case level
-            (0 (log:debug "~A" msg))
-            (1 (log:info  "~A" msg))
-            (2 (log:warn  "~A" msg))
-            (3 (log:error "~A" msg))
-            (t (log:info  "[level=~A] ~A" level msg)))))
+               (len   (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 2))))
+          
+          ;; Validate level is a reasonable integer (0-3 standard, but be permissive)
+          (unless (and (>= level 0) (<= level 255))
+            (log:debug "host-log-callback: level ~A out of range [0, 255]" level)
+            (return-from host-log-callback (cffi:null-pointer)))
+          
+          ;; Validate ptr and len: both should be non-negative and reasonable
+          ;; Negative values (from signed i32) are invalid memory offsets
+          (unless (>= ptr 0)
+            (log:debug "host-log-callback: negative ptr ~A" ptr)
+            (return-from host-log-callback (cffi:null-pointer)))
+          (unless (>= len 0)
+            (log:debug "host-log-callback: negative len ~A" len)
+            (return-from host-log-callback (cffi:null-pointer)))
+          
+          ;; Sanity cap: len > 1MB indicates likely corruption
+          (when (> len 1048576)
+            (log:debug "host-log-callback: len ~A exceeds 1MB cap" len)
+            (return-from host-log-callback (cffi:null-pointer)))
+          
+          ;; Validate caller is non-null before calling read-wasm-string
+          (when (cffi:null-pointer-p caller)
+            (log:debug "host-log-callback: caller is null pointer")
+            (return-from host-log-callback (cffi:null-pointer)))
+          
+          ;; Read string from WASM memory and log
+          (let ((msg (read-wasm-string caller ptr len)))
+            (case level
+              (0 (log:debug "~A" msg))
+              (1 (log:info  "~A" msg))
+              (2 (log:warn  "~A" msg))
+              (3 (log:error "~A" msg))
+              (t (log:info  "[level=~A] ~A" level msg))))))
     (error (c)
       (log:error "Host log callback error: ~A" c)))
   (cffi:null-pointer))

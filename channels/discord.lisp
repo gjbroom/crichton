@@ -39,6 +39,8 @@
    (gateway-thread :initform nil :accessor gateway-thread)
    (ws :initform nil :accessor discord-ws)
    (stop-flag :initform nil :accessor stop-flag)
+   (stop-cv :initform (bt:make-condition-variable) :accessor stop-cv)
+   (lock :initform (bt:make-lock) :accessor stop-lock)
    (session-id :initform nil :accessor discord-session-id)
    (resume-url :initform nil :accessor discord-resume-url))
   (:documentation "Discord bot channel adapter."))
@@ -147,7 +149,9 @@ Store it with: (crichton/credentials:store-credential \"discord-bot-token\" '(:t
                         (error (c)
                           (log:warn "Discord heartbeat error: ~A" c)
                           (return)))
-                      (sleep interval-sec)))
+                      (sleep interval-sec))
+             (bt:with-lock-held ((stop-lock channel))
+               (bt:condition-notify (stop-cv channel))))
            :name "discord-heartbeat"))))
 
 ;;; --- Gateway event dispatch ---
@@ -275,7 +279,9 @@ Store it with: (crichton/credentials:store-credential \"discord-bot-token\" '(:t
              (setf (heartbeat-thread channel) nil))
            (unless (stop-flag channel)
              (log:info "Discord: reconnecting in 5s...")
-             (sleep 5))))
+             (sleep 5)))
+  (bt:with-lock-held ((stop-lock channel))
+    (bt:condition-notify (stop-cv channel))))
 
 ;;; --- Protocol implementation ---
 
