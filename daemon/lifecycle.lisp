@@ -56,6 +56,11 @@
       (crichton/channels:start-channels)
     (error (c)
       (log:warn "Channel startup failed: ~A" c)))
+  (handler-case
+      (let ((interval (or (crichton/config:config-section-get :battery :interval) 300)))
+        (crichton/skills:start-battery-monitoring :interval interval))
+    (error (c)
+      (log:warn "Battery monitoring startup failed: ~A" c)))
   (log:info "Crichton daemon started (PID ~D)" (sb-posix:getpid))
   (when foreground
     (install-signal-handlers)
@@ -80,6 +85,10 @@
       (stop-rpc-server)
     (error (c)
       (log:warn "RPC server shutdown error: ~A" c)))
+  (handler-case
+      (crichton/skills:stop-battery-monitoring)
+    (error (c)
+      (log:warn "Battery monitoring shutdown error: ~A" c)))
   (crichton/skills:stop-scheduler)
   (setf *running* nil)
   (bt:with-lock-held (*shutdown-lock*)

@@ -146,7 +146,17 @@
            #:meter-recent
            #:aggregate-snapshot
            #:meter-report
-           #:usage-report))
+           #:usage-report
+           ;; battery monitoring
+           #:has-battery-p
+           #:list-batteries
+           #:battery-snapshot
+           #:all-batteries-snapshot
+           #:battery-status-plist
+           #:battery-report
+           #:battery-check-thresholds
+           #:start-battery-monitoring
+           #:stop-battery-monitoring))
 
 (defpackage #:crichton/llm
   (:use #:cl)

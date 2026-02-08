@@ -96,4 +96,6 @@
                          :encrypt t)
         :credentials (list :backend :auto)
         :network (list :egress-policy :deny-all)
-        :weather (list :city "Victoria")))
+        :weather (list :city "Victoria")
+        :battery (list :thresholds '(20 10 5)
+                       :interval 300)))

@@ -238,6 +238,20 @@
                   "No active RSS monitors.")))
            (t (format nil "Unknown RSS action: ~A" action))))))))
 
+;;; --- Battery tool ---
+
+(defun register-battery-tool ()
+  (register-tool
+   "battery"
+   "Get battery status and charge level. Returns information about all batteries in the system including charge percentage, charging status, power consumption, and estimated time remaining. Only works on systems with batteries (laptops, etc.)."
+   (make-json-schema :type "object" :properties (make-hash-table :test #'equal))
+   (lambda (input)
+     (declare (ignore input))
+     (if (crichton/skills:has-battery-p)
+         (with-output-to-string (s)
+           (crichton/skills:battery-report s))
+         "No battery detected on this system."))))
+
 ;;; --- Token/resource usage tool ---
 
 (defun register-usage-tool ()
@@ -291,4 +305,5 @@
   (register-ephemeris-tool)
   (register-rss-tool)
   (register-usage-tool)
+  (register-battery-tool)
   (log:info "Registered ~D agent tools" (hash-table-count *agent-tools*)))

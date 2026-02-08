@@ -32,6 +32,13 @@ For development details, see the git commit history and BEADS issue tracker.
   - Emacs keybindings (Ctrl-A, Ctrl-E, Ctrl-K, etc.)
   - Persistent history across sessions in =~/.crichton/history=
   - History limited to 1000 entries
+- Battery monitoring and proactive alerts (cricht-1ln)
+  - Automatic detection of battery presence via =/sys/class/power_supply/=
+  - Periodic monitoring of charge level, status, and power consumption
+  - Proactive notifications at configurable thresholds (default: 20%, 10%, 5%)
+  - LLM-accessible =battery= tool for querying battery status
+  - Configuration via =[battery]= section in =config.toml=
+  - Graceful handling of systems without batteries (desktops)
 
 ** Changed
 
