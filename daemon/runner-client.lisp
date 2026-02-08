@@ -17,22 +17,28 @@
    (merge-pathnames "runner.sock"
                     (symbol-value (find-symbol "*AGENT-HOME*" :crichton/config)))))
 
-(defun runner-binary-path ()
-  "Return the path to the current executable (for spawning the runner)."
-  (first sb-ext:*posix-argv*))
+(defvar *crichton-source-dir*
+  (namestring (asdf:system-source-directory :crichton))
+  "Absolute path to the Crichton ASDF system source directory, captured at load time.")
 
 (defun spawn-runner (&optional socket-path)
-  "Spawn the runner process. Returns the socket path."
+  "Spawn the runner process via a fresh SBCL. Returns the socket path."
   (let ((sock-path (or socket-path (default-socket-path))))
     (when (and *runner-process* (sb-ext:process-alive-p *runner-process*))
       (log:warn "Runner already running, killing old process")
       (kill-runner))
-    (log:info "Spawning runner: ~A runner --socket ~A"
-              (runner-binary-path) sock-path)
+    (log:info "Spawning runner via sbcl --eval with socket ~A" sock-path)
     (setf *runner-socket-path* sock-path
           *runner-process*
-          (sb-ext:run-program (runner-binary-path)
-                              (list "runner" "--socket" sock-path)
+          (sb-ext:run-program "sbcl"
+                              (list "--noinform" "--non-interactive"
+                                    "--eval" "(require :asdf)"
+                                    "--eval" (format nil "(push #p~S asdf:*central-registry*)"
+                                                    *crichton-source-dir*)
+                                    "--eval" "(asdf:load-system :crichton)"
+                                    "--eval" (format nil "(crichton/runner:main (list \"--socket\" ~S))"
+                                                    sock-path))
+                              :search t
                               :wait nil
                               :output *standard-output*
                               :error *error-output*))
