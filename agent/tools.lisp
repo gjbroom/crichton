@@ -171,21 +171,19 @@
                   (let ((pl (crichton/skills:current-time-plist)))
                     (format s "Unix timestamp: ~D~%" (getf pl :unix-seconds)))))))
 
-           ;;; --- Ephemera tool (sunrise/sunset) ---
+           ;;; --- Ephemeris tool ---
 
-           (defun register-ephemera-tool ()
-             (multiple-value-bind (props required)
-                 (make-properties
-                  '("city" "string" "City name for ephemera lookup. Default: configured city or Victoria."))
-               (declare (ignore required))
-               (register-tool
-                "ephemera"
-                "Get sunrise/sunset times and other astronomical ephemera for a location. Returns the sunrise, sunset, and daylight hours based on current coordinates (tied to the weather service). Use this to understand when daylight begins/ends at a given location."
-                (make-json-schema :type "object" :properties props)
-                (lambda (input)
-                  (let ((city (hget input "city")))
-                    (with-output-to-string (s)
-                      (crichton/skills:ephemera-report :city city :stream s)))))))
+           (defun register-ephemeris-tool ()
+             (register-tool
+              "ephemeris"
+              "Get solar ephemeris data (sunrise, sunset, solar noon, day length) for today at the configured location. Useful for understanding daylight hours and solar position. No input required."
+              (make-json-schema :type "object" :properties (make-hash-table :test #'equal))
+              (lambda (input)
+                (declare (ignore input))
+                (let ((lat (crichton/config:config-section-get :location :latitude 48.43))
+                      (lon (crichton/config:config-section-get :location :longitude -123.37)))
+                  (with-output-to-string (s)
+                    (crichton/skills:ephemeris-report lat lon :stream s))))))
 
            ;;; --- RSS tool ---
 
@@ -290,7 +288,7 @@
   (register-system-info-tool)
   (register-scheduler-tool)
   (register-time-tool)
-  (register-ephemera-tool)
+  (register-ephemeris-tool)
   (register-rss-tool)
   (register-usage-tool)
   (log:info "Registered ~D agent tools" (hash-table-count *agent-tools*)))

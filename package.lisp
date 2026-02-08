@@ -84,8 +84,6 @@
            #:verify-skill-bundle
            #:weather-report
            #:weather-conditions
-           #:ephemera-report
-           #:ephemera-plist
            #:system-loadavg
            #:system-memory
            #:system-thermal-zones
@@ -115,6 +113,10 @@
            ;; current time
            #:current-time-plist
            #:current-time-report
+           ;; ephemeris (sunrise/sunset/solar data)
+           #:ephemeris-plist
+           #:current-ephemeris
+           #:ephemeris-report
            ;; rss
            #:rss-fetch
            #:rss-check
