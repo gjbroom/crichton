@@ -23,7 +23,12 @@
 - Phases 1-4 are complete: daemon skeleton, WASM skill runner, encrypted credentials/sessions, LLM integration (Anthropic), agent loop with tool use.
 - 6 built-in skills: weather, system-info, timing, scheduler, RSS, token-usage (general-purpose metering).
 - Built-in skills follow a dual interface: plist-returning function for programmatic use, formatted report function for humans.
-- After creating new modules, always hot-load them into the running daemon via SLIME.
+- **Hot-loading** (preferred for development): After code changes, reload via daemon without restart:
+  ```bash
+  crichton eval '(asdf:load-system :crichton :force t)'   # Full reload
+  crichton eval '(load "/path/to/file.lisp")'              # Single file
+  ```
+  This avoids slow stop/rebuild/start cycles. Use this for skill development, bug fixes, tool registration.
 - TOML config values come through as strings but defaults use keywords. Normalize in consumers.
 - Libraries: dexador, shasht, cl-toml, ironclad, log4cl, bordeaux-threads, cffi, hunchentoot, swank-client, usocket, xmls.
 - Config lives at `~/.crichton/config.toml`. Default model: `claude-sonnet-4-20250514`.
