@@ -160,16 +160,32 @@
            ;;; --- Current time tool ---
 
            (defun register-time-tool ()
-           (register-tool
-           "time"
-           "Get the current date and time. Returns the current date and time in both human-readable and Unix timestamp formats. Useful for understanding when events happen relative to the current moment."
-           (make-json-schema :type "object" :properties (make-hash-table :test #'equal))
-           (lambda (input)
-           (declare (ignore input))
-           (with-output-to-string (s)
-           (crichton/skills:current-time-report :stream s)
-           (let ((pl (crichton/skills:current-time-plist)))
-           (format s "Unix timestamp: ~D~%" (getf pl :unix-seconds)))))))
+             (register-tool
+              "time"
+              "Get the current date and time. Returns the current date and time in both human-readable and Unix timestamp formats. Useful for understanding when events happen relative to the current moment."
+              (make-json-schema :type "object" :properties (make-hash-table :test #'equal))
+              (lambda (input)
+                (declare (ignore input))
+                (with-output-to-string (s)
+                  (crichton/skills:current-time-report :stream s)
+                  (let ((pl (crichton/skills:current-time-plist)))
+                    (format s "Unix timestamp: ~D~%" (getf pl :unix-seconds)))))))
+
+           ;;; --- Ephemera tool (sunrise/sunset) ---
+
+           (defun register-ephemera-tool ()
+             (multiple-value-bind (props required)
+                 (make-properties
+                  '("city" "string" "City name for ephemera lookup. Default: configured city or Victoria."))
+               (declare (ignore required))
+               (register-tool
+                "ephemera"
+                "Get sunrise/sunset times and other astronomical ephemera for a location. Returns the sunrise, sunset, and daylight hours based on current coordinates (tied to the weather service). Use this to understand when daylight begins/ends at a given location."
+                (make-json-schema :type "object" :properties props)
+                (lambda (input)
+                  (let ((city (hget input "city")))
+                    (with-output-to-string (s)
+                      (crichton/skills:ephemera-report :city city :stream s)))))))
 
            ;;; --- RSS tool ---
 
@@ -274,6 +290,7 @@
   (register-system-info-tool)
   (register-scheduler-tool)
   (register-time-tool)
+  (register-ephemera-tool)
   (register-rss-tool)
   (register-usage-tool)
   (log:info "Registered ~D agent tools" (hash-table-count *agent-tools*)))

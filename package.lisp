@@ -84,6 +84,8 @@
            #:verify-skill-bundle
            #:weather-report
            #:weather-conditions
+           #:ephemera-report
+           #:ephemera-plist
            #:system-loadavg
            #:system-memory
            #:system-thermal-zones
