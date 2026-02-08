@@ -6,7 +6,7 @@
 
 ## Workflow Practices
 
-- **Issue tracking**: Use BEADS (`bd` command) for all issue tracking. Beads live in `.prose/gas-town/rig-beads.jsonl`. File new beads for bugs, feature requests, style warnings, and cleanup items. Do not create ISSUES.md or TODO files.
+- **Issue tracking**: Use BEADS (`bd` command) for all issue tracking. Beads live in `.beads/` (prefix: `cricht-`). File new beads for bugs, feature requests, style warnings, and cleanup items. Do not create ISSUES.md or TODO files.
 - **Git commits**: Commit changes to git as you go. Every meaningful change gets a commit. The user expects this and will call you out for forgetting.
 - **CLI binary rebuild**: Rebuild the Crichton CLI binary via `save-lisp-and-die` at suitable stopping points — after finishing a feature implementation or fixing a bug. The binary is at `crichton/crichton` (symlinked from `~/bin/crichton`). Rebuild command:
   ```
@@ -31,7 +31,7 @@
 ## Build & Check
 
 - **Load/compile check**: `sbcl --noinform --non-interactive --eval '(require :asdf)' --eval '(push #p"/home/gjbroom/devel/ai/crichton/" asdf:*central-registry*)' --eval '(asdf:load-system :crichton :force t)'`
-- Pre-existing style warnings in scheduler.lisp and cli/remote.lisp are tracked as BEAD-048 and BEAD-049.
+- Pre-existing style warnings in scheduler.lisp and cli/remote.lisp are tracked as cricht-048 and cricht-049.
 
 ## Landing the Plane (Session Completion)
 
