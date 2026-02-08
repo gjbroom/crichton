@@ -1,21 +1,21 @@
 ;;;; channels/manager.lisp
 ;;;;
 ;;;; Channel manager: reads config, starts/stops adapters, bridges
-;;;; incoming messages to the agent loop, sends responses back.
+;;;; incoming messages to the daemon RPC socket, sends responses back.
 
 (in-package #:crichton/channels)
 
 (defvar *channels* nil
   "List of active channel adapter instances.")
 
-(defvar *conversation-state* (make-hash-table :test #'equal)
-  "Per-conversation message history, keyed by (adapter-type channel-id).")
+(defvar *conversation-sessions* (make-hash-table :test #'equal)
+  "Per-conversation session IDs, keyed by (adapter-type channel-id).")
 
 (defvar *conversation-locks* (make-hash-table :test #'equal)
   "Per-conversation locks to prevent interleaving agent calls.")
 
-(defvar *tools-registered* nil
-  "Whether agent tools have been registered.")
+(defvar *rpc-id-counter* 0
+  "Monotonically increasing correlation ID for RPC requests.")
 
 (defun conversation-key (channel msg)
   "Compute a conversation key from the channel adapter and message."
@@ -27,25 +27,60 @@
       (setf (gethash key *conversation-locks*)
             (bt:make-lock (format nil "conv-~A" key)))))
 
+(defun rpc-chat (text session-id)
+  "Send a chat request to the daemon RPC socket.
+   Returns (values response-text new-session-id)."
+  (let* ((path (namestring (merge-pathnames "daemon.sock"
+                                            crichton/config:*agent-home*)))
+         (socket (make-instance 'sb-bsd-sockets:local-socket :type :stream)))
+    (unwind-protect
+         (progn
+           (sb-bsd-sockets:socket-connect socket path)
+           (let ((stream (sb-bsd-sockets:socket-make-stream
+                          socket :input t :output t
+                          :element-type 'character
+                          :buffering :line
+                          :external-format :utf-8)))
+             (unwind-protect
+                  (let ((req (make-hash-table :test #'equal))
+                        (id (incf *rpc-id-counter*)))
+                    (setf (gethash "id" req) id
+                          (gethash "op" req) "chat"
+                          (gethash "text" req) text)
+                    (when session-id
+                      (setf (gethash "session_id" req) session-id))
+                    (crichton/rpc:write-message stream req)
+                    (let ((resp (crichton/rpc:read-message stream)))
+                      (unless resp
+                        (error "No response from daemon RPC"))
+                      (unless (crichton/rpc:msg-ok-p resp)
+                        (let ((err (crichton/rpc:msg-error resp)))
+                          (error "RPC error: ~A"
+                                 (if (hash-table-p err)
+                                     (gethash "message" err)
+                                     err))))
+                      (let ((result (crichton/rpc:msg-result resp)))
+                        (values (gethash "text" result)
+                                (gethash "session_id" result)))))
+               (close stream))))
+      (handler-case (sb-bsd-sockets:socket-close socket)
+        (error () nil)))))
+
 (defun handle-incoming (channel msg)
-  "Process an incoming message through the agent loop and send the response."
-  (unless *tools-registered*
-    (crichton/agent:register-all-tools)
-    (setf *tools-registered* t))
+  "Process an incoming message via the daemon RPC socket and send the response."
   (let* ((key (conversation-key channel msg))
          (lock (ensure-conversation-lock key)))
     (bt:with-lock-held (lock)
       (handler-case
-          (let* ((history (gethash key *conversation-state*))
-                 (response-text
-                   (crichton/agent:run-agent
-                    (channel-message-text msg)
-                    :messages history)))
-            (when (and response-text (plusp (length response-text)))
-              (setf (gethash key *conversation-state*) history)
-              (channel-send channel
-                            (channel-message-channel-id msg)
-                            response-text)))
+          (let ((session-id (gethash key *conversation-sessions*)))
+            (multiple-value-bind (response-text new-session-id)
+                (rpc-chat (channel-message-text msg) session-id)
+              (when new-session-id
+                (setf (gethash key *conversation-sessions*) new-session-id))
+              (when (and response-text (plusp (length response-text)))
+                (channel-send channel
+                              (channel-message-channel-id msg)
+                              response-text))))
         (error (c)
           (log:error "Error handling message from ~A: ~A"
                      (channel-name channel) c))))))
@@ -80,6 +115,5 @@
       (error (c)
         (log:error "Error stopping ~A: ~A" (channel-name ch) c))))
   (setf *channels* nil)
-  (clrhash *conversation-state*)
-  (clrhash *conversation-locks*)
-  (setf *tools-registered* nil))
+  (clrhash *conversation-sessions*)
+  (clrhash *conversation-locks*))
