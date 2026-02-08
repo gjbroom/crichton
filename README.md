@@ -4,7 +4,7 @@
 
 A secure background AI agent with WASM-sandboxed skills, encrypted credentials,
 network egress control, and Ed25519 code signing. Built in Common Lisp (SBCL),
-informed by a [security audit of OpenClaw](../AUDIT_FINDINGS.md).
+informed by a security audit of OpenClaw.
 
 Named for [*The Admirable Crichton*](https://en.wikipedia.org/wiki/The_Admirable_Crichton) —
 the servant who's actually the most capable person in the room.
@@ -40,18 +40,18 @@ sbcl --eval '(push #p"/path/to/crichton/" asdf:*central-registry*)'  \
 
 ```
 ┌─────────────────────────────────────────────┐
-│              SBCL Daemon                     │
-│                                              │
+│              SBCL Daemon                    │
+│                                             │
 │  ┌──────────┐ ┌──────────┐ ┌──────────────┐ │
 │  │ LLM      │ │ Channel  │ │ Credential   │ │
 │  │ Providers│ │ Adapters │ │ Store        │ │
 │  └────┬─────┘ └────┬─────┘ └──────┬───────┘ │
-│       │            │              │          │
-│  ┌────┴────────────┴──────────────┴───────┐  │
-│  │          Core Agent Loop               │  │
-│  └────────────────┬───────────────────────┘  │
-│                   │ RPC (unix socket)        │
-└───────────────────┼──────────────────────────┘
+│       │            │              │         │
+│  ┌────┴────────────┴──────────────┴───────┐ │
+│  │          Core Agent Loop               │ │
+│  └────────────────┬───────────────────────┘ │
+│                   │ RPC (unix socket)       │
+└───────────────────┼─────────────────────────┘
                     │
         ┌───────────┴───────────┐
         │   Skill Runner        │
@@ -107,7 +107,7 @@ crichton/
 
 ## Design Spec
 
-See [AGENT_SPEC.md](../AGENT_SPEC.md) for the full design spec including
+See [AGENT_SPEC.md](./AGENT_SPEC.md) for the full design spec including
 security requirements derived from the OpenClaw audit.
 
 ## License
