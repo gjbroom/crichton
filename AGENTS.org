@@ -205,7 +205,7 @@ If an agent claims success but verification fails, the agent *did not actually c
   (asdf:load-system :crichton :force t)   ; Full reload
   (load "/path/to/file.lisp")              ; Single file
   #+end_src
-  This avoids slow stop/rebuild/start cycles. Use this for skill development, bug fixes, tool registration. After hot-loading =daemon/rpc-server.lisp= changes, the RPC server should be restarted.
+  This avoids slow stop/rebuild/start cycles. Use this for skill development, bug fixes, tool registration. After hot-loading =daemon/rpc-server.lisp= changes, the RPC server should be restarted. After hot-loading =agent/tools.lisp= or any skill file whose tool handler changed, re-register tools with =(crichton/agent:register-all-tools)= to replace stale closures in =*agent-tools*=.
 - TOML config values come through as strings but defaults use keywords. Normalize in consumers.
 - Libraries: dexador, shasht, cl-toml, ironclad, log4cl, bordeaux-threads, cffi, hunchentoot, swank-client, usocket, xmls.
 - Config lives at =~/.crichton/config.toml=. Default model: =claude-sonnet-4-20250514=.
