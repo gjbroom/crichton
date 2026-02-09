@@ -1,0 +1,67 @@
+#+TITLE: Crichton Examples
+#+AUTHOR: Crichton Development Team
+#+DATE: 2026-02-09
+
+* Overview
+
+This directory contains example code and skills for Crichton.
+
+* Directory Structure
+
+** =skills/=
+
+Example WASM skills demonstrating various capabilities:
+
+*** =meaning-of-life/=
+
+A minimal example WASM skill that:
+- Imports and uses the =env.log= host function
+- Exports memory for host function access
+- Returns the answer to life, the universe, and everything (42)
+- Demonstrates the complete skill bundle structure
+
+This is an ideal starting point for learning WASM skill development.
+
+* Using Example Skills
+
+** Running from REPL
+
+Example skills can be loaded and tested via the REPL:
+
+#+begin_src lisp
+;; Load and run the meaning-of-life skill
+(let* ((skill-path #p"/home/gjbroom/devel/crichton/examples/skills/meaning-of-life/")
+       (wat-string (uiop:read-file-string (merge-pathnames "skill.wat" skill-path))))
+  (crichton/wasm:run-wasm-with-host-fns wat-string "main"))
+;; => 42
+#+end_src
+
+** Compiling Examples
+
+Most example skills include both WAT source and compilation instructions.
+To compile:
+
+#+begin_src bash
+cd examples/skills/meaning-of-life/
+wat2wasm skill.wat -o skill.wasm
+#+end_src
+
+** Deploying to User Skills Directory
+
+To make a skill available to the daemon:
+
+#+begin_src bash
+# Copy to user skills directory
+cp -r examples/skills/meaning-of-life ~/.crichton/skills/
+
+# Ensure it's compiled
+cd ~/.crichton/skills/meaning-of-life/
+wat2wasm skill.wat -o skill.wasm
+#+end_src
+
+* Learning Resources
+
+- [[file:../docs/SKILL_DEVELOPMENT.org][Complete Skill Development Guide]]
+- [[file:../docs/SKILL_QUICKSTART.org][Quick Start Guide]]
+- [[file:../AGENT_SPEC.org][Crichton Design Specification]]
+- [[file:../skills/builtins/][Built-in Skills (Lisp)]]

@@ -1,0 +1,17 @@
+[skill]
+name = "meaning-of-life"
+version = "1.0.0"
+author = "Deep Thought Computer"
+description = "Provides the answer to life, the universe, and everything"
+signature = ""  # Unsigned (development only)
+
+[capabilities]
+# No special capabilities needed - this skill is self-contained
+http_domains = []
+read_files = []
+write_files = []
+env_vars = []
+
+# Minimal resource limits
+max_memory_mb = 1
+max_cpu_seconds = 1

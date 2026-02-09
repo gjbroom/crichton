@@ -87,7 +87,7 @@ wat2wasm skill.wat -o skill.wasm
 ** Next Steps
 
 - Read [[file:SKILL_DEVELOPMENT.org][SKILL_DEVELOPMENT.org]] for complete documentation
-- Explore the example skill at =~/.crichton/skills/meaning-of-life/=
+- Explore the example skill at =examples/skills/meaning-of-life/=
 - Learn about code signing for production use
 - Experiment with other host functions (kv_set, kv_get, http_request)
 
@@ -95,7 +95,7 @@ wat2wasm skill.wat -o skill.wasm
 
 *** Meaning of Life
 
-See =~/.crichton/skills/meaning-of-life/= for a complete working example that:
+See =examples/skills/meaning-of-life/= for a complete working example that:
 - Uses the log host function
 - Returns the answer to everything (42)
 - Includes full documentation

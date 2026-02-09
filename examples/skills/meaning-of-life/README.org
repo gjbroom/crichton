@@ -1,0 +1,104 @@
+#+TITLE: Meaning of Life Skill
+#+AUTHOR: Deep Thought Computer
+#+DATE: 2026-02-09
+
+* Overview
+
+A simple example WASM skill that demonstrates the Crichton skill development workflow.
+
+When invoked, this skill:
+1. Logs a profound message using the =env.log= host function
+2. Returns the number =42=
+
+* Files
+
+- =skill.toml= — Capability manifest
+- =skill.wat= — WebAssembly Text source (human-readable)
+- =skill.wasm= — Compiled WebAssembly binary (*must be compiled from WAT source*)
+- =README.org= — This file
+
+*Note:* The =skill.wasm= file must be compiled from =skill.wat= before use. See "Building from Source" below.
+
+* Usage
+
+** From REPL (via runner)
+
+#+begin_src lisp
+;; Load the skill WASM bytes (adjust path to your crichton repo location)
+(let* ((wasm-path #p"/home/gjbroom/devel/crichton/examples/skills/meaning-of-life/skill.wasm")
+       (wasm-bytes (with-open-file (s wasm-path :element-type '(unsigned-byte 8))
+                     (let ((bytes (make-array (file-length s) :element-type '(unsigned-byte 8))))
+                       (read-sequence bytes s)
+                       bytes))))
+  ;; Run the skill
+  (crichton/wasm:run-wasm-bytes-with-host-fns wasm-bytes "main"))
+;; => 42
+;; (also logs: "The answer to life, the universe, and everything is: 42")
+#+end_src
+
+** From WAT source
+
+#+begin_src lisp
+;; Compile and run directly from WAT (adjust path to your crichton repo location)
+(let ((wat (uiop:read-file-string #p"/home/gjbroom/devel/crichton/examples/skills/meaning-of-life/skill.wat")))
+  (crichton/wasm:run-wasm-with-host-fns wat "main"))
+;; => 42
+#+end_src
+
+** Alternative entry point
+
+The skill also exports a =get_answer= function that returns =42= without logging:
+
+#+begin_src lisp
+(let ((wat (uiop:read-file-string #p"/home/gjbroom/devel/crichton/examples/skills/meaning-of-life/skill.wat")))
+  (crichton/wasm:run-wasm-with-host-fns wat "get_answer"))
+;; => 42
+#+end_src
+
+* Building from Source
+
+If you modify =skill.wat=, recompile to =skill.wasm=:
+
+** Using wabt tools
+
+#+begin_src bash
+# Install wabt
+sudo apt install wabt  # Debian/Ubuntu
+# or
+brew install wabt      # macOS
+
+# Compile
+wat2wasm skill.wat -o skill.wasm
+#+end_src
+
+** Using wasmtime
+
+#+begin_src bash
+wasmtime compile skill.wat -o skill.wasm
+#+end_src
+
+** Using Crichton's WASM engine
+
+#+begin_src lisp
+;; From SLIME/SLY REPL (requires running daemon with wasmtime loaded)
+;; Adjust path to your crichton repo location
+(let* ((skill-dir #p"/home/gjbroom/devel/crichton/examples/skills/meaning-of-life/")
+       (wat-string (uiop:read-file-string (merge-pathnames "skill.wat" skill-dir)))
+       (wasm-path (merge-pathnames "skill.wasm" skill-dir)))
+  (multiple-value-bind (data size vec)
+      (crichton/wasm:wat-to-wasm wat-string)
+    (with-open-file (out wasm-path
+                         :direction :output
+                         :if-exists :supersede
+                         :element-type '(unsigned-byte 8))
+      (loop for i below size
+            do (write-byte (cffi:mem-aref data :uint8 i) out)))
+    (crichton/wasm::wasm-byte-vec-delete vec)
+    (format t "Compiled ~A~%" wasm-path)))
+#+end_src
+
+* Learning Resources
+
+- See =../../docs/SKILL_DEVELOPMENT.org= for the full skill development guide
+- See =../../AGENT_SPEC.org= for Crichton's security architecture
+- See =../../skills/builtins/= for examples of built-in Lisp skills

@@ -1,0 +1,22 @@
+⚠️  SKILL NOT YET COMPILED
+
+This skill includes WebAssembly Text (.wat) source but needs to be compiled
+to WebAssembly binary (.wasm) before it can be used.
+
+TO COMPILE:
+
+Option 1 - Install wabt tools:
+  sudo apt install wabt
+  wat2wasm skill.wat -o skill.wasm
+
+Option 2 - Using online compiler:
+  Visit: https://webassembly.github.io/wabt/demo/wat2wasm/
+  Paste contents of skill.wat
+  Download the compiled skill.wasm
+
+Option 3 - Install Rust and use wasm-tools:
+  cargo install wasm-tools
+  wasm-tools parse skill.wat -o skill.wasm
+
+After compiling, delete this file and test the skill using the instructions
+in README.org.
