@@ -382,6 +382,63 @@
            (t (format nil "Unknown action: ~A" action))))))))
 
 
+;;; --- Daemon log inspector tool ---
+
+(defun format-log-entries (entries)
+  "Format a list of log entry hash-tables as human-readable text."
+  (with-output-to-string (s)
+    (if (null entries)
+        (format s "No log entries found.~%")
+        (dolist (entry entries)
+          (format s "[~A] [~A] (~A) ~A~%"
+                  (gethash "timestamp" entry "?")
+                  (gethash "level" entry "?")
+                  (gethash "logger" entry "?")
+                  (gethash "message" entry ""))))))
+
+(defun register-log-inspector-tool ()
+  (multiple-value-bind (props required)
+      (make-properties
+       '("action" "string"
+         "The log inspection action to perform."
+         :enum ("summary" "recent" "errors" "search")
+         :required-p t)
+       '("count" "integer"
+         "Number of log entries to examine. Default: 50.")
+       '("pattern" "string"
+         "Search substring for the 'search' action. Case-insensitive match against message text.")
+       '("level" "string"
+         "Filter by log level (ERROR, WARN, INFO, DEBUG). Optional for 'search' action."
+         :enum ("ERROR" "WARN" "INFO" "DEBUG")))
+    (register-tool
+     "daemon_logs"
+     "Inspect the daemon's own log files. Use to check for errors, warnings, or verify that systems are functioning correctly. Logs are sanitized — safe to share with users."
+     (make-json-schema :type "object" :properties props :required required)
+     (lambda (input)
+       (let ((action (hget input "action" "summary"))
+             (count (hget input "count" 50))
+             (pattern (hget input "pattern"))
+             (level (hget input "level")))
+         (cond
+           ((string-equal action "summary")
+            (with-output-to-string (s)
+              (crichton/skills:log-report :stream s :count count)))
+           ((string-equal action "recent")
+            (format-log-entries
+             (crichton/skills:read-log-tail :count count)))
+           ((string-equal action "errors")
+            (format-log-entries
+             (crichton/skills:search-log :level "ERROR" :count count)))
+           ((string-equal action "search")
+            (if (and (null pattern) (null level))
+                "Error: 'pattern' and/or 'level' required for search action."
+                (format-log-entries
+                 (crichton/skills:search-log :pattern pattern
+                                             :level level
+                                             :count count))))
+           (t
+            (format nil "Unknown daemon_logs action: ~A" action))))))))
+
 ;;; --- Registration ---
 
 (defun register-all-tools ()
@@ -394,4 +451,5 @@
   (register-rss-tool)
   (register-usage-tool)
   (register-battery-tool)
+  (register-log-inspector-tool)
   (log:info "Registered ~D agent tools" (hash-table-count *agent-tools*)))

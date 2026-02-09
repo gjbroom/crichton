@@ -160,7 +160,13 @@
            #:battery-report
            #:battery-check-thresholds
            #:start-battery-monitoring
-           #:stop-battery-monitoring))
+           #:stop-battery-monitoring
+           ;; log inspector
+           #:log-file-path
+           #:read-log-tail
+           #:search-log
+           #:log-summary
+           #:log-report))
 
 (defpackage #:crichton/llm
   (:use #:cl)

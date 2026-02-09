@@ -49,7 +49,8 @@ signing. Informed by a security audit of OpenClaw."
                                             (:file "ephemeris")
                                             (:file "rss")
                                             (:file "token-usage")
-                                            (:file "battery")))))
+                                            (:file "battery")
+                                            (:file "log-inspector")))))
                (:module "crypto"
                 :components ((:file "wipe")
                              (:file "age")))
