@@ -19,3 +19,12 @@ quicklisp/
 # Vendored binaries (too large for git)
 vendor/wasmtime/lib/
 vendor/wasmtime/include/
+
+# Generated documentation (from org-mode exports)
+docs/*.html
+docs/*.pdf
+docs/*.tex
+docs/*.md
+*.html
+*.pdf
+*.tex

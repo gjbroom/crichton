@@ -41,7 +41,7 @@ max_cpu_seconds = 30
 
 ** 4. Write Skill Code (skill.wat)
 
-#+begin_src wasm
+#+begin_src wat
 (module
   ;; Import Crichton's log function
   (import "env" "log" (func $log (param i32 i32 i32)))
@@ -86,7 +86,7 @@ wat2wasm skill.wat -o skill.wasm
 
 ** Next Steps
 
-- Read [[file:SKILL_DEVELOPMENT.org][SKILL_DEVELOPMENT.org]] for complete documentation
+- Read [[file:SKILL_DEVELOPMENT.org][Complete Skill Development Guide]] for complete documentation
 - Explore the example skill at =examples/skills/meaning-of-life/=
 - Learn about code signing for production use
 - Experiment with other host functions (kv_set, kv_get, http_request)
@@ -134,7 +134,7 @@ wat2wasm --debug-names skill.wat
 
 WASM skills must export their linear memory:
 
-#+begin_src wasm
+#+begin_src wat
 (memory (export "memory") 1)
 #+end_src
 
@@ -142,7 +142,7 @@ WASM skills must export their linear memory:
 
 Your skill must export at least one function:
 
-#+begin_src wasm
+#+begin_src wat
 (func (export "main") (result i32)
   (i32.const 42))
 #+end_src

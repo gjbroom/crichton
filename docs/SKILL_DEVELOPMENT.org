@@ -106,7 +106,7 @@ WAT (WebAssembly Text format) is the human-readable representation of WASM.
 
 ** Minimal Example
 
-#+begin_src wasm
+#+begin_src wat
 (module
   ;; Import host function
   (import "env" "log" (func $log (param i32 i32 i32)))
