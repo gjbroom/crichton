@@ -73,7 +73,7 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
 
 * Planned Features
 
-** TODO v0.2 "Polish & Channels" [2/8]
+** TODO v0.2 "Polish & Channels" [3/8]
 
    Focus on user experience improvements and completing channel integration.
 
@@ -119,9 +119,12 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
     - [ ] Channel protocol implementation
     - [ ] OAuth authentication flow
 
-*** TODO [#C] Documentation
+*** DONE [#C] Documentation (Partial)
+    CLOSED: [2026-02-09 Sun]
     - [ ] User guide (org-mode)
-    - [ ] Skill development guide
+    - [X] Skill development guide (SKILL_DEVELOPMENT.org)
+    - [X] Quick start guide (SKILL_QUICKSTART.org)
+    - [X] Example WASM skill (examples/skills/meaning-of-life/)
     - [ ] Security model documentation
     - [ ] API reference
 
@@ -273,14 +276,16 @@ The following were considered but explicitly deferred or rejected:
 
 * Metrics
 
-** v0.1 Statistics (as of 2026-02-08)
+** v0.1 Statistics (as of 2026-02-09)
 
 - Implementation time: ~2 days intensive development
 - Phases completed: 1-5 (daemon, WASM, credentials, LLM, skills)
-- Built-in skills: 6
-- Open issues: 23
-- Closed issues: 15
-- Lines of code: ~8000 (estimated)
+- Built-in skills: 9 (weather, system-info, timing, scheduler, RSS, token-usage, battery, ephemeris, log-inspector)
+- WASM skill examples: 1 (meaning-of-life)
+- Documentation: Comprehensive skill development guides
+- Open issues: 10
+- Closed issues: ~20+
+- Lines of code: ~10000+ (estimated)
 - Security findings addressed: 13/13 from OpenClaw audit
 
 ** Architecture Highlights
