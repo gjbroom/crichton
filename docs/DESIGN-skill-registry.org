@@ -744,13 +744,339 @@ deny_capabilities = ["arbitrary_code_execution"]  # Future
 8. *Emergency revocation*: If a skill is found to be malicious, how do we
    quickly revoke it across all installations?
 
+** WASM Component Model & WIT (Future Evolution)
+
+*** Current Approach: Core WASM + Raw Host Functions
+
+Crichton currently uses *core WASM modules* with low-level host functions:
+
+#+begin_src wat
+;; Current: raw pointers and lengths
+(import "env" "log" (func $log (param i32 i32 i32)))
+(import "env" "http_request" (func $http (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+
+;; Skill must manually serialize strings to linear memory
+(memory (export "memory") 1)
+(data (i32.const 0) "message string")
+(call $log (i32.const 1) (i32.const 0) (i32.const 14))  ;; log(INFO, ptr, len)
+#+end_src
+
+*Limitations:*
+- Skills must manage linear memory manually
+- Only primitive types (i32, i64, f32, f64)
+- Error-prone pointer arithmetic
+- Hard to read/audit (what's at offset 0?)
+- No structured data (must serialize/deserialize JSON manually)
+- Poor multi-language support
+
+*** Component Model: Structured Interfaces with WIT
+
+The *WASM Component Model* provides:
+- High-level typed interfaces (strings, records, variants, lists)
+- Language-agnostic IDL (WIT = WebAssembly Interface Types)
+- Automatic marshalling between guest and host
+- Better composition and linking
+
+Example WIT interface for Crichton:
+
+#+begin_src wit
+// crichton.wit - Host functions for skills
+
+package crichton:skills;
+
+interface logging {
+  enum log-level { debug, info, warn, error }
+
+  log: func(level: log-level, message: string);
+}
+
+interface http {
+  record request {
+    method: string,
+    url: string,
+    headers: list<tuple<string, string>>,
+    body: option<list<u8>>
+  }
+
+  record response {
+    status: u16,
+    headers: list<tuple<string, string>>,
+    body: list<u8>
+  }
+
+  variant http-error {
+    network-error(string),
+    timeout,
+    unauthorized,
+    forbidden,
+    not-found,
+    server-error(u16)
+  }
+
+  http-request: func(req: request) -> result<response, http-error>;
+}
+
+interface storage {
+  kv-get: func(key: string) -> option<string>;
+  kv-set: func(key: string, value: string) -> result<_, string>;
+  kv-delete: func(key: string) -> result<_, string>;
+}
+
+interface secrets {
+  get-secret: func(name: string) -> result<string, string>;
+}
+
+world skill {
+  import logging;
+  import http;
+  import storage;
+  import secrets;
+
+  export run: func(args: list<string>) -> result<string, string>;
+}
+#+end_src
+
+Skills then implement this world:
+
+#+begin_src rust
+// Rust skill using wit-bindgen
+wit_bindgen::generate!({
+    world: "skill",
+    exports: {
+        world: MySkill,
+    },
+});
+
+struct MySkill;
+
+impl Guest for MySkill {
+    fn run(args: Vec<String>) -> Result<String, String> {
+        // High-level, type-safe API!
+        logging::log(LogLevel::Info, "Starting skill...");
+
+        let response = http::http_request(Request {
+            method: "GET".to_string(),
+            url: "https://api.example.com/data".to_string(),
+            headers: vec![],
+            body: None,
+        })?;
+
+        storage::kv_set("last_status", &response.status.to_string())?;
+
+        Ok(format!("Success: {} bytes", response.body.len()))
+    }
+}
+#+end_src
+
+*** Security Benefits
+
+**** 1. Better Static Analysis
+
+WIT interfaces are *machine-readable contracts*. We can parse the component and
+extract exactly what it imports:
+
+#+begin_src lisp
+(defun analyze-component-imports (component-bytes)
+  "Parse WASM component and extract WIT imports.
+   Returns structured list of (interface function type-signature)."
+  ;; Use wasm-tools component wit or parse Component Model binary format
+  ;; Component metadata section contains WIT interface definitions
+  ...)
+
+;; Example output:
+'((logging log (log-level string) -> ())
+  (http http-request (request) -> (result response http-error))
+  (storage kv-get (string) -> (option string)))
+#+end_src
+
+*Advantage over core WASM:* Instead of seeing raw `http_request(i32 i32 i32...)`
+we see `http::http-request(req: request) -> result<response, http-error>` with
+full type information.
+
+**** 2. Fine-Grained Capability Control
+
+Current manifest is coarse:
+#+begin_src toml
+http_domains = ["api.example.com"]  # All HTTP methods allowed
+#+end_src
+
+With Component Model, we could have interface-level permissions:
+
+#+begin_src toml
+[capabilities.interfaces]
+# Only allow specific interfaces
+allowed = ["logging", "storage"]  # No http or secrets
+
+# Or fine-grained control
+[capabilities.interfaces.http]
+allowed_methods = ["GET"]  # No POST/PUT/DELETE
+allowed_domains = ["api.example.com"]
+
+[capabilities.interfaces.storage]
+max_keys = 100
+max_value_size_kb = 1
+#+end_src
+
+**** 3. Type-Safe Marshalling = Fewer Vulnerabilities
+
+Core WASM pointer bugs:
+- Buffer overflows (pass len=1000 but buffer is 100 bytes)
+- Use-after-free
+- Double-free
+- Out-of-bounds reads
+
+Component Model uses *Canonical ABI* with automatic bounds checking. Host and
+guest agree on memory layout. Much harder to exploit.
+
+**** 4. Interface Versioning
+
+WIT supports versioning:
+
+#+begin_src wit
+package crichton:skills@1.0.0;
+
+interface http {
+  // v1.0.0: original interface
+}
+
+package crichton:skills@2.0.0;
+
+interface http {
+  // v2.0.0: added streaming support (backwards compatible with v1)
+}
+#+end_src
+
+Skills declare which interface version they target. Daemon can support multiple
+versions simultaneously. Better forward/backward compatibility.
+
+**** 5. Composability & Skill Chaining
+
+Components can link together:
+
+#+begin_src wit
+// skill-pipeline.wit
+world pipeline {
+  import fetch-data;      // First skill
+  import transform-data;  // Second skill
+  import send-result;     // Third skill
+
+  export run: func() -> result<_, string>;
+}
+#+end_src
+
+This enables *auditable skill composition*: "This pipeline runs skills A, B, C
+in sequence. Each skill's capabilities are known and isolated."
+
+*** Migration Path
+
+**** Phase 1: Continue with Core WASM (v0.2-v0.3)
+
+Current approach is sufficient for MVP. Benefits:
+- Simpler implementation (no component model tooling required)
+- Works with existing wasmtime CFFI bindings
+- Mature toolchain (wat2wasm, wasm-tools)
+- Good enough for local, trusted skills
+
+**** Phase 2: Evaluate Component Model (v0.4)
+
+When considering marketplace/downloadable skills:
+
+1. *Assess toolchain maturity*
+   - Component Model stabilized in 2023-2024
+   - =wasm-tools= for component manipulation
+   - =wit-bindgen= for Rust/C/JS/Python
+   - Check SBCL/Lisp story (may need custom bindings)
+
+2. *Prototype component host*
+   - Build CFFI bindings for =wasmtime_component_*= functions
+   - Implement WIT import introspection
+   - Test with sample Rust component
+
+3. *Design hybrid approach*
+   - Support *both* core WASM and components
+   - Older skills continue to work (core WASM)
+   - New skills encouraged to use components
+   - Components get higher trust level automatically
+
+**** Phase 3: Adopt Component Model (v0.5+)
+
+If prototype succeeds:
+
+1. *Update skill development docs*
+   - Provide WIT file (=crichton.wit=)
+   - Document =wit-bindgen= workflow for Rust/C
+   - Provide starter templates
+
+2. *Implement component host*
+   - Replace =run-wasm-bytes-with-host-fns= with =run-component=
+   - Automatic marshalling via Canonical ABI
+   - Interface-level capability enforcement
+
+3. *Migrate built-in skills*
+   - Convert weather, system-info, etc. to components
+   - Proves that component model meets performance needs
+   - Dogfood the new developer experience
+
+4. *Deprecate core WASM*
+   - Components become the default
+   - Core WASM still supported but discouraged
+   - Lower trust level for core WASM skills
+
+*** Trade-offs
+
+**** Advantages of Component Model
+
+| Benefit                  | Impact                                                    |
+|--------------------------+-----------------------------------------------------------|
+| Type safety              | Fewer memory bugs, better auditing                        |
+| Structured interfaces    | Clearer capabilities, easier static analysis              |
+| Multi-language support   | Skills in Rust, C, Python, JS all use same WIT interface  |
+| Composability            | Skills can be chained with clear data flow                |
+| Versioning               | Interface evolution without breaking old skills           |
+| Better tooling           | =wasm-tools= for inspection, validation, composition      |
+
+**** Disadvantages of Component Model
+
+| Challenge                | Mitigation                                                |
+|--------------------------+-----------------------------------------------------------|
+| Complexity               | Start with core WASM, migrate later when mature          |
+| SBCL/Lisp integration    | May need custom CFFI bindings for component host          |
+| Larger binary size       | Component Model adds metadata (~10-20% size increase)     |
+| Toolchain immaturity     | Wait for wasmtime 1.0 component support to stabilize      |
+| Learning curve           | Provide templates and examples                            |
+
+*** Recommendation
+
+*For Crichton v0.2-v0.3:* Stick with core WASM + raw host functions.
+- Simpler to implement
+- Adequate for local, trusted skills
+- Good learning platform
+
+*For Crichton v0.4+:* Evaluate Component Model for marketplace scenario.
+- Significantly better security story
+- Worth the complexity when distributing untrusted code
+- Component Model is the future of WASM ecosystems
+
+*For Crichton v0.5+:* If marketplace happens, make components the default.
+- Require components for REVIEWED/SANDBOXED trust levels
+- Core WASM downgraded to UNTRUSTED by default
+- Components are the new standard
+
+*** References
+
+- [[https://github.com/WebAssembly/component-model][WASM Component Model Specification]]
+- [[https://component-model.bytecodealliance.org/][Component Model Documentation]]
+- [[https://github.com/bytecodealliance/wit-bindgen][wit-bindgen - Interface Bindings Generator]]
+- [[https://github.com/bytecodealliance/wasm-tools][wasm-tools - Component Manipulation]]
+- [[https://docs.wasmtime.dev/lang-rust.html#components][Wasmtime Component API]]
+
 ** Implementation Priorities
 
 For v0.2 (Skill Registry MVP):
 - [X] Layer 1: WASM sandboxing (already done)
 - [X] Layer 2: Capability manifests (already done)
 - [ ] Layer 3: Code signing enforcement (warn on unsigned)
-- [ ] Layer 4: Static import analysis
+- [ ] Layer 4: Static import analysis (core WASM)
 - [ ] Layer 5: Network egress logging
 - [ ] Trust levels (BUILT-IN, TRUSTED, UNTRUSTED only)
 
@@ -761,9 +1087,17 @@ For v0.3 (Security Hardening):
 - [ ] Resource usage tracking
 - [ ] Policy enforcement
 
-For v0.4+ (Marketplace):
+For v0.4 (Component Model Evaluation):
+- [ ] Research Component Model toolchain maturity
+- [ ] Prototype component host with wasmtime
+- [ ] Build sample Rust component skill
+- [ ] Assess performance vs. core WASM
+- [ ] Document migration strategy
+
+For v0.5+ (Marketplace):
 - [ ] Secure download protocol
 - [ ] Marketplace trust model
+- [ ] Component Model as default (if adopted)
 - [ ] Community reporting
 - [ ] Emergency revocation
 
