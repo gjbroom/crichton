@@ -230,11 +230,12 @@
                              (include-load t)
                              (include-memory t)
                              (include-thermal t)
-                             (include-disk t))
+                             (include-disk t)
+                             (include-battery t))
   "Collect all system metrics into a single plist.
    Partial failures are recorded in :errors, not signalled."
   (let ((errors nil)
-        loadavg memory thermals disks)
+        loadavg memory thermals disks batteries)
     (when include-load
       (handler-case (setf loadavg (system-loadavg))
         (error (c) (push (format nil "loadavg: ~A" c) errors))))
@@ -247,11 +248,15 @@
     (when include-disk
       (handler-case (setf disks (system-disk-usage :mounts mounts))
         (error (c) (push (format nil "disk: ~A" c) errors))))
+    (when include-battery
+      (handler-case (setf batteries (all-batteries-snapshot))
+        (error (c) (push (format nil "battery: ~A" c) errors))))
     (list :timestamp-unix (get-universal-time)
           :loadavg loadavg
           :memory memory
           :thermals thermals
           :disks disks
+          :batteries batteries
           :status (if errors :partial :ok)
           :errors (nreverse errors))))
 
@@ -315,6 +320,31 @@
               (format-bytes (getf d :total-bytes))
               (* 100 (or (getf d :used-ratio) 0))))))
 
+(defun battery-display-name (name)
+  "Extract a short display name from a battery NAME (pathname or string)."
+  (typecase name
+    (pathname (car (last (pathname-directory name))))
+    (string name)
+    (t (format nil "~A" name))))
+
+(defun format-battery-section (batteries &optional (stream *standard-output*))
+  (when batteries
+    (format stream "~&Battery:~%")
+    (dolist (bat batteries)
+      (let ((name (battery-display-name (getf bat :name)))
+            (capacity (getf bat :capacity))
+            (status (getf bat :status))
+            (power-now (getf bat :power-now))
+            (time-to-empty (getf bat :time-to-empty))
+            (time-to-full (getf bat :time-to-full)))
+        (format stream "  ~A: ~A% (~A)~%" name (or capacity "?") (or status "?"))
+        (when power-now
+          (format stream "    Power: ~,2F W~%" (/ power-now 1000000.0)))
+        (when time-to-empty
+          (format stream "    Time to empty: ~A~%" (format-duration-seconds time-to-empty)))
+        (when time-to-full
+          (format stream "    Time to full: ~A~%" (format-duration-seconds time-to-full)))))))
+
 (defun system-report (&key (mounts '("/" "/home")) (stream *standard-output*))
   "Display a formatted system status report. Returns the snapshot plist."
   (let ((snap (system-snapshot :mounts mounts)))
@@ -322,6 +352,7 @@
     (format-memory (getf snap :memory) stream)
     (format-thermal (getf snap :thermals) stream)
     (format-disk (getf snap :disks) stream)
+    (format-battery-section (getf snap :batteries) stream)
     (when (eq (getf snap :status) :partial)
       (format stream "~&Errors:~%")
       (dolist (e (getf snap :errors))
