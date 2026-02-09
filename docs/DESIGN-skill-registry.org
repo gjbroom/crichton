@@ -287,13 +287,485 @@ schedulable actions so users can schedule them.
 Closes cricht-6d7
 #+end_example
 
-* Security Notes
+* Security Architecture
 
-- Skills run inside WASM sandbox (wasmtime) with capability constraints from manifest
-- Skill context restricts HTTP domains, memory, CPU time per manifest
-- Logs are already redacted — skill output goes through =log:info= which hits the redaction layer
-- Unsigned skills should log a warning at discovery time
-- No =eval= or dynamic code execution — skills are WASM only
+Security is a foundational design principle for Crichton. The skill registry must
+maintain the security guarantees established in the OpenClaw audit response.
+
+** Threat Model
+
+*** Local Threats (Current)
+- User installs malicious skill from untrusted source
+- Skill manifest lies about capabilities (declares no network, but phones home)
+- Skill exploits WASM sandbox escape vulnerability
+- Skill attempts to DOS the daemon (CPU/memory exhaustion)
+- Skill attempts to read/write files outside declared paths
+
+*** Network Threats (Future)
+- Skill marketplace serves compromised packages
+- Man-in-the-middle attack during skill download
+- Dependency confusion attack (malicious skill with legitimate name)
+- Supply chain attack via compromised skill author account
+
+** Defense Layers
+
+*** Layer 1: WASM Sandboxing (Already Implemented)
+
+*Current guarantees:*
+- Skills have NO direct access to filesystem, network, or environment
+- All I/O goes through host functions with explicit capability checks
+- Memory is isolated (skills can't read daemon memory)
+- CPU and memory limits enforced per-skill
+
+*Host functions available:*
+| Function         | Access Level          | Notes                                    |
+|------------------+-----------------------+------------------------------------------|
+| =log=            | Write-only            | Redacted output, rate-limited            |
+| =kv_get/kv_set=  | Skill-scoped storage  | Isolated per-skill, no cross-skill read  |
+| =http_request=   | Allowlist-only        | Domain checked against manifest          |
+| =get_secret=     | Credential mediator   | Must be declared in manifest             |
+
+*Enforcement point:* Host function callbacks check =skill-context= before executing.
+
+*** Layer 2: Capability Manifests (Already Implemented)
+
+Skills declare required capabilities in =skill.toml=:
+
+#+begin_src toml
+[capabilities]
+http_domains = ["api.example.com"]    # Empty = no network access
+read_files = []                        # Not yet implemented
+write_files = []                       # Not yet implemented
+env_vars = []                          # Not yet implemented
+max_memory_mb = 64
+max_cpu_seconds = 30
+#+end_src
+
+*Current limitations:*
+- =read_files= / =write_files= not enforced (no filesystem host functions yet)
+- =env_vars= not enforced (WASM has no env access anyway)
+- HTTP allowlist checked but not logged per-request
+
+*** Layer 3: Code Signing (Partial Implementation)
+
+*Current:*
+- Ed25519 signature verification in =skills/signing.lisp=
+- Trusted keys stored in =~/.crichton/trusted-keys/*.pub=
+- Signature verification via =verify-skill-bundle=
+
+*Missing:*
+- No enforcement — unsigned skills currently work
+- No trust chain (key distribution problem)
+- No revocation mechanism
+
+*** Layer 4: Static Analysis (NEW — Not Yet Implemented)
+
+Skills should be analyzed before execution to verify capabilities.
+
+**** WASM Import Analysis
+
+Every WASM module declares its imports. We can statically verify what host functions
+a skill attempts to use:
+
+#+begin_src lisp
+(defun analyze-wasm-imports (wasm-bytes)
+  "Parse WASM binary and extract import declarations.
+   Returns list of (module-name function-name) tuples."
+  ;; Use wasmtime module introspection or parse WASM binary format
+  ;; Section 2 (imports) lists all external functions
+  ...)
+
+(defun verify-imports-match-manifest (skill-entry)
+  "Check that WASM imports align with declared capabilities."
+  (let ((imports (analyze-wasm-imports (skill-entry-wasm-bytes skill-entry)))
+        (manifest (skill-entry-manifest skill-entry)))
+    (cond
+      ;; If skill imports http_request but manifest declares no http_domains
+      ((and (member '("env" "http_request") imports :test #'equal)
+            (null (getf (manifest-capabilities manifest) :http-domains)))
+       (values nil "Skill imports http_request but declares no http_domains"))
+
+      ;; If skill imports get_secret but manifest declares no secrets
+      ((and (member '("env" "get_secret") imports :test #'equal)
+            (null (getf (manifest-capabilities manifest) :env-vars)))
+       (values nil "Skill imports get_secret but declares no secrets"))
+
+      (t (values t nil)))))
+#+end_src
+
+*Enforcement:* Run at load time. Refuse to load skills with mismatched capabilities.
+
+**** WASM Code Scanning
+
+Additional static checks:
+
+1. *No dynamic code loading* — WASM modules should not contain =call_indirect=
+   with suspicious patterns (though WASM sandbox prevents most exploits)
+
+2. *Reasonable code size* — Reject skills >10MB (likely obfuscated or malicious)
+
+3. *Suspicious data sections* — Flag skills with large embedded binary blobs
+   (could be exfiltration payloads)
+
+*** Layer 5: Runtime Monitoring (NEW — Partially Implemented)
+
+**** Network Egress Logging
+
+Every =http_request= must be logged with:
+- Skill name
+- Timestamp
+- Method, URL, headers (redacted), body size
+- Response status
+- Duration
+
+#+begin_src lisp
+(defun host-http-request-callback (...)
+  ;; Extract skill context
+  (let ((skill-name (skill-context-name (current-skill-context)))
+        (allowed-domains (skill-http-allowlist)))
+
+    ;; Check allowlist
+    (unless (domain-in-allowlist-p url allowed-domains)
+      (log:warn "Skill ~A attempted unauthorized HTTP to ~A (blocked)" skill-name url)
+      (return-from host-http-request-callback -403))
+
+    ;; Log all allowed requests
+    (log:info "Skill ~A: HTTP ~A ~A" skill-name method url)
+
+    ;; Make request
+    (let ((status (make-http-request method url headers body)))
+      (log:info "Skill ~A: HTTP ~A returned ~A" skill-name url status)
+      status)))
+#+end_src
+
+*Audit:* Log messages go to =~/.crichton/logs/= with 0600 permissions. Use =bd list=
+style queries to audit skill network activity.
+
+**** Resource Usage Tracking
+
+Track per-skill:
+- Invocation count
+- Total CPU time
+- Total memory used
+- Network bytes sent/received
+- KV storage size
+
+Store in =~/.crichton/skill-metrics.jsonl= (age-encrypted).
+
+Enable queries like: "Show me all skills that made network requests last week"
+
+**** Host Function Interception
+
+Wrap every host function with audit logging:
+
+#+begin_src lisp
+(defmacro with-skill-audit (skill-name function-name &body body)
+  `(prog2
+       (log:debug "Skill ~A called ~A" ,skill-name ,function-name)
+       (progn ,@body)
+     (log:debug "Skill ~A finished ~A" ,skill-name ,function-name)))
+#+end_src
+
+** Skill Trust Levels
+
+Classify skills by trust level to enable graduated permissions:
+
+| Level        | Source              | Verification                | Capabilities                    |
+|--------------+---------------------+-----------------------------+---------------------------------|
+| *BUILT-IN*   | Shipped with daemon | Code review by maintainers  | Full access (no sandbox)        |
+| *TRUSTED*    | User's own keys     | Signed by user's key        | All host functions              |
+| *REVIEWED*   | Downloaded          | Signed + manual review      | Declared capabilities only      |
+| *SANDBOXED*  | Downloaded          | Signature check only        | Restricted (no http, no secrets)|
+| *UNTRUSTED*  | Local, unsigned     | None                        | Log-only, no network, no KV     |
+
+*Implementation:* Add =trust-level= field to =skill-entry=. Check at load time
+and when registering host functions.
+
+** Skill Review and Approval Process
+
+For skills downloaded from the internet (future):
+
+*** Manual Review Checklist
+
+Before marking a skill as REVIEWED:
+
+1. *Manifest audit*
+   - [ ] Declared capabilities are reasonable for skill's purpose
+   - [ ] HTTP domains are legitimate and necessary
+   - [ ] Resource limits are appropriate
+   - [ ] Author is identifiable
+
+2. *Code audit* (if WAT source available)
+   - [ ] Read WAT source, understand what it does
+   - [ ] No obfuscation or suspicious patterns
+   - [ ] Network calls go only to declared domains
+   - [ ] No data exfiltration attempts
+   - [ ] No attempts to fingerprint user/system
+
+3. *WASM binary audit*
+   - [ ] Signature is valid and from known author
+   - [ ] WASM imports match manifest
+   - [ ] No oversized or suspicious data sections
+   - [ ] Disassemble with =wasm2wat= and spot-check
+
+4. *Test execution*
+   - [ ] Run in isolated environment (VM or separate daemon)
+   - [ ] Monitor all host function calls
+   - [ ] Verify no unexpected network activity
+   - [ ] Check logged output for leakage
+
+5. *Community review*
+   - [ ] Check for reports of malicious behavior
+   - [ ] Verify author's reputation
+   - [ ] Review skill's update history
+
+*** Automated Review Tools (Future)
+
+Build =crichton-skill-audit= command:
+
+#+begin_src bash
+crichton-skill-audit ~/.crichton/skills/suspicious-skill/
+
+Output:
+✓ Signature valid (key: abc123...)
+✓ Manifest well-formed
+✗ WARNING: Skill declares no HTTP domains but imports http_request
+✗ WARNING: Data section contains 500KB of binary data
+✓ Resource limits reasonable (64MB, 30s)
+⚠ CAUTION: Author has no verified identity
+
+Recommendation: DO NOT LOAD (2 critical warnings)
+#+end_src
+
+** Skill Installation Security
+
+When downloading skills from internet (future):
+
+*** Secure Download Protocol
+
+#+begin_src
+1. User requests skill: crichton skill install <url-or-name>
+2. Fetch manifest over HTTPS (verify TLS cert)
+3. Verify manifest signature
+4. Check manifest against policy (allowlist of allowed capabilities)
+5. Prompt user with capability requirements
+6. User approves or denies
+7. Download WASM binary over HTTPS
+8. Verify WASM signature matches manifest signature
+9. Run static analysis (import check, size check)
+10. If all checks pass, install to ~/.crichton/skills/
+11. Mark as SANDBOXED trust level
+12. User can promote to REVIEWED after manual audit
+#+end_src
+
+*** Marketplace Trust Model
+
+Design for future skill marketplace:
+
+*Requirements:*
+- Skills signed by author keys
+- Author identity verification (email, GitHub, domain ownership)
+- Revocation list for compromised keys
+- Community reporting system for malicious skills
+- Version pinning (never auto-update without user approval)
+- Dependency tree verification (if skills can depend on other skills)
+
+*Distribution:*
+- Git repository with skill manifests (like Homebrew taps)
+- Each skill is a subdirectory with skill.toml + skill.wasm + signature
+- Users clone/pull to get updates
+- No automatic execution — installation is explicit
+
+** Verification: Manifest vs. Reality
+
+*** Pre-Load Verification
+
+At =load-skill= time:
+
+#+begin_src lisp
+(defun load-skill (name)
+  (let* ((entry (gethash name *skill-registry*))
+         (manifest (skill-entry-manifest entry))
+         (wasm-bytes (read-skill-wasm entry)))
+
+    ;; 1. Verify signature (if present)
+    (multiple-value-bind (valid-p key-id)
+        (verify-skill-bundle manifest wasm-bytes)
+      (unless valid-p
+        (log:warn "Skill ~A has invalid signature" name)))
+
+    ;; 2. Static analysis of imports
+    (multiple-value-bind (imports-ok reason)
+        (verify-imports-match-manifest entry wasm-bytes)
+      (unless imports-ok
+        (error "Skill ~A capability mismatch: ~A" name reason)))
+
+    ;; 3. Size check
+    (when (> (length wasm-bytes) (* 10 1024 1024))
+      (error "Skill ~A exceeds size limit (10MB)" name))
+
+    ;; Cache and mark loaded
+    (setf (skill-entry-wasm-bytes entry) wasm-bytes
+          (skill-entry-loaded-p entry) t)
+    entry))
+#+end_src
+
+*** Runtime Verification
+
+At =invoke-skill= time:
+
+#+begin_src lisp
+(defun invoke-skill (name &key (entry-point "main"))
+  (let* ((entry (load-skill name))
+         (manifest (skill-entry-manifest entry))
+         (context (make-skill-context-from-manifest
+                   manifest
+                   :secret-resolver #'credential-mediated-resolver)))
+
+    ;; Set trust level constraints on context
+    (setf (skill-context-trust-level context)
+          (determine-trust-level entry))
+
+    ;; Run with monitoring
+    (call-with-skill-context context
+      (lambda ()
+        (log:info "Invoking skill ~A (~A)" name entry-point)
+        (let ((start-time (get-internal-real-time)))
+          (handler-case
+              (let ((result (run-wasm-bytes-with-host-fns
+                             (skill-entry-wasm-bytes entry)
+                             entry-point)))
+                (log:info "Skill ~A returned ~A (took ~Dms)"
+                          name result
+                          (- (get-internal-real-time) start-time))
+                result)
+            (error (c)
+              (log:error "Skill ~A failed: ~A" name c)
+              (error c))))))))
+#+end_src
+
+*** Post-Execution Audit
+
+After skill runs, verify:
+- All network calls were to declared domains (check logs)
+- Resource usage within limits
+- No unauthorized host function calls
+
+Implement =crichton-skill-report= command:
+
+#+begin_src bash
+crichton-skill-report meaning-of-life --last-7-days
+
+Skill: meaning-of-life
+Trust level: TRUSTED
+Invocations: 42
+Total CPU time: 1.2s
+Network requests: 0
+KV storage: 0 bytes
+Secrets accessed: 0
+Last run: 2026-02-09 12:34:56
+
+No security violations detected.
+#+end_src
+
+** Configuration and Policy
+
+*** User Configuration (config.toml)
+
+#+begin_src toml
+[skills]
+# Minimum trust level to auto-load at daemon startup
+auto_load_trust_level = "REVIEWED"  # BUILT-IN, TRUSTED, REVIEWED, SANDBOXED, UNTRUSTED
+
+# Allow unsigned skills (development only)
+allow_unsigned = true
+
+# Maximum skill binary size (MB)
+max_size_mb = 10
+
+# Enable static analysis at load time
+verify_imports = true
+
+# Log all host function calls (performance impact)
+audit_host_calls = false
+
+# Skill-specific overrides
+[skills.meaning-of-life]
+trust_level = "TRUSTED"
+
+[skills.experimental-skill]
+trust_level = "SANDBOXED"
+max_memory_mb = 32  # Override manifest
+#+end_src
+
+*** Policy Enforcement
+
+Create =policy.toml= for organizational deployments:
+
+#+begin_src toml
+[policy]
+# Reject skills requesting these domains
+blocked_domains = ["pastebin.com", "raw.githubusercontent.com"]
+
+# Require signature from these key IDs
+required_signers = ["abc123...", "def456..."]
+
+# Maximum capabilities
+max_memory_mb = 128
+max_cpu_seconds = 60
+
+# Deny any skill requesting these capabilities
+deny_capabilities = ["arbitrary_code_execution"]  # Future
+#+end_src
+
+** Open Questions for Future Design
+
+1. *Skill dependencies*: If skill A depends on skill B, how do we verify
+   the dependency chain? Do we need a lock file?
+
+2. *Skill updates*: How do we safely update skills? Require manual approval?
+   Version pinning?
+
+3. *Cross-skill communication*: Should skills be able to call each other?
+   What's the security model?
+
+4. *Filesystem access*: When we implement =read_files=/=write_files=, how do
+   we prevent path traversal? Chroot jail? Allowlist only?
+
+5. *Network protocol restrictions*: Should we allow only HTTP/HTTPS? Block
+   raw TCP? What about DNS resolution?
+
+6. *Skill marketplace governance*: Who reviews skills? What's the appeal
+   process for rejected skills? How do we handle disputes?
+
+7. *Audit log retention*: How long do we keep skill execution logs? Rotate?
+   Encrypt? Ship to SIEM?
+
+8. *Emergency revocation*: If a skill is found to be malicious, how do we
+   quickly revoke it across all installations?
+
+** Implementation Priorities
+
+For v0.2 (Skill Registry MVP):
+- [X] Layer 1: WASM sandboxing (already done)
+- [X] Layer 2: Capability manifests (already done)
+- [ ] Layer 3: Code signing enforcement (warn on unsigned)
+- [ ] Layer 4: Static import analysis
+- [ ] Layer 5: Network egress logging
+- [ ] Trust levels (BUILT-IN, TRUSTED, UNTRUSTED only)
+
+For v0.3 (Security Hardening):
+- [ ] Full trust level system
+- [ ] Skill review checklist
+- [ ] Automated audit tools
+- [ ] Resource usage tracking
+- [ ] Policy enforcement
+
+For v0.4+ (Marketplace):
+- [ ] Secure download protocol
+- [ ] Marketplace trust model
+- [ ] Community reporting
+- [ ] Emergency revocation
 
 * Open Questions (for later versions)
 
