@@ -182,7 +182,11 @@
            #:make-tool-result-block
            ;; conditions
            #:llm-error
+           #:llm-error-provider
+           #:llm-error-message
            #:llm-api-error
+           #:llm-api-error-status
+           #:llm-api-error-body
            #:llm-auth-error
            #:llm-rate-limit-error
            #:llm-feature-not-supported

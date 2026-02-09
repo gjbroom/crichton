@@ -51,10 +51,38 @@
                   (setf (gethash "text" result) response-text
                         (gethash "session_id" result) session-id)
                   (crichton/rpc:make-ok-response id result)))
+            (crichton/llm:llm-rate-limit-error (c)
+              (log:warn "Rate limited by ~A: ~A"
+                        (crichton/llm:provider-id (crichton/llm:llm-error-provider c))
+                        (crichton/llm:llm-error-message c))
+              (crichton/rpc:make-error-response
+               id "rate_limited"
+               "I'm being rate limited by the API right now. Please try again in a minute or two."))
+            (crichton/llm:llm-auth-error (c)
+              (log:error "Authentication failed for ~A: ~A"
+                         (crichton/llm:provider-id (crichton/llm:llm-error-provider c))
+                         (crichton/llm:llm-error-message c))
+              (crichton/rpc:make-error-response
+               id "auth_error"
+               "My API credentials appear to be invalid. Please check the configuration."))
+            (crichton/llm:llm-api-error (c)
+              (log:error "LLM API error (~A) HTTP ~D: ~A"
+                         (crichton/llm:provider-id (crichton/llm:llm-error-provider c))
+                         (crichton/llm:llm-api-error-status c)
+                         (crichton/llm:llm-error-message c))
+              (crichton/rpc:make-error-response
+               id "llm_error"
+               "I encountered an error communicating with my AI provider. Check the logs for details."))
+            (crichton/llm:llm-error (c)
+              (log:error "LLM error: ~A" (crichton/llm:llm-error-message c))
+              (crichton/rpc:make-error-response
+               id "llm_error"
+               "I encountered an error communicating with my AI provider. Check the logs for details."))
             (error (c)
+              (log:error "Agent error: ~A" c)
               (crichton/rpc:make-error-response
                id "agent_error"
-               (format nil "~A" c)))))))))
+               (format nil "An unexpected error occurred: ~A" c)))))))))
 
 ;;; --- Request dispatch ---
 
