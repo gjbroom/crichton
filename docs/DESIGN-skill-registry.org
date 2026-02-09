@@ -1,0 +1,304 @@
+#+TITLE: Design: Skill Registry & User-Schedulable Actions
+#+DATE: 2026-02-09
+#+STATUS: Ready for implementation
+#+BEADS: cricht-6d7
+
+* Problem Statement
+
+Two gaps in Crichton's current architecture:
+
+1. *No skill discovery/management* — WASM skills exist on disk at
+   =~/.crichton/skills/<name>/= with =skill.toml= manifests, but the daemon
+   has no way to enumerate, load, invoke, or report on them.  The user built
+   a sample =meaning-of-life= skill but can't ask Crichton to run it.
+
+2. *No user-defined schedulable actions* — The scheduler tool (cricht-c44)
+   only offers three built-in actions (weather-check, system-check,
+   battery-check).  Users cannot schedule external skills or define
+   custom actions.
+
+* Design Overview
+
+Two new subsystems, implemented as subagent tasks:
+
+- *Task A*: Skill registry — discover, load, invoke, and list external WASM skills
+- *Task B*: Skill-as-schedulable-action bridge — make loaded skills available as scheduler actions
+
+#+begin_src
+ ~/.crichton/skills/
+   meaning-of-life/
+     skill.toml          ← manifest (name, version, caps)
+     skill.wat           ← WAT source
+     skill.wasm          ← compiled binary (optional, compile from WAT)
+   another-skill/
+     skill.toml
+     skill.wasm
+#+end_src
+
+** Architecture Diagram
+
+#+begin_example
+                        ┌─────────────────────┐
+                        │   Agent Tool Layer   │
+                        │                      │
+                        │  "skills" tool       │  ← list/invoke/info
+                        │  "scheduler" tool    │  ← schedule_every etc.
+                        └─────┬───────┬────────┘
+                              │       │
+              ┌───────────────┘       └──────────────┐
+              ▼                                      ▼
+   ┌─────────────────────┐           ┌──────────────────────────┐
+   │   Skill Registry    │           │  Schedulable Actions     │
+   │   (new subsystem)   │           │  (existing, extended)    │
+   │                     │           │                          │
+   │  *skill-registry*   │──bridge──▶│  *schedulable-actions*   │
+   │  discover-skills    │           │  register-schedulable-   │
+   │  load-skill         │           │    action                │
+   │  invoke-skill       │           └──────────────────────────┘
+   │  list-skills        │
+   │  skill-info         │
+   └─────────┬───────────┘
+             │
+             ▼
+   ┌─────────────────────┐
+   │  WASM Engine Layer  │
+   │                     │
+   │  run-wasm-bytes-    │
+   │    with-host-fns    │
+   │  wat-to-wasm        │
+   │  skill-context      │
+   └─────────────────────┘
+#+end_example
+
+* Task A: Skill Registry
+
+** New file: =skills/registry.lisp=
+
+Package: =crichton/skills=
+
+*** Data structures
+
+#+begin_src lisp
+(defstruct skill-entry
+  (name "" :type string)           ; from manifest skill.name
+  (version "" :type string)        ; from manifest skill.version
+  (description "" :type string)    ; from manifest skill.description
+  (author "" :type string)         ; from manifest skill.author
+  (path nil :type (or null pathname)) ; directory path
+  (manifest nil)                   ; full parsed manifest plist
+  (loaded-p nil :type boolean)     ; T if WASM bytes cached
+  (wasm-bytes nil)                 ; cached byte vector (loaded on demand)
+  (entry-point "main" :type string)) ; default export to call
+#+end_src
+
+#+begin_src lisp
+(defvar *skill-registry* (make-hash-table :test #'equal)
+  "Registry of discovered skills, keyed by skill name.")
+#+end_src
+
+*** Functions
+
+- =(skills-directory)= → pathname for =~/.crichton/skills/=, using =crichton/config:*agent-home*=.
+
+- =(discover-skills)= → Scan =skills-directory= for subdirectories containing =skill.toml=. Parse each manifest with =parse-skill-manifest=. Populate =*skill-registry*=. Return count of skills found. Call this at daemon startup and on demand.
+
+- =(list-skills)= → Return list of skill-entry snapshot plists (name, version, description, loaded-p). Does NOT include wasm-bytes.
+
+- =(skill-info name)= → Return full skill-entry plist for a specific skill, or NIL.
+
+- =(load-skill name)= → Load a skill's WASM bytes into memory.
+  - Look for =skill.wasm= first. If not found, look for =skill.wat= and compile via =wat-to-wasm=.
+  - Cache in =skill-entry-wasm-bytes=.
+  - Set =loaded-p= to T.
+  - Return the skill-entry.
+  - Signal error if skill not found in registry.
+
+- =(invoke-skill name &key (entry-point "main"))= → Load (if not loaded), then run the WASM skill with =run-wasm-bytes-with-host-fns=.  Set up skill context from manifest.  Return the WASM result (integer from main).
+
+- =(unload-skill name)= → Clear cached wasm-bytes, set loaded-p to NIL.
+
+- =(skill-report &key (stream *standard-output*))= → Human-readable report of all skills. Like other =*-report= functions.
+
+*** Exports (add to =crichton/skills= in package.lisp)
+
+#+begin_src lisp
+#:skill-entry
+#:discover-skills
+#:list-skills
+#:skill-info
+#:load-skill
+#:invoke-skill
+#:unload-skill
+#:skill-report
+#+end_src
+
+*** ASDF
+
+Add ="registry"= to the =:skills= module in =crichton.asd=, before the builtins (since builtins don't depend on it, but after manifest.lisp and signing.lisp).
+
+** New agent tool: ="skills"= (in =agent/tools.lisp=)
+
+Add =register-skills-tool= and call from =register-all-tools=.
+
+Actions:
+| Action    | Params         | Behavior                                |
+|-----------+----------------+-----------------------------------------|
+| =list=    | —              | List all discovered skills               |
+| =info=    | =name=         | Show details for a specific skill        |
+| =invoke=  | =name=         | Run a skill and return its result         |
+| =refresh= | —              | Re-scan skills directory                 |
+
+Input schema:
+#+begin_src lisp
+(make-properties
+ '("action" "string"
+   "The skills action to perform."
+   :enum ("list" "info" "invoke" "refresh")
+   :required-p t)
+ '("name" "string"
+   "Skill name. Required for info and invoke."))
+#+end_src
+
+Handler sketch:
+#+begin_src lisp
+(lambda (input)
+  (block handler
+    (let ((action (hget input "action" "list")))
+      (cond
+        ((string-equal action "list")
+         (crichton/skills:discover-skills)  ; refresh
+         (with-output-to-string (s)
+           (crichton/skills:skill-report :stream s)))
+        ((string-equal action "info")
+         (let* ((name (hget input "name"))
+                (info (crichton/skills:skill-info name)))
+           (unless name (return-from handler "Error: 'name' is required."))
+           (if info (format nil "~S" info)
+               (format nil "Skill '~A' not found." name))))
+        ((string-equal action "invoke")
+         (let ((name (hget input "name")))
+           (unless name (return-from handler "Error: 'name' is required."))
+           (handler-case
+               (let ((result (crichton/skills:invoke-skill name)))
+                 (format nil "Skill '~A' returned: ~A" name result))
+             (error (c)
+               (format nil "Error invoking skill '~A': ~A" name c)))))
+        ((string-equal action "refresh")
+         (let ((count (crichton/skills:discover-skills)))
+           (format nil "Discovered ~D skill~:P." count)))
+        (t (format nil "Unknown skills action: ~A" action))))))
+#+end_src
+
+** Daemon startup integration
+
+In =daemon/lifecycle.lisp= =start-daemon=, after starting the scheduler, call =(crichton/skills:discover-skills)= so skills are available immediately.
+
+* Task B: Skill-as-Schedulable-Action Bridge
+
+** Automatic registration
+
+When =discover-skills= finds skills, for each skill that has =loaded-p= or is loadable, automatically register a schedulable action:
+
+#+begin_src lisp
+(defun register-skill-as-action (skill-entry)
+  "Register a discovered skill as a schedulable action."
+  (let ((name (format nil "skill:~A" (skill-entry-name skill-entry)))
+        (desc (or (skill-entry-description skill-entry)
+                  (format nil "Run the ~A skill" (skill-entry-name skill-entry)))))
+    (register-schedulable-action name desc
+      (lambda ()
+        (handler-case
+            (let ((result (invoke-skill (skill-entry-name skill-entry))))
+              (log:info "Scheduled skill ~A returned: ~A"
+                        (skill-entry-name skill-entry) result))
+          (error (c)
+            (log:warn "Scheduled skill ~A failed: ~A"
+                      (skill-entry-name skill-entry) c)))))))
+#+end_src
+
+Call this for each skill during =discover-skills=.
+
+** Result
+
+After discovery, =list-schedulable-actions= returns:
+#+begin_example
+Available schedulable actions:
+  battery-check - Check battery levels against thresholds
+  skill:meaning-of-life - Provides the answer to life, the universe, and everything
+  system-check - Log system health metrics
+  weather-check - Log current weather conditions
+#+end_example
+
+User can then say: "schedule the meaning of life skill to run every hour" and the LLM calls:
+#+begin_src json
+{"action": "schedule_every", "action_name": "skill:meaning-of-life", "interval_seconds": 3600}
+#+end_src
+
+* Implementation Plan — Subagent Instructions
+
+** Subagent 1: Skill Registry (Task A)
+
+Files to create:
+- =skills/registry.lisp=
+
+Files to modify:
+- =package.lisp= — add exports
+- =crichton.asd= — add module
+- =agent/tools.lisp= — add =register-skills-tool=, call from =register-all-tools=
+- =daemon/lifecycle.lisp= — call =discover-skills= at startup
+
+Key references to read first:
+- =skills/manifest.lisp= — manifest parsing (already done)
+- =runner/skill-context.lisp= — skill context for WASM invocation
+- =wasm/engine.lisp= — =run-wasm-bytes-with-host-fns=, =wat-to-wasm=
+- =~/.crichton/skills/meaning-of-life/= — sample skill to test against
+- =agent/tools.lisp= — tool registration patterns
+- =skills/builtins/scheduler.lisp= — =register-schedulable-action=
+
+** Subagent 2: Schedulable Action Bridge (Task B)
+
+This is small enough to be part of Subagent 1.
+
+After =discover-skills= populates the registry, iterate and call =register-skill-as-action= for each.  The function lives in =skills/registry.lisp= since it bridges the two subsystems.
+
+** Build verification
+
+Both subagents must run:
+#+begin_src bash
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/home/gjbroom/devel/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton :force t)'
+#+end_src
+
+Target: zero STYLE-WARNINGs.
+
+** Commit messages
+
+Task A:
+#+begin_example
+Add skill registry: discover, load, invoke external WASM skills
+
+Scans ~/.crichton/skills/ for skill.toml manifests, loads WASM
+binaries on demand, and exposes a "skills" agent tool for listing,
+inspecting, and invoking skills. Skills are auto-registered as
+schedulable actions so users can schedule them.
+
+Closes cricht-6d7
+#+end_example
+
+* Security Notes
+
+- Skills run inside WASM sandbox (wasmtime) with capability constraints from manifest
+- Skill context restricts HTTP domains, memory, CPU time per manifest
+- Logs are already redacted — skill output goes through =log:info= which hits the redaction layer
+- Unsigned skills should log a warning at discovery time
+- No =eval= or dynamic code execution — skills are WASM only
+
+* Open Questions (for later versions)
+
+- Skill argument passing: currently WASM =main()= takes no args, returns i32.  Future: pass args via WASM memory or KV store.
+- Skill output capture: currently skills log via host =log= function.  Future: capture output as a string to return to the user.
+- Skill auto-update: check for newer versions?
+- Skill marketplace: download skills from a registry?
+- Hot-reload skills: watch =~/.crichton/skills/= for changes?
