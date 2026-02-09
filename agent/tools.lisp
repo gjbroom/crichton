@@ -256,7 +256,7 @@
          (cond
            ((string-equal action "status")
             (with-output-to-string (s)
-              (crichton/skills:battery-report :stream s)))
+              (crichton/skills:battery-report s)))
            ((string-equal action "start_monitoring")
             (if (crichton/skills:start-battery-monitoring)
                 "Battery monitoring started. Will check periodically and alert on low battery."
