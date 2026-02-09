@@ -56,11 +56,12 @@
   (let ((base-path (pathname *battery-power-supply-path*)))
     (when (probe-file base-path)
       (handler-case
-          (let ((entries (uiop:directory-files base-path)))
+          ;; On Debian, internal batteries are BAT*.  Don't look
+          ;; at USB peripherals (e.g. mice)
+          (let ((entries (directory (merge-pathnames "BAT*" base-path))))
             (loop for entry in entries
-                  for name = (car (last (pathname-directory entry)))
-                  when (and name (battery-device-p name))
-                    collect name))
+                  when (and entry (battery-device-p entry))
+                    collect entry))
         (error () nil)))))
 
 (defun has-battery-p ()

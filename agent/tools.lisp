@@ -157,37 +157,37 @@
            (t
             (format nil "Unknown scheduler action: ~A" action))))))))
 
-           ;;; --- Current time tool ---
+;;; --- Current time tool ---
 
-           (defun register-time-tool ()
-             (register-tool
-              "time"
-              "Get the current date and time. Returns the current date and time in both human-readable and Unix timestamp formats. Useful for understanding when events happen relative to the current moment."
-              (make-json-schema :type "object" :properties (make-hash-table :test #'equal))
-              (lambda (input)
-                (declare (ignore input))
-                (with-output-to-string (s)
-                  (crichton/skills:current-time-report :stream s)
-                  (let ((pl (crichton/skills:current-time-plist)))
-                    (format s "Unix timestamp: ~D~%" (getf pl :unix-seconds)))))))
+(defun register-time-tool ()
+  (register-tool
+   "time"
+   "Get the current date and time. Returns the current date and time in both human-readable and Unix timestamp formats. Useful for understanding when events happen relative to the current moment."
+   (make-json-schema :type "object" :properties (make-hash-table :test #'equal))
+   (lambda (input)
+     (declare (ignore input))
+     (with-output-to-string (s)
+       (crichton/skills:current-time-report :stream s)
+       (let ((pl (crichton/skills:current-time-plist)))
+         (format s "Unix timestamp: ~D~%" (getf pl :unix-seconds)))))))
 
-           ;;; --- Ephemeris tool (solar + lunar) ---
+;;; --- Ephemeris tool (solar + lunar) ---
 
-           (defun register-ephemeris-tool ()
-             (register-tool
-              "ephemeris"
-              "Get solar and lunar ephemeris data for today. Includes sunrise, sunset, solar noon, day length, lunar phase, and illumination percentage. Uses the configured location. No input required."
-              (make-json-schema :type "object" :properties (make-hash-table :test #'equal))
-              (lambda (input)
-                (declare (ignore input))
-                (let ((lat (crichton/config:config-section-get :location :latitude 48.43))
-                      (lon (crichton/config:config-section-get :location :longitude -123.37)))
-                  (with-output-to-string (s)
-                    (crichton/skills:ephemeris-report lat lon :stream s))))))
+(defun register-ephemeris-tool ()
+  (register-tool
+   "ephemeris"
+   "Get solar and lunar ephemeris data for today. Includes sunrise, sunset, solar noon, day length, lunar phase, and illumination percentage. Uses the configured location. No input required."
+   (make-json-schema :type "object" :properties (make-hash-table :test #'equal))
+   (lambda (input)
+     (declare (ignore input))
+     (let ((lat (crichton/config:config-section-get :location :latitude 48.43))
+           (lon (crichton/config:config-section-get :location :longitude -123.37)))
+       (with-output-to-string (s)
+         (crichton/skills:ephemeris-report lat lon :stream s))))))
 
-           ;;; --- RSS tool ---
+;;; --- RSS tool ---
 
-           (defun register-rss-tool ()
+(defun register-rss-tool ()
   (multiple-value-bind (props required)
       (make-properties
        '("action" "string"
@@ -241,16 +241,32 @@
 ;;; --- Battery tool ---
 
 (defun register-battery-tool ()
-  (register-tool
-   "battery"
-   "Get battery status and charge level. Returns information about all batteries in the system including charge percentage, charging status, power consumption, and estimated time remaining. Only works on systems with batteries (laptops, etc.)."
-   (make-json-schema :type "object" :properties (make-hash-table :test #'equal))
-   (lambda (input)
-     (declare (ignore input))
-     (if (crichton/skills:has-battery-p)
-         (with-output-to-string (s)
-           (crichton/skills:battery-report s))
-         "No battery detected on this system."))))
+  (multiple-value-bind (props required)
+      (make-properties
+       '("action" "string"
+         "The battery action: status (current battery info), start_monitoring (enable periodic checks), stop_monitoring (disable periodic checks)."
+         :enum ("status" "start_monitoring" "stop_monitoring")
+         :required-p t))
+    (register-tool
+     "battery"
+     "Monitor battery level and charging status on laptop systems. Get current battery percentage, charging state, and time remaining. Can start/stop periodic monitoring with proactive alerts at configurable thresholds. Linux only (reads /sys/class/power_supply/)."
+     (make-json-schema :type "object" :properties props :required required)
+     (lambda (input)
+       (let ((action (hget input "action" "status")))
+         (cond
+           ((string-equal action "status")
+            (with-output-to-string (s)
+              (crichton/skills:battery-report :stream s)))
+           ((string-equal action "start_monitoring")
+            (if (crichton/skills:start-battery-monitoring)
+                "Battery monitoring started. Will check periodically and alert on low battery."
+                "Battery monitoring not available (no batteries detected)."))
+           ((string-equal action "stop_monitoring")
+            (if (crichton/skills:stop-battery-monitoring)
+                "Battery monitoring stopped."
+                "Battery monitoring was not running."))
+           (t
+            (format nil "Unknown battery action: ~A" action))))))))
 
 ;;; --- Token/resource usage tool ---
 
@@ -294,35 +310,6 @@
                         (crichton/skills:meter-recent meter-name count))))
            (t (format nil "Unknown action: ~A" action))))))))
 
-;;; --- Battery tool ---
-
-(defun register-battery-tool ()
-  (multiple-value-bind (props required)
-      (make-properties
-       '("action" "string"
-         "The battery action: status (current battery info), start_monitoring (enable periodic checks), stop_monitoring (disable periodic checks)."
-         :enum ("status" "start_monitoring" "stop_monitoring")
-         :required-p t))
-    (register-tool
-     "battery"
-     "Monitor battery level and charging status on laptop systems. Get current battery percentage, charging state, and time remaining. Can start/stop periodic monitoring with proactive alerts at configurable thresholds. Linux only (reads /sys/class/power_supply/)."
-     (make-json-schema :type "object" :properties props :required required)
-     (lambda (input)
-       (let ((action (hget input "action" "status")))
-         (cond
-           ((string-equal action "status")
-            (with-output-to-string (s)
-              (crichton/skills:battery-report :stream s)))
-           ((string-equal action "start_monitoring")
-            (if (crichton/skills:start-battery-monitoring)
-                "Battery monitoring started. Will check periodically and alert on low battery."
-                "Battery monitoring not available (no batteries detected)."))
-           ((string-equal action "stop_monitoring")
-            (if (crichton/skills:stop-battery-monitoring)
-                "Battery monitoring stopped."
-                "Battery monitoring was not running."))
-           (t
-            (format nil "Unknown battery action: ~A" action))))))))
 
 ;;; --- Registration ---
 

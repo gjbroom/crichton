@@ -1,0 +1,36 @@
+* Feature Requests and Bugs
+The following are my notes on using Crichton with the =crichton-client= interface.
+As I have been playing around, getting used to what I want an intelligent agent
+to do, this is what I've noticed. Create beads for each of these (if they don't
+already exist).  Some of these lacking features may already be
+on the roadmap (once we move from a v0.1 MVP).  Are we past MVP right now?  I
+think so.
+** Development
+- there are remnants in the source tree to the old =crichton= CLI (e.g. the whole
+  =client/= tree, as well as the main function in =crichton.lisp=.  
+- the work done on the git feature branches was not properly merged back ino the
+  master branch. I've manually edited the mainline to restore some (most?) of
+  the missing functionality, since the lisp source wouldn't even compile after
+  the merge.  At one point there were duplicate
+  CRICHTON/AGENT:REGISTER-BATTERY-TOOL definitions.  I removed one of them.
+** Battery Monitoring
+- we use UIOP/FILESYSTEM:DIRECTORY-FILES to locate the batteries in
+  =/sys/class/power_supply/= but the documentation for that function states that
+  it explicitly does not follow symbolic links.  Well, all the files in this
+  power_supply folder are symlinks, so DIRECTORY-FILES returns NIL.  I've
+  converted to using the plain DIRECTORY function.
+- despite reloading all the lisp into the running daemon, and also stopping and
+  restarting the daemon, when chatting from the client I cannot get any battery
+  information.  I can see the results in a Swank connection.  Odd.
+** Interface
+- After playing around with the readline interface (which is so much nicer than
+  a dumb terminal) I started asking for coloured text.  It looks like the ESCs
+  are getting stripped out by readline, so I'd like to make another client, this
+  time using something like ncurses or whatever the CL equivalent is.  I've seen
+  some really cool TUIs made in Go, so presumably we can do the same in CL.
+  This is the beauty of the microarchitecture, these clients only need a tiny
+  communications piece, and the rest of their code is solely at the UI layer.
+  A TUI would also mean that Crichton can push messages to the screen without
+  waiting for me to hit return.  Kind of like how Amp or Claude Code work right
+  now.
+  

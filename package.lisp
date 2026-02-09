@@ -9,6 +9,7 @@
            #:agent-path
            #:ensure-directories
            #:load-config
+           #:reload-config
            #:config-get
            #:config-section-get))
 
