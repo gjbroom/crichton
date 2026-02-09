@@ -117,6 +117,9 @@
            #:cancel-task
            #:list-tasks
            #:scheduler-status
+           #:register-schedulable-action
+           #:get-schedulable-action
+           #:list-schedulable-actions
            ;; current time
            #:current-time-plist
            #:current-time-report

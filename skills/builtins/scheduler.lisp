@@ -26,6 +26,47 @@
   (last-duration-us nil :type (or null integer))
   (last-error nil :type (or null string)))
 
+;;; --- Schedulable action registry ---
+
+(defvar *schedulable-actions* (make-hash-table :test #'equal))
+
+(defun register-schedulable-action (name description fn)
+  "Register a named action that can be scheduled via the agent tool."
+  (setf (gethash name *schedulable-actions*)
+        (list :name name :description description :fn fn)))
+
+(defun get-schedulable-action (name)
+  "Look up a schedulable action by name. Returns plist or NIL."
+  (gethash name *schedulable-actions*))
+
+(defun list-schedulable-actions ()
+  "Return a list of plists for all registered schedulable actions."
+  (let (result)
+    (maphash (lambda (k v)
+               (declare (ignore k))
+               (push (list :name (getf v :name) :description (getf v :description)) result))
+             *schedulable-actions*)
+    (sort result #'string< :key (lambda (x) (getf x :name)))))
+
+(defun register-default-actions ()
+  "Register built-in schedulable actions."
+  (register-schedulable-action
+   "weather-check" "Log current weather conditions"
+   (lambda ()
+     (let ((report (with-output-to-string (s)
+                     (weather-report :stream s))))
+       (log:info "Weather check:~%~A" report))))
+  (register-schedulable-action
+   "system-check" "Log system health metrics"
+   (lambda ()
+     (let ((snap (system-snapshot)))
+       (log:info "System check: load=~,2F mem=~,1F%"
+                 (or (getf (getf snap :loadavg) :load1) 0)
+                 (* 100 (or (getf (getf snap :memory) :mem-used-ratio) 0))))))
+  (register-schedulable-action
+   "battery-check" "Check battery levels against thresholds"
+   #'battery-monitor-callback))
+
 ;;; --- Scheduler state ---
 
 (defvar *scheduler-lock* (bt:make-lock "scheduler"))
@@ -159,6 +200,7 @@
   (bt:with-lock-held (*scheduler-lock*)
     (when *scheduler-running*
       (return-from start-scheduler :already-running))
+    (register-default-actions)
     (setf *scheduler-running* t
           *scheduler-thread*
           (bt:make-thread #'scheduler-loop :name "crichton-scheduler")))

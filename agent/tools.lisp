@@ -141,21 +141,92 @@
       (make-properties
        '("action" "string"
          "The scheduler action to perform."
-         :enum ("status" "list")
-         :required-p t))
+         :enum ("status" "list" "actions" "schedule_every" "schedule_daily" "schedule_once" "cancel")
+         :required-p t)
+       '("action_name" "string"
+         "Name of the schedulable action to run (use 'actions' to list available). Required for schedule_every, schedule_daily, schedule_once.")
+       '("interval_seconds" "integer"
+         "Interval in seconds for schedule_every. Required for schedule_every.")
+       '("hour" "integer"
+         "Hour (0-23) for schedule_daily. Required for schedule_daily.")
+       '("minute" "integer"
+         "Minute (0-59) for schedule_daily. Required for schedule_daily.")
+       '("delay_seconds" "integer"
+         "Delay in seconds from now for schedule_once. Required for schedule_once.")
+       '("name" "string"
+         "Task name. Auto-generated with 'user:' prefix if omitted."))
     (register-tool
      "scheduler"
-     "View the status of the daemon's task scheduler and list scheduled tasks. Use action 'status' for overview or 'list' for all tasks."
+     "Manage the daemon's task scheduler. Actions: 'status' (overview), 'list' (all tasks), 'actions' (list schedulable actions), 'schedule_every' (recurring task), 'schedule_daily' (daily at specific time), 'schedule_once' (one-shot after delay), 'cancel' (remove a task by name)."
      (make-json-schema :type "object" :properties props :required required)
      (lambda (input)
-       (let ((action (hget input "action" "status")))
-         (cond
-           ((string-equal action "status")
-            (format nil "~S" (crichton/skills:scheduler-status)))
-           ((string-equal action "list")
-            (format nil "~S" (crichton/skills:list-tasks)))
-           (t
-            (format nil "Unknown scheduler action: ~A" action))))))))
+       (block handler
+         (let ((action (hget input "action" "status")))
+           (cond
+             ((string-equal action "status")
+              (format nil "~S" (crichton/skills:scheduler-status)))
+             ((string-equal action "list")
+              (format nil "~S" (crichton/skills:list-tasks)))
+             ((string-equal action "actions")
+              (let ((actions (crichton/skills:list-schedulable-actions)))
+                (if actions
+                    (with-output-to-string (s)
+                      (format s "Available schedulable actions:~%")
+                      (dolist (a actions)
+                        (format s "  ~A - ~A~%" (getf a :name) (getf a :description))))
+                    "No schedulable actions registered.")))
+             ((string-equal action "schedule_every")
+              (let* ((action-name (hget input "action_name"))
+                     (interval (hget input "interval_seconds"))
+                     (task-name (or (hget input "name")
+                                    (format nil "user:~A" action-name))))
+                (unless action-name
+                  (return-from handler "Error: 'action_name' is required. Use action 'actions' to list available."))
+                (unless interval
+                  (return-from handler "Error: 'interval_seconds' is required."))
+                (let ((act (crichton/skills:get-schedulable-action action-name)))
+                  (unless act
+                    (return-from handler (format nil "Error: unknown action '~A'. Use action 'actions' to list available." action-name)))
+                  (crichton/skills:schedule-every task-name interval (getf act :fn) :replace t)
+                  (format nil "Scheduled '~A' every ~Ds as task '~A'." action-name interval task-name))))
+             ((string-equal action "schedule_daily")
+              (let* ((action-name (hget input "action_name"))
+                     (hour (hget input "hour"))
+                     (minute (hget input "minute" 0))
+                     (task-name (or (hget input "name")
+                                    (format nil "user:~A" action-name))))
+                (unless action-name
+                  (return-from handler "Error: 'action_name' is required."))
+                (unless hour
+                  (return-from handler "Error: 'hour' is required for schedule_daily."))
+                (let ((act (crichton/skills:get-schedulable-action action-name)))
+                  (unless act
+                    (return-from handler (format nil "Error: unknown action '~A'." action-name)))
+                  (crichton/skills:schedule-daily task-name hour minute (getf act :fn) :replace t)
+                  (format nil "Scheduled '~A' daily at ~2,'0D:~2,'0D as task '~A'." action-name hour minute task-name))))
+             ((string-equal action "schedule_once")
+              (let* ((action-name (hget input "action_name"))
+                     (delay (hget input "delay_seconds"))
+                     (task-name (or (hget input "name")
+                                    (format nil "user:~A" action-name))))
+                (unless action-name
+                  (return-from handler "Error: 'action_name' is required."))
+                (unless delay
+                  (return-from handler "Error: 'delay_seconds' is required."))
+                (let ((act (crichton/skills:get-schedulable-action action-name)))
+                  (unless act
+                    (return-from handler (format nil "Error: unknown action '~A'." action-name)))
+                  (crichton/skills:schedule-at task-name (+ (get-universal-time) delay) (getf act :fn) :replace t)
+                  (format nil "Scheduled '~A' to run once in ~Ds as task '~A'." action-name delay task-name))))
+             ((string-equal action "cancel")
+              (let ((task-name (hget input "name")))
+                (unless task-name
+                  (return-from handler "Error: 'name' is required for cancel."))
+                (if (crichton/skills:cancel-task task-name)
+                    (format nil "Cancelled task '~A'." task-name)
+                    (format nil "No task found with name '~A'." task-name))))
+             (t
+              (format nil "Unknown scheduler action: ~A" action)))))))))
 
 ;;; --- Current time tool ---
 
