@@ -677,11 +677,185 @@ Gordon (Discord) → "Hey Crichton, edit my TODO.org file"
 - Rate limiting per user (=max_invocations_per_hour = 10=)
 - Delegation (owner temporarily grants access to another user)
 
+** User Identity & Authentication
+
+*** Owner Designation
+
+The *owner* is defined in system configuration:
+
+#+begin_src toml
+# ~/.crichton/config.toml
+[system]
+owner = "gjbroom"  # Primary owner (local username)
+#+end_src
+
+*** Identity Mapping
+
+Multiple identities can map to the same user across connectors:
+
+#+begin_src toml
+# ~/.crichton/config.toml
+[users.gjbroom]
+role = "owner"
+identities = [
+  "local:gjbroom",           # Local daemon.sock connections
+  "discord:gjbroom#1234",    # Discord user ID
+  "matrix:@gjbroom:server",  # Future: Matrix
+]
+
+[users.brandon]
+role = "user"
+identities = [
+  "discord:brandon#5678",
+]
+#+end_src
+
+*** Authentication Per Connector
+
+Different connectors use appropriate authentication mechanisms:
+
+**** Local Connections (daemon.sock)
+
+#+begin_src lisp
+;; Unix socket connections
+;; User identity = socket peer credentials (SO_PEERCRED)
+;; Automatic authentication via OS
+(defun authenticate-local-connection (socket)
+  (let* ((peer-creds (get-peer-credentials socket))
+         (uid (peer-uid peer-creds))
+         (username (uid->username uid)))
+    (make-user-context :identity (format nil "local:~a" username)
+                       :connector "local")))
+#+end_src
+
+**Security:** OS enforces identity (can't impersonate another local user without privilege escalation).
+
+**** Discord Connections
+
+#+begin_src lisp
+;; Discord connections
+;; User identity = Discord user ID (from message author)
+;; Authentication via Discord OAuth (future enhancement)
+(defun authenticate-discord-connection (message)
+  (let* ((discord-user (message-author message))
+         (discord-id (format nil "~a#~a"
+                            (user-username discord-user)
+                            (user-discriminator discord-user))))
+    (make-user-context :identity (format nil "discord:~a" discord-id)
+                       :connector "discord")))
+#+end_src
+
+**Current:** Discord user ID is trusted (Discord API provides it).
+
+**Future:** Add Discord OAuth to verify ownership of Discord account.
+
+**** Future: Web Interface
+
+#+begin_src toml
+# Token-based authentication for web/API
+[connectors.web]
+auth_method = "token"
+
+[users.gjbroom.tokens]
+web_token = "age-encrypted-token-hash"  # In credential store
+#+end_src
+
+*** User Context Flow
+
+#+begin_example
+Connection arrives
+    ↓
+Connector authenticates (local: peer creds, Discord: user ID)
+    ↓
+Identity extracted (e.g., "discord:gjbroom#1234")
+    ↓
+Config lookup: map identity → user → role
+    ↓
+User context created: { user: "gjbroom", role: "owner", connector: "discord" }
+    ↓
+Skill invocation: check authorization against user context
+    ↓
+Success/failure (logged with full user context)
+#+end_example
+
+*** Open Questions
+
+**Q1: Owner authentication from Discord**
+
+How does the owner prove they're the owner when connecting from Discord?
+
+*Option A (Current):* Trust Discord user ID mapping in config
+- Pro: Simple, Discord API provides authenticated user ID
+- Con: If config is wrong (maps wrong Discord ID), security breach
+- Mitigation: Config is manually edited by owner (offline), same as installing skills
+
+*Option B (Token-based):* Owner provides secret token in Discord
+- Pro: Stronger authentication
+- Con: Sharing tokens in Discord channels leaks them
+- Mitigation: DM-only, ephemeral messages
+
+*Option C (OAuth):* Discord OAuth flow to verify account ownership
+- Pro: Industry-standard authentication
+- Con: Complex implementation, requires web server
+- Status: Future enhancement
+
+**Q2: Local vs. Remote Owner**
+
+Should owner have same privileges regardless of connector?
+
+*Option A:* Owner is owner everywhere
+- `local:gjbroom` and `discord:gjbroom#1234` both have owner privileges
+- Risk: Compromised Discord account = full system access
+
+*Option B:* Connector-based restrictions
+- `local:gjbroom` = full owner
+- `discord:gjbroom#1234` = limited owner (can't use critical skills)
+- Implement via policy overrides per connector
+
+#+begin_src toml
+# Policy: restrict owner when remote
+[policy.connector_restrictions.discord]
+# Even owner can't use these skills from Discord
+deny_skills = ["org-file-editor", "backup-manager"]
+#+end_src
+
+**Q3: Authentication failures**
+
+What happens if someone impersonates a Discord username?
+
+*Current:* Discord API provides authenticated user ID (can't be spoofed)
+- Discord handles authentication (username + discriminator + internal ID)
+- We trust Discord's authentication
+
+*Risk:* If Discord account compromised, attacker has that user's Crichton access
+*Mitigation:* Owner can add 2FA requirement in future (verify via DM challenge)
+
+*** Recommended Approach (MVP)
+
+For initial multi-user support:
+
+1. **Owner definition:** Explicit in config (=owner = "gjbroom"=)
+2. **Identity mapping:** Manual config mapping identities to users
+3. **Local auth:** OS peer credentials (automatic, secure)
+4. **Discord auth:** Trust Discord API user ID (simple, reasonably secure)
+5. **Remote restrictions:** Policy can limit owner from Discord if desired
+
+Future enhancements:
+- OAuth for connectors
+- Token-based authentication for web/API
+- 2FA challenges for critical operations
+- Per-connector privilege restrictions
+
 ** Status
 
 *Current:* ❌ Not implemented (single-user mode, not urgent until Discord re-enabled)
 
 *Planned:* v0.4-v0.5 (multi-user connector support)
+
+*Requires design decisions:*
+1. Owner authentication from Discord (trust mapping vs. tokens vs. OAuth)
+2. Remote owner privileges (same as local vs. restricted)
+3. Per-connector policy restrictions
 
 * Capability Introspection Protection
 
