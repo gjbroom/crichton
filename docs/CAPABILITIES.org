@@ -1,4 +1,4 @@
-#+TITLE: Crichton Skill Capabilities Catalog
+3#+TITLE: Crichton Skill Capabilities Catalog
 #+AUTHOR: Gordon J. Broom
 #+DATE: 2026-02-09
 #+STARTUP: content
@@ -265,63 +265,13 @@ random = true
 
 *Status:* ❌ Not Implemented
 
-*** 9. Environment Variables (=environment=)
 
-*Purpose:* Read host environment variables.
-
-*Host Functions:*
-- =env_get(name_ptr: i32, name_len: i32) -> i32=
-
-*Manifest Declaration:*
-#+begin_src toml
-[capabilities.environment]
-allowed_vars = [
-  "HOME",
-  "USER",
-  "LANG"
-]
-#+end_src
-
-*Security Properties:*
-- Explicit allowlist (can't enumerate all env vars)
-- Redacted sensitive vars (=*_TOKEN=, =*_SECRET=, etc. blocked)
-
-*Risks:*
-- Medium — Information disclosure (mitigated by allowlist)
-- Low — Config leakage (mitigated by redaction)
-
-*Status:* ❌ Not Implemented (WASM has no env access anyway)
-
-*** 10. Process & System Info (=system.info=)
-
-*Purpose:* Query system state (CPU, memory, hostname, etc.)
-
-*Host Functions:*
-- =system_hostname() -> i32=
-- =system_cpu_usage() -> f32=
-- =system_memory_usage() -> i64=
-- =system_disk_usage(path_ptr, path_len) -> i64=
-
-*Manifest Declaration:*
-#+begin_src toml
-[capabilities.system]
-info = ["hostname", "cpu", "memory", "disk"]
-#+end_src
-
-*Security Properties:*
-- Read-only (can't modify system state)
-- Limited scope (can't enumerate processes, users, etc.)
-
-*Risks:*
-- Low — Fingerprinting (mitigated by limited info)
-
-*Status:* ❌ Not Implemented (built-in skill exists but not exposed to WASM)
 
 ** III. Integration Capabilities (v0.3-v0.4)
 
 Capabilities for external service integration.
 
-*** 11. Notifications (=notifications=)
+*** 9. Notifications (=notifications=)
 
 *Purpose:* Send push notifications via configured services.
 
@@ -346,7 +296,7 @@ max_per_hour = 10                    # Rate limit
 
 *Status:* ❌ Not Implemented (Pushover skill planned: cricht-ass)
 
-*** 12. Git Operations (=git=)
+*** 10. Git Operations (=git=)
 
 *Purpose:* Interact with Git repositories.
 
@@ -379,7 +329,7 @@ operations = ["read", "commit", "push"]  # Permission levels
 
 *Status:* ❌ Not Implemented (GitHub skill planned: cricht-059)
 
-*** 13. Database Access (=database=)
+*** 11. Database Access (=database=)
 
 *Purpose:* Query and modify databases.
 
@@ -416,7 +366,7 @@ max_result_rows = 1000
 
 Capabilities for complex scenarios and future expansion.
 
-*** 14. Inter-Skill Communication (=ipc.skills=)
+*** 12. Inter-Skill Communication (=ipc.skills=)
 
 *Purpose:* Invoke other skills or share data between skills.
 
@@ -446,7 +396,7 @@ max_call_depth = 3  # Prevent infinite recursion
 
 *Status:* ❌ Not Implemented (requires careful design)
 
-*** 15. Subprocess Execution (=exec=)
+*** 13. Subprocess Execution (=exec=)
 
 *Purpose:* Execute external commands.
 
@@ -485,7 +435,7 @@ max_output_mb = 100
 *Rationale:* High risk. Most use cases better served by purpose-built host functions
 (e.g., =image_convert= instead of =exec ffmpeg=).
 
-*** 16. Hardware - I2C/USB (=hardware=)
+*** 14. Hardware - I2C/USB (=hardware=)
 
 *Purpose:* Access I2C or USB peripherals (Raspberry Pi deployments).
 
@@ -514,7 +464,7 @@ usb_vendor_ids = [0x1234]    # Allowed USB vendor IDs
 
 *Status:* ❌ Not Implemented (roadmap: v0.5+, codenamed "Peripheral Access")
 
-*** 17. Scheduler Integration (=scheduler=)
+*** 15. Scheduler Integration (=scheduler=)
 
 *Purpose:* Schedule future tasks or modify existing schedules.
 
@@ -592,6 +542,98 @@ or implement as built-in skill (Lisp code, reviewed by maintainers).
 
 *Alternative:* Use =filesystem.read= and =filesystem.write= with explicit path allowlists.
 
+*** Environment Variables (=environment=)
+
+*Why Denied:*
+- Information disclosure risk: env vars often contain sensitive paths, configs, and system topology
+- Even with allowlist and redaction, hard to predict what's sensitive (e.g., =XDG_CONFIG_HOME= reveals user paths)
+- Common pattern of secrets in env vars (=*_TOKEN=, =*_SECRET=) makes this dangerous
+- Legitimate use cases covered by other capabilities
+
+*Alternative:* Use =secrets= capability for credentials, =storage.kv= for configuration, =time= capability for locale/timezone.
+
+*** System & Process Info (=system.info=)
+
+*Why Denied:*
+- Fingerprinting risk: hostname reveals identity/organization, CPU/memory/disk usage reveals system topology
+- Information disclosure even when read-only
+- Skills should not need this data; monitoring is daemon responsibility
+
+*Alternative:* Keep as daemon-only built-in skill (not exposed to WASM). For monitoring needs, skills can use =notifications= capability to push alerts based on thresholds, rather than polling system state.
+
+* Capability Introspection Protection
+
+*Critical Security Requirement:*
+
+Skills and their capability manifests *MUST NOT* be enumerable by LLM clients or external users.
+
+** Prohibited Operations
+
+The following operations are explicitly forbidden in tool handlers and RPC endpoints:
+
+- =list_skills_with_capabilities()= — Enumerating skills with their declared capabilities
+- =get_skill_manifest(skill_name)= — Retrieving skill.toml manifest contents
+- =query_skill_permissions(skill_name)= — Querying what a skill is allowed to do
+- =describe_skill_capabilities()= — Describing capability details to LLM
+
+** Rationale
+
+Even without direct access to a capability, an LLM could infer sensitive system information by learning which skills exist and what they're allowed to do:
+
+- "Skill 'backup' can write to =/mnt/nas/*=" → reveals NAS mount point and backup strategy
+- "Skill 'work' reads from =~/Acme/*=" → reveals employer or client names
+- "Skill 'email' has 'gmail-token' secret" → reveals email provider
+- "Skill 'monitor' can read =/var/log/apache2/*=" → reveals web server software
+- "Skill 'database' connects to postgres://proddb:5432" → reveals infrastructure
+
+*Defense in depth:* An LLM should only know skill names, not their permissions or configurations.
+
+** Allowed Operations
+
+Skills can be invoked, but require exact name knowledge:
+
+- =invoke_skill(name, args)= — ✅ Allowed (name must be known in advance)
+- =list_skill_names()= — ⚠️ Allowed with caution (returns names only, no capabilities)
+
+** Implementation Requirements
+
+1. *Tool handlers* expose only skill invocation, not inspection
+2. *Capability enforcement* happens silently:
+   - On success: return result
+   - On failure: return generic error ("permission denied"), not details
+   - Never return: "skill X lacks filesystem.write capability"
+3. *RPC endpoints* do not expose manifest contents to clients
+4. *Logs* record capability denials, but errors to LLM are opaque
+
+** Example: Safe vs. Unsafe
+
+#+begin_src lisp
+;; ❌ UNSAFE: Exposes capabilities to LLM
+(defun list-skills-with-capabilities ()
+  (loop for skill in *loaded-skills*
+        collect (list (skill-name skill)
+                      (skill-manifest skill))))  ; Leaks manifest
+
+;; ✅ SAFE: Invocation only, no introspection
+(defun invoke-skill (name args)
+  (let ((skill (gethash name *loaded-skills*)))
+    (if skill
+        (execute-skill skill args)  ; Capability checks happen here
+        (error "Unknown skill"))))  ; Generic error, no details
+#+end_src
+
+** Mitigation Summary
+
+| Attack Vector | Mitigation |
+|---------------|------------|
+| LLM queries skill list | Return names only, no capabilities |
+| LLM queries skill manifest | Operation not implemented |
+| LLM infers caps from errors | Generic errors, detailed logs only |
+| User inspects via CLI | Allowed (user has direct filesystem access anyway) |
+| External API queries | RPC endpoints don't expose manifests |
+
+This protection layer ensures that *knowledge of system configuration remains compartmentalized*, preventing an LLM from building a detailed system profile through capability enumeration.
+
 * Capability Composition
 
 Skills can request multiple capabilities:
@@ -621,10 +663,6 @@ kv_max_value_size_kb = 5
 # Secrets
 [capabilities.secrets]
 allowed_secrets = ["openweathermap-api-key"]
-
-# System info
-[capabilities.system]
-info = ["hostname"]
 
 # Notifications
 [capabilities.notifications]
@@ -729,15 +767,15 @@ world skill {
 | FS Write | ❌ Planned v0.3 | Critical | Output generation, reports |
 | Time | ❌ Planned v0.2 | Low | Scheduling, timestamps |
 | Random | ❌ Planned v0.2 | Low | Security, UUIDs |
-| Environment | ❌ Planned v0.3 | Medium | Config discovery |
-| System Info | ❌ Planned v0.3 | Low | Monitoring, diagnostics |
 | Notifications | ❌ Planned v0.3 | Medium | User alerts |
 | Git | ❌ Planned v0.4 | Critical | Code management |
 | Database | ❌ Planned v0.4 | Critical | Data persistence |
 | IPC Skills | ❌ Planned v0.4 | High | Skill composition |
-| Subprocess | ❌ Rejected | Critical | Too risky, use purpose-built |
+| Subprocess | ❌ Denied | Critical | Too risky, use purpose-built |
 | Hardware | ❌ Planned v0.5+ | Critical | Raspberry Pi use cases |
 | Scheduler | ⚠️ Partial | Medium | Task automation |
+| **Environment** | **❌ Denied** | **Critical** | **Info disclosure, use secrets/KV instead** |
+| **System Info** | **❌ Denied** | **High** | **Fingerprinting risk, daemon-only** |
 | Raw Sockets | ❌ Denied | Critical | Security risk |
 | Daemon Control | ❌ Denied | Critical | Out-of-band only |
 
