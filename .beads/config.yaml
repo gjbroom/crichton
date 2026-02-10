@@ -51,11 +51,12 @@
 
 # Multi-repo configuration (experimental - bd-307)
 # Allows hydrating from multiple repositories and routing writes to the correct JSONL
-repos:
-  primary: "."
-  additional:
-    - ~/devel/mycamosun-timetable
-    - ~/devel/voron-two/klipper
+# COMMENTED OUT: Suspected to cause repo ID calculation mismatches across sessions
+# repos:
+#   primary: "."
+#   additional:
+#     - ~/devel/mycamosun-timetable
+#     - ~/devel/voron-two/klipper
 
 # Integration settings (access with 'bd config get/set')
 # These are stored in the database, not in this file:
