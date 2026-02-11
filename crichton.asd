@@ -41,6 +41,7 @@ signing. Informed by a security audit of OpenClaw."
                (:module "skills"
                 :components ((:file "manifest")
                              (:file "signing")
+                             (:file "kv-store")
                              (:module "builtins"
                               :components ((:file "weather")
                                             (:file "system-info")

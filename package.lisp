@@ -166,7 +166,21 @@
            #:read-log-tail
            #:search-log
            #:log-summary
-           #:log-report))
+           #:log-report
+           ;; kv-store
+           #:kv-get
+           #:kv-set
+           #:kv-delete
+           #:kv-exists-p
+           #:kv-list
+           #:kv-clear-skill
+           #:kv-skill-usage
+           #:kv-global-usage
+           #:preload-kv-cache
+           #:flush-all-kv
+           #:clear-kv-cache
+           #:kv-usage-report
+           #:kv-quota-exceeded))
 
 (defpackage #:crichton/llm
   (:use #:cl)
