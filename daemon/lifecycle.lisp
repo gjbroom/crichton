@@ -53,6 +53,13 @@
     (error (c)
       (log:warn "Battery monitoring startup failed: ~A" c)))
   (handler-case
+      (progn
+        (ensure-directories-exist
+         (merge-pathnames "kv/" crichton/config:*agent-home*))
+        (crichton/skills:preload-kv-cache))
+    (error (c)
+      (log:warn "KV cache preload at startup failed: ~A" c)))
+  (handler-case
       (start-rpc-server)
     (error (c)
       (log:warn "RPC server startup failed: ~A" c)))
@@ -93,6 +100,10 @@
       (crichton/skills:stop-battery-monitoring)
     (error (c)
       (log:warn "Battery monitoring shutdown error: ~A" c)))
+  (handler-case
+      (crichton/skills:flush-all-kv)
+    (error (c)
+      (log:warn "KV cache flush at shutdown failed: ~A" c)))
   (crichton/skills:stop-scheduler)
   (setf *running* nil)
   (bt:with-lock-held (*shutdown-lock*)

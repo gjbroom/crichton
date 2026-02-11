@@ -314,6 +314,7 @@
            #:make-skill-context-from-manifest
            #:call-with-skill-context
            #:current-skill-context
+           #:skill-context-id
            #:skill-http-allowlist
            #:skill-kv-store
            #:skill-resolve-secret))
