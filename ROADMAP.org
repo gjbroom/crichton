@@ -73,7 +73,7 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
 
 * Planned Features
 
-** TODO v0.2 "Polish & Channels" [3/8]
+** TODO v0.2 "Polish & Channels" [4/8]
 
    Focus on user experience improvements and completing channel integration.
 
@@ -100,6 +100,9 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
     - [ ] User-facing task creation interface (cricht-c44)
     - [ ] Agent tool for schedule management
     - [ ] List/modify/delete scheduled tasks
+    - [X] Task persistence across daemon restarts (cricht-rlx, cricht-s51, cricht-6d1)
+    - [X] Age-encrypted task storage (~/.crichton/tasks/user-tasks.age)
+    - [X] Action-name tracking for serializable task references
 
 *** TODO [#B] System Monitoring
     - [ ] Continuous monitoring with notifications (cricht-vtw)
@@ -107,10 +110,10 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
     - [X] Threshold configuration in config.toml
     - [ ] Integration with notification system (Pushover)
 
-*** TODO [#B] Persistence
-    - [ ] Local persistent data store (cricht-056)
-    - [ ] SQLite or age-encrypted JSONL
-    - [ ] Persist scheduler tasks across restarts
+*** TODO [#B] Persistence [2/5]
+    - [X] Persistent key-value store for WASM skills (cricht-mue, cricht-ms8, cricht-clx)
+    - [X] Age-encrypted per-skill KV files with write-through cache and quota enforcement
+    - [ ] Local persistent data store for daemon state (cricht-056)
     - [ ] Persist RSS seen-item tracking
     - [ ] Persist token-usage statistics
 
@@ -281,6 +284,7 @@ The following were considered but explicitly deferred or rejected:
 - Implementation time: ~2 days intensive development
 - Phases completed: 1-5 (daemon, WASM, credentials, LLM, skills)
 - Built-in skills: 9 (weather, system-info, timing, scheduler, RSS, token-usage, battery, ephemeris, log-inspector)
+- Persistent stores: 3 (credentials, sessions, skill KV + scheduler tasks)
 - WASM skill examples: 1 (meaning-of-life)
 - Documentation: Comprehensive skill development guides
 - Open issues: 10
