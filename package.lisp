@@ -120,6 +120,12 @@
            #:register-schedulable-action
            #:get-schedulable-action
            #:list-schedulable-actions
+           ;; task persistence
+           #:user-task-p
+           #:persist-user-tasks
+           #:restore-user-tasks
+           #:save-user-tasks
+           #:load-user-tasks
            ;; current time
            #:current-time-plist
            #:current-time-report

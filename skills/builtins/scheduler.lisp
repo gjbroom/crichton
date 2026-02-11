@@ -14,6 +14,7 @@
   (name "" :type string)
   (kind :one-shot :type keyword)              ; :one-shot :every :daily
   (fn (constantly nil) :type function)
+  (action-name nil :type (or null string))    ; name of schedulable action (for persistence)
   (next-ut 0 :type integer)                   ; universal-time of next fire
   (interval-seconds 0 :type integer)          ; for :every
   (daily-hour 0 :type (integer 0 23))         ; for :daily
@@ -223,12 +224,13 @@
 
 ;;; --- Public API: scheduling ---
 
-(defun schedule-at (name time fn &key replace)
+(defun schedule-at (name time fn &key replace action-name)
   "Schedule a one-shot task to run at universal-time TIME.
    If REPLACE is true, cancel any existing task with the same NAME."
   (let ((task (%make-scheduled-task
                :name (string name) :kind :one-shot
-               :fn fn :next-ut time)))
+               :fn fn :next-ut time
+               :action-name action-name)))
     (bt:with-lock-held (*scheduler-lock*)
       (when replace (remove-task-by-name (string name)))
       (when (find (string name) *scheduled-tasks*
@@ -240,7 +242,7 @@
     name))
 
 (defun schedule-every (name interval-seconds fn
-                       &key (start-at nil) replace (allow-overlap nil))
+                       &key (start-at nil) replace (allow-overlap nil) action-name)
   "Schedule a recurring task to run every INTERVAL-SECONDS seconds.
    START-AT is a universal-time for the first run (default: now + interval)."
   (let* ((start (or start-at (+ (get-universal-time) interval-seconds)))
@@ -248,7 +250,8 @@
                 :name (string name) :kind :every
                 :fn fn :next-ut start
                 :interval-seconds interval-seconds
-                :allow-overlap-p allow-overlap)))
+                :allow-overlap-p allow-overlap
+                :action-name action-name)))
     (bt:with-lock-held (*scheduler-lock*)
       (when replace (remove-task-by-name (string name)))
       (when (find (string name) *scheduled-tasks*
@@ -260,14 +263,15 @@
               name interval-seconds (format-ut start))
     name))
 
-(defun schedule-daily (name hour minute fn &key replace (allow-overlap nil))
+(defun schedule-daily (name hour minute fn &key replace (allow-overlap nil) action-name)
   "Schedule a task to run daily at HOUR:MINUTE (local time)."
   (let* ((next (next-daily-ut hour minute))
          (task (%make-scheduled-task
                 :name (string name) :kind :daily
                 :fn fn :next-ut next
                 :daily-hour hour :daily-minute minute
-                :allow-overlap-p allow-overlap)))
+                :allow-overlap-p allow-overlap
+                :action-name action-name)))
     (bt:with-lock-held (*scheduler-lock*)
       (when replace (remove-task-by-name (string name)))
       (when (find (string name) *scheduled-tasks*
@@ -294,6 +298,7 @@
   "Return a plist representation of a scheduled-task struct."
   (list :name (scheduled-task-name task)
         :kind (scheduled-task-kind task)
+        :action-name (scheduled-task-action-name task)
         :next-fire (format-ut (scheduled-task-next-ut task))
         :next-fire-ut (scheduled-task-next-ut task)
         :running-p (scheduled-task-running-p task)
@@ -358,3 +363,57 @@
                        mo)
                 d y)
         (format stream "~2,'0D:~2,'0D:~2,'0D~%" h mi s)))))
+
+;;; --- Task persistence ---
+
+(defun persist-user-tasks ()
+  "Save all current user tasks to encrypted storage."
+  (bt:with-lock-held (*scheduler-lock*)
+    (let ((user-tasks (remove-if-not #'user-task-p *scheduled-tasks*)))
+      (save-user-tasks user-tasks))))
+
+(defun restore-user-tasks ()
+  "Restore user tasks from encrypted storage. Call after start-scheduler."
+  (let ((task-plists (load-user-tasks)))
+    (when task-plists
+      (let ((restored 0) (failed 0))
+        (dolist (plist task-plists)
+          (handler-case
+              (let* ((action-name (getf plist :action-name))
+                     (action (when action-name
+                               (get-schedulable-action action-name))))
+                (if (null action)
+                    (progn
+                      (log:warn "Cannot restore task ~A: action ~A not found"
+                                (getf plist :name) action-name)
+                      (incf failed))
+                    (let ((fn (getf action :fn)))
+                      (case (getf plist :kind)
+                        (:every
+                         (schedule-every (getf plist :name)
+                                         (getf plist :interval-seconds)
+                                         fn
+                                         :replace t
+                                         :action-name action-name))
+                        (:daily
+                         (schedule-daily (getf plist :name)
+                                         (getf plist :daily-hour)
+                                         (getf plist :daily-minute)
+                                         fn
+                                         :replace t
+                                         :action-name action-name))
+                        (:one-shot
+                         (let ((next-ut (getf plist :next-ut)))
+                           (if (> next-ut (get-universal-time))
+                               (schedule-at (getf plist :name) next-ut fn
+                                            :replace t
+                                            :action-name action-name)
+                               (progn
+                                 (log:info "Skipping past one-shot task ~A"
+                                           (getf plist :name))
+                                 (incf failed))))))
+                      (incf restored))))
+            (error (c)
+              (log:warn "Error restoring task ~A: ~A" (getf plist :name) c)
+              (incf failed))))
+        (log:info "Restored ~D user tasks (~D failed)" restored failed)))))

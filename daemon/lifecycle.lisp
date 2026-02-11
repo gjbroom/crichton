@@ -49,6 +49,10 @@
       (log:warn "Session purge at startup failed: ~A" c)))
   (crichton/skills:start-scheduler)
   (handler-case
+      (crichton/skills:restore-user-tasks)
+    (error (c)
+      (log:warn "Task restoration at startup failed: ~A" c)))
+  (handler-case
       (crichton/skills:start-battery-monitoring)
     (error (c)
       (log:warn "Battery monitoring startup failed: ~A" c)))
@@ -104,6 +108,10 @@
       (crichton/skills:flush-all-kv)
     (error (c)
       (log:warn "KV cache flush at shutdown failed: ~A" c)))
+  (handler-case
+      (crichton/skills:persist-user-tasks)
+    (error (c)
+      (log:warn "Task persistence at shutdown failed: ~A" c)))
   (crichton/skills:stop-scheduler)
   (setf *running* nil)
   (bt:with-lock-held (*shutdown-lock*)

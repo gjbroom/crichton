@@ -187,7 +187,8 @@
                 (let ((act (crichton/skills:get-schedulable-action action-name)))
                   (unless act
                     (return-from handler (format nil "Error: unknown action '~A'. Use action 'actions' to list available." action-name)))
-                  (crichton/skills:schedule-every task-name interval (getf act :fn) :replace t)
+                  (crichton/skills:schedule-every task-name interval (getf act :fn)
+                                                   :replace t :action-name action-name)
                   (format nil "Scheduled '~A' every ~Ds as task '~A'." action-name interval task-name))))
              ((string-equal action "schedule_daily")
               (let* ((action-name (hget input "action_name"))
@@ -202,7 +203,8 @@
                 (let ((act (crichton/skills:get-schedulable-action action-name)))
                   (unless act
                     (return-from handler (format nil "Error: unknown action '~A'." action-name)))
-                  (crichton/skills:schedule-daily task-name hour minute (getf act :fn) :replace t)
+                  (crichton/skills:schedule-daily task-name hour minute (getf act :fn)
+                                                   :replace t :action-name action-name)
                   (format nil "Scheduled '~A' daily at ~2,'0D:~2,'0D as task '~A'." action-name hour minute task-name))))
              ((string-equal action "schedule_once")
               (let* ((action-name (hget input "action_name"))
@@ -216,7 +218,8 @@
                 (let ((act (crichton/skills:get-schedulable-action action-name)))
                   (unless act
                     (return-from handler (format nil "Error: unknown action '~A'." action-name)))
-                  (crichton/skills:schedule-at task-name (+ (get-universal-time) delay) (getf act :fn) :replace t)
+                  (crichton/skills:schedule-at task-name (+ (get-universal-time) delay) (getf act :fn)
+                                               :replace t :action-name action-name)
                   (format nil "Scheduled '~A' to run once in ~Ds as task '~A'." action-name delay task-name))))
              ((string-equal action "cancel")
               (let ((task-name (hget input "name")))
