@@ -39,6 +39,15 @@ For development details, see the git commit history and BEADS issue tracker.
   - LLM-accessible =battery= tool for querying battery status
   - Configuration via =[battery]= section in =config.toml=
   - Graceful handling of systems without batteries (desktops)
+- Persistent key-value store for WASM skills (cricht-mue, cricht-ms8, cricht-clx)
+  - Per-skill isolated storage with age-encrypted JSON files (=~/.crichton/kv/<skill-id>.age=)
+  - Write-through cache for performance, quota enforcement (keys, value size, total size)
+  - Full CRUD API exposed as WASM host functions (=kv_get=, =kv_set=, =kv_delete=, =kv_exists=, =kv_list=)
+  - Automatic cache preload at daemon startup, flush at shutdown
+- Scheduled tasks now persist across daemon restarts (cricht-rlx, cricht-s51, cricht-6d1)
+  - User-defined tasks (=user:*= prefix) automatically saved to encrypted storage
+  - Restored on daemon startup with graceful handling of missing actions
+  - Storage location: =~/.crichton/tasks/user-tasks.age=
 
 ** Changed
 
