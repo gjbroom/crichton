@@ -244,7 +244,17 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
 
 * Code Quality & Refactoring
 
-** TODO Technical Debt [0/7]
+** TODO Technical Debt [1/7]
+
+*** DONE [#B] Convert defstruct to defclass for hot-reload safety
+    CLOSED: [2026-02-12 Thu]
+    - [X] scheduled-task (scheduler.lisp)
+    - [X] agent-tool (agent/tools.lisp)
+    - [X] skill-context (runner/skill-context.lisp)
+    - [X] meter, usage-record (token-usage.lisp)
+    - [X] stopwatch (timing.lisp)
+    - [X] feed-item (rss.lisp)
+    - [X] channel-message (channels/protocol.lisp)
 
 *** TODO [#C] Refactor cmd-cred subcommands
     - [ ] Split into per-subcommand helpers (cricht-eeh)
