@@ -22,6 +22,16 @@ A minimal example WASM skill that:
 
 This is an ideal starting point for learning WASM skill development.
 
+*** =rss-filter/=
+
+A Rust-based WASM skill that:
+- Filters RSS items by keywords (pure function)
+- Demonstrates Rust → WASM compilation with =no_std= + =alloc=
+- Uses JSON-through-linear-memory ABI for structured data exchange
+- Shows =serde= integration for WASM skills
+
+This demonstrates how to build more complex skills in Rust.
+
 * Using Example Skills
 
 ** Running from REPL

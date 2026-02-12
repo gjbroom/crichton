@@ -128,12 +128,24 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
     - [X] Skill development guide (SKILL_DEVELOPMENT.org)
     - [X] Quick start guide (SKILL_QUICKSTART.org)
     - [X] Example WASM skill (examples/skills/meaning-of-life/)
+    - [X] Example Rust WASM skill (examples/skills/rss-filter/)
     - [ ] Security model documentation
     - [ ] API reference
 
-** TODO v0.3 "Skills & Integrations" [0/6]
+** TODO v0.3 "Skills & Integrations" [0/7]
 
    Expanding skill library and third-party integrations.
+
+*** TODO [#B] RSS Filter Skill (WASM)
+    - [X] Rust WASM crate scaffolding (cricht-53c)
+    - [X] skill.toml manifest (cricht-e6e)
+    - [ ] Implement filter_items entry point (cricht-0em)
+    - [ ] Input validation and DoS prevention (cricht-5z9)
+    - [ ] Rust unit tests (cricht-lli)
+    - [ ] Extend WASM runner for JSON-through-memory ABI (cricht-647)
+    - [ ] Daemon-side Lisp integration (cricht-8u0)
+    - [ ] Lisp-side integration test (cricht-8ee)
+    - [ ] Build and deploy WASM binary (cricht-cg4)
 
 *** TODO [#B] Org-Mode Skill
     - [ ] Org-Mode file read/write skill (cricht-1gm)
@@ -285,7 +297,7 @@ The following were considered but explicitly deferred or rejected:
 - Phases completed: 1-5 (daemon, WASM, credentials, LLM, skills)
 - Built-in skills: 9 (weather, system-info, timing, scheduler, RSS, token-usage, battery, ephemeris, log-inspector)
 - Persistent stores: 3 (credentials, sessions, skill KV + scheduler tasks)
-- WASM skill examples: 1 (meaning-of-life)
+- WASM skill examples: 2 (meaning-of-life, rss-filter)
 - Documentation: Comprehensive skill development guides
 - Open issues: 10
 - Closed issues: ~20+
