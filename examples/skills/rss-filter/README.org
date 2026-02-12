@@ -1,0 +1,59 @@
+#+TITLE: RSS Filter Skill
+#+AUTHOR: Crichton Project
+#+DATE: 2026-02-12
+
+* Overview
+
+Pure function that filters RSS items by keywords, compiled from Rust to WASM.
+
+Given a JSON input containing RSS items and a list of keywords, this skill
+returns only the items whose title or description matches at least one keyword.
+
+* Files
+
+- =skill.toml= — Capability manifest
+- =src/lib.rs= — Rust source (compiled to WASM)
+- =Cargo.toml= — Rust build configuration
+- =README.org= — This file
+
+* Building from Source
+
+#+begin_src bash
+# From this directory (examples/skills/rss-filter/)
+cargo build --target wasm32-unknown-unknown --release
+#+end_src
+
+The compiled WASM binary will be at:
+
+=target/wasm32-unknown-unknown/release/rss_filter.wasm=
+
+** Prerequisites
+
+#+begin_src bash
+# Install the WASM target if you haven't already
+rustup target add wasm32-unknown-unknown
+#+end_src
+
+* Usage from REPL
+
+/Placeholder — requires the JSON-through-memory runner from cricht-647./
+
+#+begin_src lisp
+;; TODO: Once the JSON-through-memory runner lands (cricht-647),
+;; usage will look something like:
+;;
+;; (crichton/wasm:call-skill-function
+;;   "examples/skills/rss-filter/target/wasm32-unknown-unknown/release/rss_filter.wasm"
+;;   "filter_items"
+;;   '(:items (...) :keywords ("lisp" "wasm")))
+#+end_src
+
+* Design Specification
+
+See [[file:../../../RSS-FILTER-SKILL.org][RSS-FILTER-SKILL.org]] for the full design spec.
+
+* Learning Resources
+
+- See =../../docs/SKILL_DEVELOPMENT.org= for the full skill development guide
+- See =../../AGENT_SPEC.org= for Crichton's security architecture
+- See =../../skills/builtins/= for examples of built-in Lisp skills

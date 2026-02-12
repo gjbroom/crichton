@@ -1,0 +1,26 @@
+[skill]
+name = "rss-filter"
+version = "1.0.0"
+description = "Filter RSS items by keywords (pure function)"
+author = "Crichton Project"
+license = "MIT"
+signature = ""  # Unsigned (development only)
+
+[capabilities]
+http_domains = []
+read_files = []
+write_files = []
+env_vars = []
+
+[capabilities.logging]
+enabled = true
+level = "debug"
+
+max_memory_mb = 4
+max_cpu_seconds = 5
+
+[provides]
+functions = ["filter_items"]
+
+[metadata]
+wasm_file = "rss_filter.wasm"
