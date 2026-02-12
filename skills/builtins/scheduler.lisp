@@ -10,22 +10,36 @@
 
 ;;; --- Task representation ---
 
-(defstruct (scheduled-task (:constructor %make-scheduled-task))
-  (name "" :type string)
-  (kind :one-shot :type keyword)              ; :one-shot :every :daily
-  (fn (constantly nil) :type function)
-  (action-name nil :type (or null string))    ; name of schedulable action (for persistence)
-  (next-ut 0 :type integer)                   ; universal-time of next fire
-  (interval-seconds 0 :type integer)          ; for :every
-  (daily-hour 0 :type (integer 0 23))         ; for :daily
-  (daily-minute 0 :type (integer 0 59))       ; for :daily
-  (allow-overlap-p nil :type boolean)
-  (running-p nil :type boolean)
-  (run-count 0 :type integer)
-  (last-start-ut nil :type (or null integer))
-  (last-end-ut nil :type (or null integer))
-  (last-duration-us nil :type (or null integer))
-  (last-error nil :type (or null string)))
+(defclass scheduled-task ()
+  ((name :initarg :name :accessor scheduled-task-name :initform "" :type string)
+   (kind :initarg :kind :accessor scheduled-task-kind :initform :one-shot :type keyword)
+   (fn :initarg :fn :accessor scheduled-task-fn :initform (constantly nil) :type function)
+   (action-name :initarg :action-name :accessor scheduled-task-action-name :initform nil :type (or null string))
+   (next-ut :initarg :next-ut :accessor scheduled-task-next-ut :initform 0 :type integer)
+   (interval-seconds :initarg :interval-seconds :accessor scheduled-task-interval-seconds :initform 0 :type integer)
+   (daily-hour :initarg :daily-hour :accessor scheduled-task-daily-hour :initform 0 :type (integer 0 23))
+   (daily-minute :initarg :daily-minute :accessor scheduled-task-daily-minute :initform 0 :type (integer 0 59))
+   (allow-overlap-p :initarg :allow-overlap-p :accessor scheduled-task-allow-overlap-p :initform nil :type boolean)
+   (running-p :initarg :running-p :accessor scheduled-task-running-p :initform nil :type boolean)
+   (run-count :initarg :run-count :accessor scheduled-task-run-count :initform 0 :type integer)
+   (last-start-ut :initarg :last-start-ut :accessor scheduled-task-last-start-ut :initform nil :type (or null integer))
+   (last-end-ut :initarg :last-end-ut :accessor scheduled-task-last-end-ut :initform nil :type (or null integer))
+   (last-duration-us :initarg :last-duration-us :accessor scheduled-task-last-duration-us :initform nil :type (or null integer))
+   (last-error :initarg :last-error :accessor scheduled-task-last-error :initform nil :type (or null string))))
+
+(defun %make-scheduled-task (&key (name "") (kind :one-shot) (fn (constantly nil))
+                              action-name (next-ut 0) (interval-seconds 0)
+                              (daily-hour 0) (daily-minute 0)
+                              allow-overlap-p running-p (run-count 0)
+                              last-start-ut last-end-ut last-duration-us last-error)
+  (make-instance 'scheduled-task
+    :name name :kind kind :fn fn :action-name action-name
+    :next-ut next-ut :interval-seconds interval-seconds
+    :daily-hour daily-hour :daily-minute daily-minute
+    :allow-overlap-p allow-overlap-p :running-p running-p
+    :run-count run-count :last-start-ut last-start-ut
+    :last-end-ut last-end-ut :last-duration-us last-duration-us
+    :last-error last-error))
 
 ;;; --- Schedulable action registry ---
 

@@ -14,12 +14,35 @@
 
 ;;; --- Feed item representation ---
 
-(defstruct (feed-item (:constructor %make-feed-item))
-  (title "" :type string)
-  (link "" :type string)
-  (guid "" :type string)
-  (description "" :type string)
-  (pub-date "" :type string))
+(defclass feed-item ()
+  ((title :initarg :title
+          :initform ""
+          :type string
+          :accessor feed-item-title)
+   (link :initarg :link
+         :initform ""
+         :type string
+         :accessor feed-item-link)
+   (guid :initarg :guid
+         :initform ""
+         :type string
+         :accessor feed-item-guid)
+   (description :initarg :description
+                :initform ""
+                :type string
+                :accessor feed-item-description)
+   (pub-date :initarg :pub-date
+             :initform ""
+             :type string
+             :accessor feed-item-pub-date)))
+
+(defun %make-feed-item (&key (title "") (link "") (guid "") (description "") (pub-date ""))
+  (make-instance 'feed-item
+                 :title title
+                 :link link
+                 :guid guid
+                 :description description
+                 :pub-date pub-date))
 
 ;;; --- XML helpers (xmls returns node structs, not lists) ---
 

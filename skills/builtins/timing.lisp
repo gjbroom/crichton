@@ -41,14 +41,45 @@
 
 ;;; --- Stopwatch accumulator ---
 
-(defstruct (stopwatch (:constructor %make-stopwatch))
-  (name "" :type string)
-  (count 0 :type fixnum)
-  (total-us 0 :type integer)
-  (min-us most-positive-fixnum :type integer)
-  (max-us 0 :type integer)
-  (last-us 0 :type integer)
-  (lock (bt:make-lock "stopwatch") :type t))
+(defclass stopwatch ()
+  ((name :initarg :name
+         :initform ""
+         :type string
+         :accessor stopwatch-name)
+   (count :initarg :count
+          :initform 0
+          :type fixnum
+          :accessor stopwatch-count)
+   (total-us :initarg :total-us
+             :initform 0
+             :type integer
+             :accessor stopwatch-total-us)
+   (min-us :initarg :min-us
+           :initform most-positive-fixnum
+           :type integer
+           :accessor stopwatch-min-us)
+   (max-us :initarg :max-us
+           :initform 0
+           :type integer
+           :accessor stopwatch-max-us)
+   (last-us :initarg :last-us
+            :initform 0
+            :type integer
+            :accessor stopwatch-last-us)
+   (lock :initarg :lock
+         :initform (bt:make-lock "stopwatch")
+         :type t
+         :accessor stopwatch-lock)))
+
+(defun %make-stopwatch (&key (name "") (count 0) (total-us 0) (min-us most-positive-fixnum) (max-us 0) (last-us 0) (lock (bt:make-lock "stopwatch")))
+  (make-instance 'stopwatch
+                 :name name
+                 :count count
+                 :total-us total-us
+                 :min-us min-us
+                 :max-us max-us
+                 :last-us last-us
+                 :lock lock))
 
 (defun make-stopwatch (name)
   "Create a new stopwatch accumulator with the given NAME."

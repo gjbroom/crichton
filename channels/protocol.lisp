@@ -8,14 +8,39 @@
 
 ;;; --- Incoming message representation ---
 
-(defstruct (channel-message (:constructor make-channel-message))
-  (id nil)
-  (text "" :type string)
-  (author-id nil)
-  (author-name nil)
-  (channel-id nil)
-  (guild-id nil)
-  (raw nil))
+(defclass channel-message ()
+  ((id :initarg :id
+       :initform nil
+       :accessor channel-message-id)
+   (text :initarg :text
+         :initform ""
+         :type string
+         :accessor channel-message-text)
+   (author-id :initarg :author-id
+              :initform nil
+              :accessor channel-message-author-id)
+   (author-name :initarg :author-name
+                :initform nil
+                :accessor channel-message-author-name)
+   (channel-id :initarg :channel-id
+               :initform nil
+               :accessor channel-message-channel-id)
+   (guild-id :initarg :guild-id
+             :initform nil
+             :accessor channel-message-guild-id)
+   (raw :initarg :raw
+        :initform nil
+        :accessor channel-message-raw)))
+
+(defun make-channel-message (&key id (text "") author-id author-name channel-id guild-id raw)
+  (make-instance 'channel-message
+                 :id id
+                 :text text
+                 :author-id author-id
+                 :author-name author-name
+                 :channel-id channel-id
+                 :guild-id guild-id
+                 :raw raw))
 
 ;;; --- Channel adapter protocol ---
 

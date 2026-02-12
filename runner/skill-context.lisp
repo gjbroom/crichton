@@ -13,18 +13,18 @@
 (defvar *current-skill* nil
   "The currently executing skill context (bound during skill invocation).")
 
-(defstruct skill-context
-  "Metadata and constraints for a running skill instance."
-  (id "" :type string)              ; Skill identifier
-  (name "" :type string)            ; Skill name (from manifest)
-  (version "" :type string)         ; Skill version
-  (signature "" :type string)       ; Ed25519 signature (if signed)
-  (signed-p nil :type boolean)      ; T if signature was verified
-  (http-allowlist nil :type list)   ; List of allowed HTTP domains
-  (max-memory-mb 64 :type integer)  ; Memory limit
-  (max-cpu-seconds 30 :type integer) ; CPU time limit
-  (kv-store (make-hash-table :test #'equal) :type hash-table) ; Skill's KV store
-  (secret-resolver nil :type (or null function))) ; Function to resolve secrets
+(defclass skill-context ()
+  ((id :initarg :id :accessor skill-context-id :initform "" :type string)
+   (name :initarg :name :accessor skill-context-name :initform "" :type string)
+   (version :initarg :version :accessor skill-context-version :initform "" :type string)
+   (signature :initarg :signature :accessor skill-context-signature :initform "" :type string)
+   (signed-p :initarg :signed-p :accessor skill-context-signed-p :initform nil :type boolean)
+   (http-allowlist :initarg :http-allowlist :accessor skill-context-http-allowlist :initform nil :type list)
+   (max-memory-mb :initarg :max-memory-mb :accessor skill-context-max-memory-mb :initform 64 :type integer)
+   (max-cpu-seconds :initarg :max-cpu-seconds :accessor skill-context-max-cpu-seconds :initform 30 :type integer)
+   (kv-store :initarg :kv-store :accessor skill-context-kv-store :initform (make-hash-table :test #'equal) :type hash-table)
+   (secret-resolver :initarg :secret-resolver :accessor skill-context-secret-resolver :initform nil :type (or null function)))
+  (:documentation "Metadata and constraints for a running skill instance."))
 
 (defun make-skill-context-from-manifest (manifest &key secret-resolver)
   "Create a skill context from a parsed manifest plist.
@@ -32,16 +32,16 @@
    SECRET-RESOLVER is a function (name) -> secret-string or nil."
   (let* ((skill-info (getf manifest :skill))
          (caps (getf manifest :capabilities)))
-    (make-skill-context
-     :id (or (getf skill-info :id) (format nil "skill-~A" (random 1000000)))
-     :name (getf skill-info :name)
-     :version (getf skill-info :version)
-     :signature (getf skill-info :signature)
-     :signed-p nil  ; Will be set to T if verification passes
-     :http-allowlist (getf caps :http-domains)
-     :max-memory-mb (or (getf caps :max-memory-mb) 64)
-     :max-cpu-seconds (or (getf caps :max-cpu-seconds) 30)
-     :secret-resolver secret-resolver)))
+    (make-instance 'skill-context
+      :id (or (getf skill-info :id) (format nil "skill-~A" (random 1000000)))
+      :name (getf skill-info :name)
+      :version (getf skill-info :version)
+      :signature (getf skill-info :signature)
+      :signed-p nil
+      :http-allowlist (getf caps :http-domains)
+      :max-memory-mb (or (getf caps :max-memory-mb) 64)
+      :max-cpu-seconds (or (getf caps :max-cpu-seconds) 30)
+      :secret-resolver secret-resolver)))
 
 (defun call-with-skill-context (context fn)
   "Execute FN with *CURRENT-SKILL* bound to CONTEXT.

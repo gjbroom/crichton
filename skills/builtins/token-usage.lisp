@@ -55,12 +55,35 @@
 ;;; Usage record
 ;;; ====================================================================
 
-(defstruct (usage-record (:constructor %make-usage-record))
-  (timestamp 0 :type integer)
-  (tier "" :type string)
-  (input-units 0 :type integer)
-  (output-units 0 :type integer)
-  (estimated-cost nil :type (or null double-float)))
+(defclass usage-record ()
+  ((timestamp :initarg :timestamp
+              :initform 0
+              :type integer
+              :accessor usage-record-timestamp)
+   (tier :initarg :tier
+         :initform ""
+         :type string
+         :accessor usage-record-tier)
+   (input-units :initarg :input-units
+                :initform 0
+                :type integer
+                :accessor usage-record-input-units)
+   (output-units :initarg :output-units
+                 :initform 0
+                 :type integer
+                 :accessor usage-record-output-units)
+   (estimated-cost :initarg :estimated-cost
+                   :initform nil
+                   :type (or null double-float)
+                   :accessor usage-record-estimated-cost)))
+
+(defun %make-usage-record (&key (timestamp 0) (tier "") (input-units 0) (output-units 0) (estimated-cost nil))
+  (make-instance 'usage-record
+                 :timestamp timestamp
+                 :tier tier
+                 :input-units input-units
+                 :output-units output-units
+                 :estimated-cost estimated-cost))
 
 (defun make-usage-record (meter-name tier input-units output-units)
   (%make-usage-record
@@ -74,16 +97,55 @@
 ;;; Meter — thread-safe accumulator for one named service
 ;;; ====================================================================
 
-(defstruct (meter (:constructor %make-meter))
-  (name "" :type string)
-  (start-time (get-universal-time) :type integer)
-  (total-input 0 :type integer)
-  (total-output 0 :type integer)
-  (total-cost 0.0d0 :type double-float)
-  (call-count 0 :type fixnum)
-  (history nil :type list)
-  (max-history 1000 :type fixnum)
-  (lock (bt:make-lock "meter") :type t))
+(defclass meter ()
+  ((name :initarg :name
+         :initform ""
+         :type string
+         :accessor meter-name)
+   (start-time :initarg :start-time
+               :initform (get-universal-time)
+               :type integer
+               :accessor meter-start-time)
+   (total-input :initarg :total-input
+                :initform 0
+                :type integer
+                :accessor meter-total-input)
+   (total-output :initarg :total-output
+                 :initform 0
+                 :type integer
+                 :accessor meter-total-output)
+   (total-cost :initarg :total-cost
+               :initform 0.0d0
+               :type double-float
+               :accessor meter-total-cost)
+   (call-count :initarg :call-count
+               :initform 0
+               :type fixnum
+               :accessor meter-call-count)
+   (history :initarg :history
+            :initform nil
+            :type list
+            :accessor meter-history)
+   (max-history :initarg :max-history
+                :initform 1000
+                :type fixnum
+                :accessor meter-max-history)
+   (lock :initarg :lock
+         :initform (bt:make-lock "meter")
+         :type t
+         :accessor meter-lock)))
+
+(defun %make-meter (&key (name "") (start-time (get-universal-time)) (total-input 0) (total-output 0) (total-cost 0.0d0) (call-count 0) (history nil) (max-history 1000) (lock (bt:make-lock "meter")))
+  (make-instance 'meter
+                 :name name
+                 :start-time start-time
+                 :total-input total-input
+                 :total-output total-output
+                 :total-cost total-cost
+                 :call-count call-count
+                 :history history
+                 :max-history max-history
+                 :lock lock))
 
 ;;; ====================================================================
 ;;; Meter registry
