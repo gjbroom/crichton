@@ -69,6 +69,8 @@
            #:run-wasm-module
            #:run-wasm-with-host-fns
            #:run-wasm-bytes-with-host-fns
+           #:run-wasm-json-call
+           #:run-wasm-bytes-json-call
            #:wat-to-wasm
            #:make-functype
            #:*test-host-log-wat*))

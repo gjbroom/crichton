@@ -33,6 +33,9 @@
           ((string-equal op "invoke")
            (handle-invoke id msg))
 
+          ((string-equal op "invoke_json")
+           (handle-invoke-json id msg))
+
           (t
            (crichton/rpc:make-error-response
             id "unknown_op"
@@ -91,6 +94,44 @@
                          wasm-bytes export-name
                          :args args-list
                          :nresults nresults))))))
+        (crichton/rpc:make-ok-response id result)))))
+
+(defun handle-invoke-json (id msg)
+  "Handle an 'invoke_json' request using the JSON-through-memory ABI.
+Request fields:
+  wat       - WAT source string (mutually exclusive with wasm_b64)
+  wasm_b64  - base64-encoded WASM bytes (mutually exclusive with wat)
+  export    - export function name to call
+  params    - JSON object to pass as input
+  manifest  - (optional) capability manifest"
+  (let* ((wat (crichton/rpc:msg-get msg "wat"))
+         (wasm-b64 (crichton/rpc:msg-get msg "wasm_b64"))
+         (export-name (crichton/rpc:msg-get msg "export"))
+         (params (or (crichton/rpc:msg-get msg "params")
+                     (make-hash-table :test #'equal)))
+         (manifest (crichton/rpc:msg-get msg "manifest")))
+    (unless export-name
+      (error "Missing required field: export"))
+    (unless (or wat wasm-b64)
+      (error "Missing required field: wat or wasm_b64"))
+    (let ((context (when manifest
+                     (make-skill-context-from-manifest manifest))))
+      (let ((result
+              (if context
+                  (call-with-skill-context context
+                    (lambda ()
+                      (if wat
+                          (crichton/wasm:run-wasm-json-call
+                           wat export-name params)
+                          (let ((wasm-bytes (crichton/rpc:base64-to-bytes wasm-b64)))
+                            (crichton/wasm:run-wasm-bytes-json-call
+                             wasm-bytes export-name params)))))
+                  (if wat
+                      (crichton/wasm:run-wasm-json-call
+                       wat export-name params)
+                      (let ((wasm-bytes (crichton/rpc:base64-to-bytes wasm-b64)))
+                        (crichton/wasm:run-wasm-bytes-json-call
+                         wasm-bytes export-name params))))))
         (crichton/rpc:make-ok-response id result)))))
 
 ;;; --- Connection handler ---

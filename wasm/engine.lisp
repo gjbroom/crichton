@@ -817,6 +817,363 @@
       (log:error "Host get-secret callback error: ~A" c)))
   (cffi:null-pointer))
 
+;;; --- JSON-through-memory ABI ---
+;;;
+;;; For skills that need structured I/O (e.g. RSS filter), the host:
+;;;   1. Serializes a Lisp structure to JSON bytes
+;;;   2. Calls the WASM module's exported alloc(size) -> ptr
+;;;   3. Copies JSON bytes into WASM linear memory at the returned ptr
+;;;   4. Allocates an output buffer via alloc
+;;;   5. Calls the target function with (params_ptr, params_len, out_ptr, out_len) -> i32
+;;;   6. Reads JSON result from the output buffer
+;;;   7. Calls exported dealloc(ptr, size) to free both buffers
+;;;   8. Parses the JSON result back to a Lisp structure
+
+(defconstant +json-output-buffer-size+ 65536
+  "Default output buffer size for JSON ABI calls (64 KiB).")
+
+(defun get-wasm-memory (context instance)
+  "Get the WASM linear memory base pointer and size from INSTANCE.
+Returns (values base-pointer memory-size memory-ptr)."
+  (cffi:with-foreign-object (mem-ext '(:struct wasmtime-extern))
+    (unless (wasmtime-instance-export-get context instance "memory" 6 mem-ext)
+      (error "WASM module does not export 'memory'"))
+    (let* ((mem-ptr (wasmtime-extern-memory-ptr mem-ext))
+           (base (wasmtime-memory-data context mem-ptr))
+           (mem-size (wasmtime-memory-data-size context mem-ptr)))
+      (when (cffi:null-pointer-p base)
+        (error "WASM memory base pointer is null"))
+      (values base mem-size mem-ptr))))
+
+(defun get-wasm-export-func (context instance name)
+  "Get a function export from INSTANCE by NAME. Returns the func pointer."
+  (cffi:with-foreign-object (ext '(:struct wasmtime-extern))
+    (unless (wasmtime-instance-export-get
+             context instance name (length name) ext)
+      (error "Export ~S not found" name))
+    (wasmtime-extern-func-ptr ext)))
+
+(defun call-wasm-alloc (context alloc-func size)
+  "Call the WASM alloc(size) -> ptr function. Returns the i32 pointer.
+Signals an error if alloc returns 0 (null)."
+  (cffi:with-foreign-objects ((args '(:struct wasmtime-val) 1)
+                              (results '(:struct wasmtime-val) 1)
+                              (trap-ptr :pointer))
+    (setf (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 0)) size)
+    (setf (cffi:mem-ref trap-ptr :pointer) (cffi:null-pointer))
+    (let ((err (wasmtime-func-call context alloc-func args 1 results 1 trap-ptr)))
+      (check-wasmtime-error err trap-ptr "alloc"))
+    (let ((ptr (wasmtime-val-i32 results)))
+      (when (zerop ptr)
+        (error "WASM alloc(~D) returned null pointer" size))
+      ptr)))
+
+(defun call-wasm-dealloc (context dealloc-func ptr size)
+  "Call the WASM dealloc(ptr, size) function. Ignores errors from dealloc."
+  (handler-case
+      (cffi:with-foreign-objects ((args '(:struct wasmtime-val) 2)
+                                  (trap-ptr :pointer))
+        (setf (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 0)) ptr)
+        (setf (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 1)) size)
+        (setf (cffi:mem-ref trap-ptr :pointer) (cffi:null-pointer))
+        (let ((err (wasmtime-func-call context dealloc-func args 2
+                                       (cffi:null-pointer) 0 trap-ptr)))
+          (check-wasmtime-error err trap-ptr "dealloc")))
+    (error (c)
+      (log:warn "dealloc failed (non-fatal): ~A" c))))
+
+(defun write-bytes-to-wasm-memory (context instance bytes wasm-ptr)
+  "Write BYTES (an octet vector) into WASM linear memory at WASM-PTR offset."
+  (multiple-value-bind (base mem-size) (get-wasm-memory context instance)
+    (let ((len (length bytes)))
+      (when (> (+ wasm-ptr len) mem-size)
+        (error "Write would exceed WASM memory: offset ~D + len ~D > size ~D"
+               wasm-ptr len mem-size))
+      (loop for i below len
+            do (setf (cffi:mem-aref base :uint8 (+ wasm-ptr i))
+                     (aref bytes i))))))
+
+(defun read-bytes-from-wasm-memory (context instance wasm-ptr len)
+  "Read LEN bytes from WASM linear memory at WASM-PTR offset.
+Returns a Lisp string (UTF-8 decoded)."
+  (multiple-value-bind (base mem-size) (get-wasm-memory context instance)
+    (when (> (+ wasm-ptr len) mem-size)
+      (error "Read would exceed WASM memory: offset ~D + len ~D > size ~D"
+             wasm-ptr len mem-size))
+    (cffi:foreign-string-to-lisp (cffi:inc-pointer base wasm-ptr)
+                                 :count len :encoding :utf-8)))
+
+(defun call-wasm-json-func (context func-ptr params-ptr params-len out-ptr out-len)
+  "Call a WASM function with JSON ABI signature:
+  (i32 params_ptr, i32 params_len, i32 out_ptr, i32 out_len) -> i32
+Returns the i32 return code."
+  (cffi:with-foreign-objects ((args '(:struct wasmtime-val) 4)
+                              (results '(:struct wasmtime-val) 1)
+                              (trap-ptr :pointer))
+    (setf (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 0)) params-ptr)
+    (setf (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 1)) params-len)
+    (setf (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 2)) out-ptr)
+    (setf (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 3)) out-len)
+    (setf (cffi:mem-ref trap-ptr :pointer) (cffi:null-pointer))
+    (let ((err (wasmtime-func-call context func-ptr args 4 results 1 trap-ptr)))
+      (check-wasmtime-error err trap-ptr "json_func_call"))
+    (wasmtime-val-i32 results)))
+
+(defun json-call-with-instance (context instance export-name params
+                                &key (output-buffer-size +json-output-buffer-size+))
+  "Execute a JSON ABI call on an already-instantiated WASM module.
+PARAMS is a Lisp data structure (hash-table, plist, etc.) to serialize as JSON.
+Returns the parsed JSON result."
+  (let* ((json-string (with-output-to-string (s)
+                        (shasht:write-json params s)))
+         (json-bytes (sb-ext:string-to-octets json-string :external-format :utf-8))
+         (json-len (length json-bytes))
+         (alloc-func (get-wasm-export-func context instance "alloc"))
+         (dealloc-func (get-wasm-export-func context instance "dealloc"))
+         (target-func (get-wasm-export-func context instance export-name))
+         (in-ptr 0)
+         (out-ptr 0))
+    (unwind-protect
+         (progn
+           (setf in-ptr (call-wasm-alloc context alloc-func json-len))
+           (write-bytes-to-wasm-memory context instance json-bytes in-ptr)
+           (setf out-ptr (call-wasm-alloc context alloc-func output-buffer-size))
+           (let ((rc (call-wasm-json-func context target-func
+                                          in-ptr json-len
+                                          out-ptr output-buffer-size)))
+             (unless (zerop rc)
+               (error "WASM JSON function ~S returned non-zero: ~D" export-name rc))
+             (let ((result-str (read-bytes-from-wasm-memory
+                                context instance out-ptr output-buffer-size)))
+               (let ((trimmed (string-right-trim '(#\Nul) result-str)))
+                 (if (zerop (length trimmed))
+                     nil
+                     (shasht:read-json trimmed))))))
+      (when (plusp in-ptr)
+        (call-wasm-dealloc context dealloc-func in-ptr json-len))
+      (when (plusp out-ptr)
+        (call-wasm-dealloc context dealloc-func out-ptr output-buffer-size)))))
+
+(defun run-wasm-json-call (wat-string export-name params
+                           &key (output-buffer-size +json-output-buffer-size+))
+  "Compile WAT, register host functions via linker, instantiate, and call
+EXPORT-NAME using the JSON-through-memory ABI.
+PARAMS is a Lisp data structure to serialize as JSON input.
+Returns the parsed JSON result."
+  (ensure-wasmtime-loaded)
+  (assert-wasmtime-abi)
+  (let ((engine (wasm-engine-new))
+        (store nil)
+        (module nil)
+        (linker nil)
+        (log-functype nil)
+        (kv-get-functype nil)
+        (kv-set-functype nil)
+        (kv-delete-functype nil)
+        (kv-exists-functype nil)
+        (kv-list-functype nil)
+        (http-functype nil)
+        (secret-functype nil))
+    (when (cffi:null-pointer-p engine)
+      (error "Failed to create wasmtime engine"))
+    (unwind-protect
+         (progn
+           (setf store (wasmtime-store-new engine (cffi:null-pointer) (cffi:null-pointer)))
+           (when (cffi:null-pointer-p store)
+             (error "Failed to create wasmtime store"))
+           (setf linker (wasmtime-linker-new engine))
+           (when (cffi:null-pointer-p linker)
+             (error "Failed to create wasmtime linker"))
+           (let ((context (wasmtime-store-context store)))
+             (setf log-functype (make-functype
+                                 (list +wasm-i32+ +wasm-i32+ +wasm-i32+) '()))
+             (define-host-fn linker engine log-functype
+                            "env" 3 "log" 3
+                            (cffi:callback host-log-callback))
+             (setf kv-get-functype (make-functype
+                                    (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
+             (define-host-fn linker engine kv-get-functype
+                            "env" 3 "kv_get" 6
+                            (cffi:callback host-kv-get-callback))
+             (setf kv-set-functype (make-functype
+                                    (list +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+)
+                                    (list +wasm-i32+)))
+             (define-host-fn linker engine kv-set-functype
+                            "env" 3 "kv_set" 6
+                            (cffi:callback host-kv-set-callback))
+             (setf kv-delete-functype (make-functype
+                                       (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
+             (define-host-fn linker engine kv-delete-functype
+                            "env" 3 "kv_delete" 9
+                            (cffi:callback host-kv-delete-callback))
+             (setf kv-exists-functype (make-functype
+                                       (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
+             (define-host-fn linker engine kv-exists-functype
+                            "env" 3 "kv_exists" 9
+                            (cffi:callback host-kv-exists-callback))
+             (setf kv-list-functype (make-functype
+                                     (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
+             (define-host-fn linker engine kv-list-functype
+                            "env" 3 "kv_list" 7
+                            (cffi:callback host-kv-list-callback))
+             (setf http-functype (make-functype
+                                  (list +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+
+                                        +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+)
+                                  (list +wasm-i32+)))
+             (define-host-fn linker engine http-functype
+                            "env" 3 "http_request" 12
+                            (cffi:callback host-http-request-callback))
+             (setf secret-functype (make-functype
+                                    (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
+             (define-host-fn linker engine secret-functype
+                            "env" 3 "get_secret" 10
+                            (cffi:callback host-get-secret-callback))
+             (cffi:with-foreign-object (wasm-bytes '(:struct wasm-byte-vec))
+               (let ((wat-err (wasmtime-wat2wasm wat-string (length wat-string) wasm-bytes)))
+                 (unless (cffi:null-pointer-p wat-err)
+                   (error "WAT parse error: ~A" (wasmtime-error-to-string wat-err)))
+                 (unwind-protect
+                      (let ((wasm-data (cffi:foreign-slot-value
+                                        wasm-bytes '(:struct wasm-byte-vec) 'data))
+                            (wasm-size (cffi:foreign-slot-value
+                                        wasm-bytes '(:struct wasm-byte-vec) 'size)))
+                        (cffi:with-foreign-object (module-ptr :pointer)
+                          (let ((mod-err (wasmtime-module-new
+                                         engine wasm-data wasm-size module-ptr)))
+                            (unless (cffi:null-pointer-p mod-err)
+                              (error "Module compile error: ~A"
+                                     (wasmtime-error-to-string mod-err)))
+                            (setf module (cffi:mem-ref module-ptr :pointer))
+                            (cffi:with-foreign-objects ((instance '(:struct wasmtime-instance))
+                                                       (trap-ptr :pointer))
+                              (setf (cffi:mem-ref trap-ptr :pointer) (cffi:null-pointer))
+                              (let ((inst-err (wasmtime-linker-instantiate
+                                              linker context module
+                                              instance trap-ptr)))
+                                (check-wasmtime-error inst-err trap-ptr "linker_instantiate"))
+                              (json-call-with-instance
+                               context instance export-name params
+                               :output-buffer-size output-buffer-size)))))
+                   (wasm-byte-vec-delete wasm-bytes))))))
+      (when log-functype (wasm-functype-delete log-functype))
+      (when kv-get-functype (wasm-functype-delete kv-get-functype))
+      (when kv-set-functype (wasm-functype-delete kv-set-functype))
+      (when kv-delete-functype (wasm-functype-delete kv-delete-functype))
+      (when kv-exists-functype (wasm-functype-delete kv-exists-functype))
+      (when kv-list-functype (wasm-functype-delete kv-list-functype))
+      (when http-functype (wasm-functype-delete http-functype))
+      (when secret-functype (wasm-functype-delete secret-functype))
+      (when linker (wasmtime-linker-delete linker))
+      (when module (wasmtime-module-delete module))
+      (when store (wasmtime-store-delete store))
+      (wasm-engine-delete engine))))
+
+(defun run-wasm-bytes-json-call (wasm-bytes export-name params
+                                 &key (output-buffer-size +json-output-buffer-size+))
+  "Like run-wasm-json-call but accepts pre-compiled WASM bytes (octet vector)
+instead of a WAT string."
+  (ensure-wasmtime-loaded)
+  (assert-wasmtime-abi)
+  (let ((engine (wasm-engine-new))
+        (store nil)
+        (module nil)
+        (linker nil)
+        (log-functype nil)
+        (kv-get-functype nil)
+        (kv-set-functype nil)
+        (kv-delete-functype nil)
+        (kv-exists-functype nil)
+        (kv-list-functype nil)
+        (http-functype nil)
+        (secret-functype nil)
+        (wasm-len (length wasm-bytes)))
+    (when (cffi:null-pointer-p engine)
+      (error "Failed to create wasmtime engine"))
+    (unwind-protect
+         (progn
+           (setf store (wasmtime-store-new engine (cffi:null-pointer) (cffi:null-pointer)))
+           (when (cffi:null-pointer-p store)
+             (error "Failed to create wasmtime store"))
+           (setf linker (wasmtime-linker-new engine))
+           (when (cffi:null-pointer-p linker)
+             (error "Failed to create wasmtime linker"))
+           (let ((context (wasmtime-store-context store)))
+             (setf log-functype (make-functype
+                                 (list +wasm-i32+ +wasm-i32+ +wasm-i32+) '()))
+             (define-host-fn linker engine log-functype
+                            "env" 3 "log" 3
+                            (cffi:callback host-log-callback))
+             (setf kv-get-functype (make-functype
+                                    (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
+             (define-host-fn linker engine kv-get-functype
+                            "env" 3 "kv_get" 6
+                            (cffi:callback host-kv-get-callback))
+             (setf kv-set-functype (make-functype
+                                    (list +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+)
+                                    (list +wasm-i32+)))
+             (define-host-fn linker engine kv-set-functype
+                            "env" 3 "kv_set" 6
+                            (cffi:callback host-kv-set-callback))
+             (setf kv-delete-functype (make-functype
+                                       (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
+             (define-host-fn linker engine kv-delete-functype
+                            "env" 3 "kv_delete" 9
+                            (cffi:callback host-kv-delete-callback))
+             (setf kv-exists-functype (make-functype
+                                       (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
+             (define-host-fn linker engine kv-exists-functype
+                            "env" 3 "kv_exists" 9
+                            (cffi:callback host-kv-exists-callback))
+             (setf kv-list-functype (make-functype
+                                     (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
+             (define-host-fn linker engine kv-list-functype
+                            "env" 3 "kv_list" 7
+                            (cffi:callback host-kv-list-callback))
+             (setf http-functype (make-functype
+                                  (list +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+
+                                        +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+)
+                                  (list +wasm-i32+)))
+             (define-host-fn linker engine http-functype
+                            "env" 3 "http_request" 12
+                            (cffi:callback host-http-request-callback))
+             (setf secret-functype (make-functype
+                                    (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
+             (define-host-fn linker engine secret-functype
+                            "env" 3 "get_secret" 10
+                            (cffi:callback host-get-secret-callback))
+             (cffi:with-foreign-object (wasm-ptr :uint8 wasm-len)
+               (loop for i below wasm-len
+                     do (setf (cffi:mem-aref wasm-ptr :uint8 i)
+                              (aref wasm-bytes i)))
+               (cffi:with-foreign-object (module-ptr :pointer)
+                 (let ((mod-err (wasmtime-module-new engine wasm-ptr wasm-len module-ptr)))
+                   (unless (cffi:null-pointer-p mod-err)
+                     (error "Module compile error: ~A"
+                            (wasmtime-error-to-string mod-err)))
+                   (setf module (cffi:mem-ref module-ptr :pointer))
+                   (cffi:with-foreign-objects ((instance '(:struct wasmtime-instance))
+                                              (trap-ptr :pointer))
+                     (setf (cffi:mem-ref trap-ptr :pointer) (cffi:null-pointer))
+                     (let ((inst-err (wasmtime-linker-instantiate
+                                     linker context module
+                                     instance trap-ptr)))
+                       (check-wasmtime-error inst-err trap-ptr "linker_instantiate"))
+                     (json-call-with-instance
+                      context instance export-name params
+                      :output-buffer-size output-buffer-size)))))))
+      (when log-functype (wasm-functype-delete log-functype))
+      (when kv-get-functype (wasm-functype-delete kv-get-functype))
+      (when kv-set-functype (wasm-functype-delete kv-set-functype))
+      (when kv-delete-functype (wasm-functype-delete kv-delete-functype))
+      (when kv-exists-functype (wasm-functype-delete kv-exists-functype))
+      (when kv-list-functype (wasm-functype-delete kv-list-functype))
+      (when http-functype (wasm-functype-delete http-functype))
+      (when secret-functype (wasm-functype-delete secret-functype))
+      (when linker (wasmtime-linker-delete linker))
+      (when module (wasmtime-module-delete module))
+      (when store (wasmtime-store-delete store))
+      (wasm-engine-delete engine))))
+
 ;;; --- Test WAT for host functions ---
 
 (defparameter *test-host-log-wat*
