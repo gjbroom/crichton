@@ -73,7 +73,7 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
 
 * Planned Features
 
-** TODO v0.2 "Polish & Channels" [5/9]
+** TODO v0.2 "Polish & Channels" [6/9]
 
    Focus on user experience improvements and completing channel integration.
 
@@ -110,11 +110,12 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
     - [X] Threshold configuration in config.toml
     - [ ] Integration with notification system (Pushover)
 
-*** TODO [#B] Persistence [4/5]
+*** DONE [#B] Persistence [5/5]
+    CLOSED: [2026-02-13 Thu]
     - [X] Persistent key-value store for WASM skills (cricht-mue, cricht-ms8, cricht-clx)
     - [X] Age-encrypted per-skill KV files with write-through cache and quota enforcement
     - [X] Local persistent data store for daemon state (cricht-056)
-    - [ ] Persist RSS seen-item tracking
+    - [X] Persist RSS seen-item tracking
     - [X] Persist token-usage statistics
 
 *** TODO [#C] Mastodon Integration
