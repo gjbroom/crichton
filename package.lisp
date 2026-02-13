@@ -174,6 +174,12 @@
            #:rss-monitor-stop
            #:rss-list-monitors
            #:clear-seen
+           #:persist-rss-state
+           #:load-rss-state
+           #:clear-all-rss-state
+           #:rss-state-stats
+           #:enable-rss-persistence
+           #:disable-rss-persistence
            ;; token-usage / metered resources
            #:register-pricing
            #:record-usage
