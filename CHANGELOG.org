@@ -54,6 +54,12 @@ For development details, see the git commit history and BEADS issue tracker.
   - User-defined tasks (=user:*= prefix) automatically saved to encrypted storage
   - Restored on daemon startup with graceful handling of missing actions
   - Storage location: =~/.crichton/tasks/user-tasks.age=
+- External WASM skill registry and management system (cricht-6d7)
+  - Automatic discovery of skills in =~/.crichton/skills/= at daemon startup
+  - On-demand loading and compilation of WASM skills (=skill.wasm= or =skill.wat=)
+  - New =skills= agent tool with =list=, =info=, =invoke=, and =refresh= actions
+  - Automatic registration of discovered skills as schedulable actions (=skill:<name>= prefix)
+  - Skills can now be scheduled to run periodically via the scheduler tool
 
 ** Changed
 

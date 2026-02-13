@@ -73,7 +73,7 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
 
 * Planned Features
 
-** TODO v0.2 "Polish & Channels" [4/8]
+** TODO v0.2 "Polish & Channels" [5/9]
 
    Focus on user experience improvements and completing channel integration.
 
@@ -131,6 +131,16 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
     - [X] Example Rust WASM skill (examples/skills/rss-filter/)
     - [ ] Security model documentation
     - [ ] API reference
+
+*** DONE [#B] External Skill Registry & Management
+    CLOSED: [2026-02-13 Thu]
+    - [X] Skill discovery from =~/.crichton/skills/= directory (cricht-6d7)
+    - [X] Automatic manifest parsing and registry population
+    - [X] On-demand WASM loading and compilation (=.wasm= or =.wat= sources)
+    - [X] =skills= agent tool with =list=, =info=, =invoke=, and =refresh= actions
+    - [X] Automatic registration of skills as schedulable actions
+    - [X] Integration with scheduler tool for periodic skill execution
+    - [X] Cache management for loaded WASM bytecode
 
 ** TODO v0.3 "Skills & Integrations" [0/7]
 
