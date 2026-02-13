@@ -68,6 +68,17 @@
     (error (c)
       (log:warn "KV cache preload at startup failed: ~A" c)))
   (handler-case
+      (progn
+        (ensure-directories-exist
+         (merge-pathnames "data/" crichton/config:*agent-home*))
+        (crichton/storage:preload-storage))
+    (error (c)
+      (log:warn "Storage preload at startup failed: ~A" c)))
+  (handler-case
+      (crichton/skills:load-meters)
+    (error (c)
+      (log:warn "Meter restoration at startup failed: ~A" c)))
+  (handler-case
       (start-rpc-server)
     (error (c)
       (log:warn "RPC server startup failed: ~A" c)))
@@ -116,6 +127,14 @@
       (crichton/skills:persist-user-tasks)
     (error (c)
       (log:warn "Task persistence at shutdown failed: ~A" c)))
+  (handler-case
+      (crichton/skills:save-meters)
+    (error (c)
+      (log:warn "Meter persistence at shutdown failed: ~A" c)))
+  (handler-case
+      (crichton/storage:flush-all-storage)
+    (error (c)
+      (log:warn "Storage flush at shutdown failed: ~A" c)))
   (crichton/skills:stop-scheduler)
   (setf *running* nil)
   (bt:with-lock-held (*shutdown-lock*)
