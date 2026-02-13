@@ -33,6 +33,8 @@ signing. Informed by a security audit of OpenClaw."
                              (:file "loader")))
                (:module "logging"
                 :components ((:file "logger")))
+               (:module "storage"
+                :components ((:file "store")))
                (:module "rpc"
                 :components ((:file "protocol")))
                (:module "wasm"

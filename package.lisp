@@ -13,6 +13,25 @@
            #:config-get
            #:config-section-get))
 
+(defpackage #:crichton/storage
+  (:use #:cl)
+  (:local-nicknames (#:bt #:bordeaux-threads))
+  (:export #:store-get
+           #:store-set
+           #:store-delete
+           #:store-exists-p
+           #:store-list-keys
+           #:store-list-namespaces
+           #:store-get-all
+           #:store-set-all
+           #:store-clear-namespace
+           #:flush-namespace
+           #:flush-all-storage
+           #:preload-storage
+           #:clear-storage-cache
+           #:storage-usage
+           #:storage-report))
+
 (defpackage #:crichton/logging
   (:use #:cl)
   (:export #:setup-logging
@@ -168,6 +187,11 @@
            #:aggregate-snapshot
            #:meter-report
            #:usage-report
+           #:save-meters
+           #:load-meters
+           #:persist-meter
+           #:enable-meter-persistence
+           #:disable-meter-persistence
            ;; battery monitoring
            #:has-battery-p
            #:list-batteries
