@@ -154,6 +154,8 @@
 (defvar *meters* (make-hash-table :test #'equal)
   "Registry of named meters.")
 (defvar *meters-lock* (bt:make-lock "meters-registry"))
+(defvar *auto-persist-meters* t
+  "If true, automatically persist meters after each usage recording.")
 
 (defun ensure-meter (name)
   "Get or create a named meter. Thread-safe."
@@ -204,6 +206,9 @@
       (when (> (length (meter-history m)) (meter-max-history m))
         (setf (meter-history m)
               (subseq (meter-history m) 0 (meter-max-history m)))))
+    ;; Auto-persist if enabled
+    (when *auto-persist-meters*
+      (persist-meter meter-name))
     record))
 
 ;;; ====================================================================
@@ -348,3 +353,78 @@
       (dolist (name names)
         (meter-report name :stream stream :recent recent)
         (format stream "~%")))))
+
+;;; ====================================================================
+;;; Persistence — save/restore meters to encrypted storage
+;;; ====================================================================
+
+(defun meter-to-plist (meter)
+  "Convert a METER object to a plist for serialization.
+   History is not persisted (too large and ephemeral)."
+  (bt:with-lock-held ((meter-lock meter))
+    (list :name (meter-name meter)
+          :start-time (meter-start-time meter)
+          :total-input (meter-total-input meter)
+          :total-output (meter-total-output meter)
+          :total-cost (meter-total-cost meter)
+          :call-count (meter-call-count meter))))
+
+(defun plist-to-meter (plist)
+  "Create a METER object from a persisted plist."
+  (%make-meter :name (getf plist :name)
+               :start-time (getf plist :start-time (get-universal-time))
+               :total-input (getf plist :total-input 0)
+               :total-output (getf plist :total-output 0)
+               :total-cost (coerce (getf plist :total-cost 0) 'double-float)
+               :call-count (getf plist :call-count 0)
+               :history nil
+               :max-history 1000))
+
+(defun save-meters ()
+  "Persist all meters to storage. Thread-safe."
+  (bt:with-lock-held (*meters-lock*)
+    (let ((meter-data (make-hash-table :test #'equal)))
+      (maphash (lambda (name meter)
+                 (setf (gethash name meter-data)
+                       (meter-to-plist meter)))
+               *meters*)
+      (crichton/storage:store-set "meters" "all-meters" meter-data)
+      (log:debug "Saved ~D meter~:P to storage" (hash-table-count meter-data))
+      (hash-table-count meter-data))))
+
+(defun load-meters ()
+  "Load meters from storage. Thread-safe. Returns number of meters loaded."
+  (bt:with-lock-held (*meters-lock*)
+    (let ((meter-data (crichton/storage:store-get "meters" "all-meters")))
+      (if (null meter-data)
+          (progn
+            (log:info "No persisted meters found in storage")
+            0)
+          (let ((count 0))
+            (maphash (lambda (name plist)
+                       (setf (gethash name *meters*)
+                             (plist-to-meter plist))
+                       (incf count))
+                     meter-data)
+            (log:info "Loaded ~D meter~:P from storage" count)
+            count)))))
+
+(defun persist-meter (meter-name)
+  "Persist a single meter to storage immediately. Thread-safe."
+  (bt:with-lock-held (*meters-lock*)
+    (let ((meter (gethash meter-name *meters*)))
+      (when meter
+        (let ((meter-data (or (crichton/storage:store-get "meters" "all-meters")
+                              (make-hash-table :test #'equal))))
+          (setf (gethash meter-name meter-data)
+                (meter-to-plist meter))
+          (crichton/storage:store-set "meters" "all-meters" meter-data)
+          t)))))
+
+(defun enable-meter-persistence ()
+  "Enable automatic meter persistence."
+  (setf *auto-persist-meters* t))
+
+(defun disable-meter-persistence ()
+  "Disable automatic meter persistence."
+  (setf *auto-persist-meters* nil))
