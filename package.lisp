@@ -91,6 +91,15 @@
            #:verify-skill-signature
            #:load-trusted-keys
            #:verify-skill-bundle
+           ;; skill registry
+           #:skill-entry
+           #:discover-skills
+           #:list-skills
+           #:skill-info
+           #:load-skill
+           #:invoke-skill
+           #:unload-skill
+           #:skill-report
            #:weather-report
            #:weather-conditions
            #:system-loadavg

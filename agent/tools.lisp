@@ -529,6 +529,52 @@
            (with-output-to-string (s)
              (crichton/skills:amp-report result :stream s))))))))
 
+;;; --- Skills tool ---
+
+(defun register-skills-tool ()
+  (multiple-value-bind (props required)
+      (make-properties
+       '("action" "string"
+         "The skills action to perform."
+         :enum ("list" "info" "invoke" "refresh")
+         :required-p t)
+       '("name" "string"
+         "Skill name. Required for info and invoke."))
+    (register-tool
+     "skills"
+     "Manage external WASM skills. Actions: 'list' (show all discovered skills), 'info' (get details for a specific skill), 'invoke' (run a skill), 'refresh' (re-scan skills directory). Skills are discovered from ~/.crichton/skills/ and can be scheduled using the scheduler tool."
+     (make-json-schema :type "object" :properties props :required required)
+     (lambda (input)
+       (block handler
+         (let ((action (hget input "action" "list")))
+           (cond
+             ((string-equal action "list")
+              (crichton/skills:discover-skills)  ; refresh before listing
+              (with-output-to-string (s)
+                (crichton/skills:skill-report :stream s)))
+             ((string-equal action "info")
+              (let* ((name (hget input "name"))
+                     (info (crichton/skills:skill-info name)))
+                (unless name
+                  (return-from handler "Error: 'name' is required for info action."))
+                (if info
+                    (format nil "~S" info)
+                    (format nil "Skill '~A' not found." name))))
+             ((string-equal action "invoke")
+              (let ((name (hget input "name")))
+                (unless name
+                  (return-from handler "Error: 'name' is required for invoke action."))
+                (handler-case
+                    (let ((result (crichton/skills:invoke-skill name)))
+                      (format nil "Skill '~A' returned: ~A" name result))
+                  (error (c)
+                    (format nil "Error invoking skill '~A': ~A" name c)))))
+             ((string-equal action "refresh")
+              (let ((count (crichton/skills:discover-skills)))
+                (format nil "Discovered ~D skill~:P." count)))
+             (t
+              (format nil "Unknown skills action: ~A" action)))))))))
+
 ;;; --- Registration ---
 
 (defun register-all-tools ()
@@ -545,4 +591,5 @@
   (register-amp-check-tool)
   (register-amp-code-tool)
   (register-amp-test-tool)
+  (register-skills-tool)
   (log:info "Registered ~D agent tools" (hash-table-count *agent-tools*)))

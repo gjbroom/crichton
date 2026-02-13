@@ -53,6 +53,10 @@
     (error (c)
       (log:warn "Task restoration at startup failed: ~A" c)))
   (handler-case
+      (crichton/skills:discover-skills)
+    (error (c)
+      (log:warn "Skill discovery at startup failed: ~A" c)))
+  (handler-case
       (crichton/skills:start-battery-monitoring)
     (error (c)
       (log:warn "Battery monitoring startup failed: ~A" c)))
