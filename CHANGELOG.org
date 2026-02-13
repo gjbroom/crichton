@@ -39,6 +39,12 @@ For development details, see the git commit history and BEADS issue tracker.
   - LLM-accessible =battery= tool for querying battery status
   - Configuration via =[battery]= section in =config.toml=
   - Graceful handling of systems without batteries (desktops)
+- Amp CLI orchestration skill for delegating coding and testing tasks (cricht-058)
+  - =amp_check= tool: verify Amp CLI availability
+  - =amp_code= tool: delegate coding tasks with structured prompts, file focus, and context
+  - =amp_test= tool: run test suites with optional Amp-driven failure fixing (iterative)
+  - Timeout support with process cleanup for long-running invocations
+  - Usage metering via the existing token-usage system
 - Persistent key-value store for WASM skills (cricht-mue, cricht-ms8, cricht-clx)
   - Per-skill isolated storage with age-encrypted JSON files (=~/.crichton/kv/<skill-id>.age=)
   - Write-through cache for performance, quota enforcement (keys, value size, total size)

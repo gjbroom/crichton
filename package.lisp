@@ -186,7 +186,13 @@
            #:flush-all-kv
            #:clear-kv-cache
            #:kv-usage-report
-           #:kv-quota-exceeded))
+           #:kv-quota-exceeded
+           ;; amp orchestrator
+           #:amp-available-p
+           #:amp-invoke
+           #:amp-code-task
+           #:amp-test-task
+           #:amp-report))
 
 (defpackage #:crichton/llm
   (:use #:cl)

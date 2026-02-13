@@ -446,6 +446,89 @@
            (t
             (format nil "Unknown daemon_logs action: ~A" action))))))))
 
+;;; --- Amp orchestration tools ---
+
+(defun register-amp-check-tool ()
+  (register-tool
+   "amp_check"
+   "Check whether the Amp CLI coding agent is available on this system. Returns availability status. Use this before attempting amp_code or amp_test tasks."
+   (make-json-schema :type "object" :properties (make-hash-table :test #'equal))
+   (lambda (input)
+     (declare (ignore input))
+     (if (crichton/skills:amp-available-p)
+         "Amp CLI is available and ready for coding/testing tasks."
+         "Amp CLI is NOT available. Install it to enable code delegation."))))
+
+(defun register-amp-code-tool ()
+  (multiple-value-bind (props required)
+      (make-properties
+       '("description" "string"
+         "Description of the coding task to delegate to Amp. Be specific about what code to write or modify."
+         :required-p t)
+       '("repo_path" "string"
+         "Absolute path to the repository to work in. Amp will run with this as the working directory.")
+       '("files" "string"
+         "Comma-separated list of file paths to focus on (relative to repo_path).")
+       '("context" "string"
+         "Additional context for the task (e.g., coding standards, constraints, existing patterns).")
+       '("timeout_seconds" "integer"
+         "Maximum time in seconds to wait for Amp to complete. Default: 300 (5 minutes)."))
+    (register-tool
+     "amp_code"
+     "Delegate a coding task to the Amp CLI agent. Amp is an AI coding assistant that can read, write, and modify code files. Use this for implementation tasks: writing new functions, fixing bugs, refactoring code, adding features. Requires Amp CLI to be installed (check with amp_check first)."
+     (make-json-schema :type "object" :properties props :required required)
+     (lambda (input)
+       (let ((description (hget input "description"))
+             (repo-path (hget input "repo_path"))
+             (files-str (hget input "files"))
+             (context (hget input "context"))
+             (timeout (hget input "timeout_seconds" 300)))
+         (let ((files (when files-str
+                        (mapcar (lambda (f)
+                                  (string-trim '(#\Space) f))
+                                (cl-ppcre:split "," files-str)))))
+           (let ((result (crichton/skills:amp-code-task
+                          description
+                          :repo-path repo-path
+                          :files files
+                          :context context
+                          :timeout-seconds timeout)))
+             (with-output-to-string (s)
+               (crichton/skills:amp-report result :stream s)))))))))
+
+(defun register-amp-test-tool ()
+  (multiple-value-bind (props required)
+      (make-properties
+       '("test_command" "string"
+         "The shell command to run tests (e.g., 'make test', 'pytest', 'cargo test')."
+         :required-p t)
+       '("repo_path" "string"
+         "Absolute path to the repository. Tests run with this as the working directory.")
+       '("fix_failures" "boolean"
+         "If true, invoke Amp to fix test failures automatically. Default: false.")
+       '("max_iterations" "integer"
+         "Maximum test/fix cycles when fix_failures is true. Default: 3.")
+       '("timeout_seconds" "integer"
+         "Maximum time in seconds per Amp fix invocation. Default: 300."))
+    (register-tool
+     "amp_test"
+     "Run a test suite and optionally use the Amp CLI agent to fix failures. First runs the test command directly. If tests fail and fix_failures is true, Amp is invoked with the failure context to attempt repairs, iterating up to max_iterations. Requires Amp CLI for fix mode (check with amp_check)."
+     (make-json-schema :type "object" :properties props :required required)
+     (lambda (input)
+       (let ((test-command (hget input "test_command"))
+             (repo-path (hget input "repo_path"))
+             (fix-failures (hget input "fix_failures"))
+             (max-iterations (hget input "max_iterations" 3))
+             (timeout (hget input "timeout_seconds" 300)))
+         (let ((result (crichton/skills:amp-test-task
+                        test-command
+                        :repo-path repo-path
+                        :fix-failures fix-failures
+                        :max-iterations max-iterations
+                        :timeout-seconds timeout)))
+           (with-output-to-string (s)
+             (crichton/skills:amp-report result :stream s))))))))
+
 ;;; --- Registration ---
 
 (defun register-all-tools ()
@@ -459,4 +542,7 @@
   (register-usage-tool)
   (register-battery-tool)
   (register-log-inspector-tool)
+  (register-amp-check-tool)
+  (register-amp-code-tool)
+  (register-amp-test-tool)
   (log:info "Registered ~D agent tools" (hash-table-count *agent-tools*)))
