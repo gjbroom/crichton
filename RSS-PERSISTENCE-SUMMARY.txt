@@ -1,0 +1,127 @@
+RSS Persistence Implementation Summary
+======================================
+
+Branch: feature/rss-persistence
+Commits: d03077f, 94e59ef, e1fe5b7
+
+OVERVIEW
+--------
+Added persistence to the RSS skill so it remembers which feed items have been
+seen across daemon restarts. Seen items are stored in the age-encrypted
+"rss" namespace using the storage system introduced in cricht-056.
+
+IMPLEMENTATION DETAILS
+----------------------
+
+1. Storage Strategy
+   - Namespace: "rss"
+   - Key: "seen-feeds"
+   - Value: Hash-table mapping URL → hash-table of GUID → timestamp
+   - Follows token-usage.lisp pattern
+
+2. Lazy Loading
+   - State is loaded from storage on first access (via ensure-rss-state-loaded)
+   - Prevents unnecessary decryption overhead on daemon startup
+   - Thread-safe via *rss-state-lock*
+
+3. Auto-Persistence
+   - Enabled by default via *auto-persist-rss* flag
+   - Automatically saves state after each mark-seen operation
+   - Can be disabled with disable-rss-persistence
+
+4. Data Model
+   - Changed from GUID → T to GUID → timestamp
+   - Enables future TTL-based cleanup (old items can be expired)
+   - Backward compatible (nil timestamps are acceptable)
+
+CHANGES TO FILES
+----------------
+
+skills/builtins/rss.lisp:
+  - Added *rss-state-loaded* flag to track lazy load status
+  - Added *auto-persist-rss* flag for auto-save control
+  - Added ensure-rss-state-loaded() for lazy initialization
+  - Modified mark-seen() to store timestamps and auto-persist
+  - Modified clear-seen() to persist after clearing
+  - Added persist-rss-state() - save to storage
+  - Added load-rss-state() - explicit load from storage
+  - Added clear-all-rss-state() - wipe memory and storage
+  - Added rss-state-stats() - introspection API
+  - Added enable/disable-rss-persistence() - toggle auto-save
+
+package.lisp:
+  - Exported new RSS persistence functions
+
+CHANGELOG.org:
+  - Added entry under "Persistent storage for daemon state"
+
+tests/test-rss-persistence.lisp:
+  - Comprehensive test verifying:
+    * State clearing
+    * Item marking
+    * Filter behavior (new vs. seen items)
+    * Storage persistence
+    * Cross-restart state survival
+
+BUILD STATUS
+------------
+Clean compilation with zero STYLE-WARNING conditions.
+All pre-existing library warnings remain unchanged.
+
+TESTING
+-------
+Manual test passes:
+  1. Mark items as seen → 3 items stored
+  2. Filter correctly identifies 0 new items
+  3. Add 1 new item → filter identifies 1 new item
+  4. State persists to ~/.crichton/data/rss.age
+  5. Fresh SBCL session loads state: 1 feed, 3 items
+
+USAGE EXAMPLES
+--------------
+
+;; Check feed (auto-persists seen items)
+(rss-check "https://example.com/feed.xml")
+
+;; Get statistics
+(rss-state-stats)
+;; => (:FEED-COUNT 1 :TOTAL-SEEN-ITEMS 3 :AUTO-PERSIST-P T)
+
+;; Explicit persistence control
+(disable-rss-persistence)  ; Turn off auto-save
+(mark-seen url items)       ; State in memory only
+(persist-rss-state)         ; Explicit save
+(enable-rss-persistence)    ; Turn auto-save back on
+
+;; Clear specific feed
+(clear-seen "https://example.com/feed.xml")
+
+;; Clear all RSS state
+(clear-all-rss-state)
+
+DEPLOYMENT NOTES
+----------------
+- No migration needed (fresh namespace)
+- Backward compatible (existing in-memory state works as before)
+- Storage files appear at ~/.crichton/data/rss.age on first persist
+- Daemon startup loads state lazily on first RSS operation
+- No user action required
+
+FUTURE ENHANCEMENTS
+-------------------
+Potential improvements (not implemented):
+- TTL-based cleanup: Remove GUIDs older than N days
+- Per-feed storage keys for granular control
+- Storage size limits and quota enforcement
+- Manual cleanup tool for old feeds
+
+VERIFICATION
+------------
+To verify persistence works in production:
+
+1. Start daemon
+2. Check a feed: (rss-check "https://...")
+3. Verify storage file exists: ls -lh ~/.crichton/data/rss.age
+4. Restart daemon
+5. Check stats: (rss-state-stats)
+   Should show non-zero feed-count and total-seen-items
