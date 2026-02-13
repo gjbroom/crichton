@@ -52,7 +52,8 @@ signing. Informed by a security audit of OpenClaw."
                                             (:file "rss")
                                             (:file "token-usage")
                                             (:file "battery")
-                                            (:file "log-inspector")))))
+                                            (:file "log-inspector")
+                                            (:file "amp-orchestrator")))))
                (:module "crypto"
                 :components ((:file "wipe")
                              (:file "age")))
