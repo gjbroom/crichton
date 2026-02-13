@@ -48,7 +48,12 @@
                      (name (getf skill-info :name))
                      (version (getf skill-info :version))
                      (description (getf skill-info :description))
-                     (author (getf skill-info :author)))
+                     (author (getf skill-info :author))
+                     (provides-info (getf manifest :provides))
+                     (functions (getf provides-info :functions))
+                     (entry-point (if (and functions (consp functions))
+                                      (first functions)
+                                      "main")))
                 (when name
                   (let ((entry (make-skill-entry
                                 :name name
@@ -59,7 +64,7 @@
                                 :manifest manifest
                                 :loaded-p nil
                                 :wasm-bytes nil
-                                :entry-point "main")))
+                                :entry-point entry-point)))
                     (setf (gethash name *skill-registry*) entry)
                     (incf count)
                     ;; Auto-register as schedulable action
@@ -122,8 +127,11 @@
     (when (skill-entry-loaded-p entry)
       (return-from load-skill entry))
 
-    (let* ((skill-dir (skill-entry-path entry))
-           (wasm-path (merge-pathnames "skill.wasm" skill-dir))
+    (let* ((manifest (skill-entry-manifest entry))
+           (metadata (getf manifest :metadata))
+           (wasm-file (or (getf metadata :wasm-file) "skill.wasm"))
+           (skill-dir (skill-entry-path entry))
+           (wasm-path (merge-pathnames wasm-file skill-dir))
            (wat-path (merge-pathnames "skill.wat" skill-dir))
            (wasm-bytes nil))
 
