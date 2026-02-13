@@ -48,6 +48,11 @@ For development details, see the git commit history and BEADS issue tracker.
 - Persistent key-value store for WASM skills (cricht-mue, cricht-ms8, cricht-clx)
   - Per-skill isolated storage with age-encrypted JSON files (=~/.crichton/kv/<skill-id>.age=)
   - Write-through cache for performance, quota enforcement (keys, value size, total size)
+- Persistent storage for daemon state (cricht-056)
+  - Age-encrypted namespace-based storage (=~/.crichton/data/<namespace>.age=)
+  - Token usage meters now persist across daemon restarts
+  - Automatic save on meter updates, load on daemon startup
+  - Thread-safe operations with dirty-flag tracking for efficient flushing
   - Full CRUD API exposed as WASM host functions (=kv_get=, =kv_set=, =kv_delete=, =kv_exists=, =kv_list=)
   - Automatic cache preload at daemon startup, flush at shutdown
 - Scheduled tasks now persist across daemon restarts (cricht-rlx, cricht-s51, cricht-6d1)
