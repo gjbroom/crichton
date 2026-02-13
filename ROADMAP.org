@@ -139,10 +139,10 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
 *** TODO [#B] RSS Filter Skill (WASM)
     - [X] Rust WASM crate scaffolding (cricht-53c)
     - [X] skill.toml manifest (cricht-e6e)
-    - [ ] Implement filter_items entry point (cricht-0em)
+    - [X] Implement filter_items entry point (cricht-0em)
     - [ ] Input validation and DoS prevention (cricht-5z9)
     - [ ] Rust unit tests (cricht-lli)
-    - [ ] Extend WASM runner for JSON-through-memory ABI (cricht-647)
+    - [X] Extend WASM runner for JSON-through-memory ABI (cricht-647)
     - [ ] Daemon-side Lisp integration (cricht-8u0)
     - [ ] Lisp-side integration test (cricht-8ee)
     - [ ] Build and deploy WASM binary (cricht-cg4)
@@ -180,7 +180,7 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
     - [ ] Webhook support
 
 *** TODO [#C] Amp Orchestration
-    - [ ] Amp LLM coding/testing orchestration skill (cricht-058)
+    - [X] Amp LLM coding/testing orchestration skill (cricht-058)
     - [ ] Multi-agent coordination
     - [ ] Code generation and testing workflows
 
