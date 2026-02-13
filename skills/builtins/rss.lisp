@@ -179,21 +179,41 @@
 
 (defvar *rss-state-lock* (bt:make-lock "rss-state"))
 (defvar *rss-seen* (make-hash-table :test #'equal)
-  "Hash of URL → hash-table of seen GUIDs.")
+  "Hash of URL → hash-table of seen GUIDs → timestamp.")
+(defvar *rss-state-loaded* nil
+  "Flag indicating whether persisted state has been loaded.")
+(defvar *auto-persist-rss* t
+  "If true, automatically persist seen items after each mark-seen operation.")
+
+(defun ensure-rss-state-loaded ()
+  "Load persisted RSS state from storage on first access.
+   Thread-safe. Caller must hold *rss-state-lock*."
+  (unless *rss-state-loaded*
+    (let ((seen-data (crichton/storage:store-get "rss" "seen-feeds")))
+      (when (and seen-data (hash-table-p seen-data))
+        (setf *rss-seen* seen-data)
+        (log:info "Loaded RSS seen-items for ~D feed~:P from storage"
+                  (hash-table-count seen-data))))
+    (setf *rss-state-loaded* t)))
 
 (defun seen-guids (url)
   "Get or create the set of seen GUIDs for URL."
   (bt:with-lock-held (*rss-state-lock*)
+    (ensure-rss-state-loaded)
     (or (gethash url *rss-seen*)
         (setf (gethash url *rss-seen*)
               (make-hash-table :test #'equal)))))
 
 (defun mark-seen (url items)
-  "Mark all ITEMS as seen for URL."
-  (let ((seen (seen-guids url)))
+  "Mark all ITEMS as seen for URL. Persists to storage if auto-persist is enabled."
+  (let ((seen (seen-guids url))
+        (now (get-universal-time)))
     (bt:with-lock-held (*rss-state-lock*)
       (dolist (item items)
-        (setf (gethash (feed-item-guid item) seen) t)))))
+        (setf (gethash (feed-item-guid item) seen) now))))
+  ;; Auto-persist if enabled
+  (when *auto-persist-rss*
+    (persist-rss-state)))
 
 (defun filter-new-items (url items)
   "Return only items not yet seen for URL."
@@ -204,9 +224,12 @@
                  items))))
 
 (defun clear-seen (url)
-  "Clear the seen state for URL."
+  "Clear the seen state for URL. Persists the change."
   (bt:with-lock-held (*rss-state-lock*)
-    (remhash url *rss-seen*)))
+    (ensure-rss-state-loaded)
+    (remhash url *rss-seen*))
+  (when *auto-persist-rss*
+    (persist-rss-state)))
 
 ;;; --- Formatted output ---
 
@@ -284,6 +307,62 @@
       (when (getf item :link)
         (format stream "    ~A~%" (getf item :link))))
     result))
+
+;;; --- Persistence ---
+
+(defun persist-rss-state ()
+  "Save RSS seen-items state to storage. Thread-safe."
+  (bt:with-lock-held (*rss-state-lock*)
+    (crichton/storage:store-set "rss" "seen-feeds" *rss-seen*)
+    (log:debug "Persisted RSS seen-items for ~D feed~:P"
+               (hash-table-count *rss-seen*))
+    t))
+
+(defun load-rss-state ()
+  "Explicitly load RSS state from storage. Thread-safe.
+   Returns number of feeds loaded."
+  (bt:with-lock-held (*rss-state-lock*)
+    (let ((seen-data (crichton/storage:store-get "rss" "seen-feeds")))
+      (if (null seen-data)
+          (progn
+            (log:info "No persisted RSS state found in storage")
+            0)
+          (progn
+            (setf *rss-seen* seen-data
+                  *rss-state-loaded* t)
+            (log:info "Loaded RSS seen-items for ~D feed~:P from storage"
+                      (hash-table-count seen-data))
+            (hash-table-count seen-data))))))
+
+(defun clear-all-rss-state ()
+  "Clear all RSS seen-items state (memory and storage). Thread-safe."
+  (bt:with-lock-held (*rss-state-lock*)
+    (clrhash *rss-seen*)
+    (setf *rss-state-loaded* t))
+  (crichton/storage:store-delete "rss" "seen-feeds")
+  (log:info "Cleared all RSS seen-items state")
+  t)
+
+(defun rss-state-stats ()
+  "Return statistics about RSS state. Returns plist."
+  (bt:with-lock-held (*rss-state-lock*)
+    (ensure-rss-state-loaded)
+    (let ((total-guids 0))
+      (maphash (lambda (url seen-table)
+                 (declare (ignore url))
+                 (incf total-guids (hash-table-count seen-table)))
+               *rss-seen*)
+      (list :feed-count (hash-table-count *rss-seen*)
+            :total-seen-items total-guids
+            :auto-persist-p *auto-persist-rss*))))
+
+(defun enable-rss-persistence ()
+  "Enable automatic RSS state persistence."
+  (setf *auto-persist-rss* t))
+
+(defun disable-rss-persistence ()
+  "Disable automatic RSS state persistence."
+  (setf *auto-persist-rss* nil))
 
 ;;; --- Monitoring integration with scheduler ---
 
