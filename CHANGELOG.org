@@ -51,6 +51,7 @@ For development details, see the git commit history and BEADS issue tracker.
 - Persistent storage for daemon state (cricht-056)
   - Age-encrypted namespace-based storage (=~/.crichton/data/<namespace>.age=)
   - Token usage meters now persist across daemon restarts
+  - RSS seen-item tracking now persists across daemon restarts
   - Automatic save on meter updates, load on daemon startup
   - Thread-safe operations with dirty-flag tracking for efficient flushing
   - Full CRUD API exposed as WASM host functions (=kv_get=, =kv_set=, =kv_delete=, =kv_exists=, =kv_list=)
