@@ -804,14 +804,43 @@ Load a skill's WASM bytecode into memory.
 ;; => #<SKILL-ENTRY "rss-filter">
 #+end_src
 
-**** =invoke-skill (name &key entry-point)=
+**** =invoke-skill (name &key entry-point params abi)=
 
-Load and invoke a skill.  If the =:entry-point= keyword is supplied, override the
-default defined in the manifest.
+Load and invoke a WASM skill.  Supports two calling conventions:
+
+- *i32 ABI* (legacy): calls the export with no arguments, returns an integer.
+- *JSON ABI*: serialises =:params= into WASM shared memory, calls the export
+  with the JSON-through-memory protocol (=alloc=, =dealloc=, 4-arg signature),
+  and returns a parsed Lisp structure.
+
+Keyword arguments:
+
+- =:entry-point= (string) --- Override the default export declared in the manifest.
+- =:params= (plist, hash-table, or any JSON-serialisable Lisp structure) ---
+  Data to pass to the skill.  When non-nil, the JSON ABI is selected
+  automatically.
+- =:abi= --- =:auto= (default), =:json=, or =:i32=.  Under =:auto=, JSON ABI
+  is selected when =:params= is non-nil /or/ the manifest declares
+  =abi = "json"= for the entry-point; otherwise i32.
+
+An error is signalled if =:params= is provided but the effective ABI is =:i32=.
+Input size is capped at =*max-skill-json-input-bytes*= (default 4 MB).
 
 #+begin_src lisp
+;; Legacy i32 skill (no params)
 (invoke-skill "meaning-of-life")
-;; => 42 (i32 return value)
+;; => 42
+
+;; JSON ABI skill with parameters
+(invoke-skill "rss-filter"
+  :entry-point "filter_items"
+  :params (list :items items
+                :keywords '("Carney" "Bank of Canada")
+                :match-mode "any"))
+;; => #<hash-table with :matches and :statistics>
+
+;; Force JSON ABI even without params (sends {})
+(invoke-skill "my-skill" :abi :json)
 #+end_src
 
 **** =unload-skill (name)=
@@ -856,6 +885,34 @@ Retrieve a registered tool.
 #+begin_src lisp
 (get-tool "weather")
 ;; => #<AGENT-TOOL "weather">
+#+end_src
+
+*** =skills= Tool
+
+The =skills= tool exposes WASM skill management to the LLM agent.
+
+| Parameter      | Type   | Required | Description                                                  |
+|----------------+--------+----------+--------------------------------------------------------------|
+| =action=       | string | yes      | One of ="list"=, ="info"=, ="invoke"=, ="refresh"=          |
+| =name=         | string | for invoke/info | Skill name from the registry                          |
+| =entry_point=  | string | no       | Override the manifest's default entry point                  |
+| =params=       | object | no       | JSON parameters to pass.  Selects JSON ABI automatically.   |
+
+When =params= is supplied for the ="invoke"= action, the skill is called via
+the JSON-through-memory ABI.  This is required for pure-function skills such as
+=rss-filter= that expect structured input.
+
+#+begin_src json
+{
+  "action": "invoke",
+  "name": "rss-filter",
+  "entry_point": "filter_items",
+  "params": {
+    "items": [ ... ],
+    "keywords": ["Carney", "Bank of Canada"],
+    "match_mode": "any"
+  }
+}
 #+end_src
 
 ** Channel Protocol API (~channels/protocol.lisp~)
@@ -922,6 +979,14 @@ repository = "https://github.com/example/weather-skill"
 [provides]
 functions = ["get_weather", "get_forecast"]
 
+[provides.function.get_weather]
+abi = "json"
+description = "Get current weather for a location"
+
+[provides.function.get_forecast]
+abi = "json"
+description = "Get multi-day forecast for a location"
+
 [capabilities]
 http_domains = ["api.weather.gov", "api.openweathermap.org"]
 requires_credential = "openweathermap-api-key"
@@ -952,7 +1017,34 @@ max_total_bytes = 1048576
 
 - =functions= (array of strings): Exported function names
   - Default: =["main"]=
-  - First function is used as entry point
+  - First function is used as the default entry point
+
+**** =[provides.function.<name>]= Subsections (Optional)
+
+Per-function metadata tables.  These allow declaring the ABI and semantic type
+information for individual exported functions.  If omitted, the i32 ABI is
+assumed (legacy behaviour).
+
+- =entry_point= (string): WASM export name (defaults to the table key)
+- =abi= (string): ="json"= or ="i32"= (default ="i32"=).  When set to
+  ="json"=, =invoke-skill= automatically uses the JSON-through-memory calling
+  convention even if =:params= is not supplied (an empty ={​}= is passed).
+- =description= (string): Human-readable description of the function
+- =input_type= (string): Semantic type tag for pipeline wiring (future)
+- =output_type= (string): Semantic type tag for pipeline wiring (future)
+
+Example:
+
+#+begin_src toml
+[provides]
+functions = ["filter_items"]
+
+[provides.function.filter_items]
+abi = "json"
+description = "Filter RSS items by keywords"
+input_type = "crichton/rss-items+keywords@1"
+output_type = "crichton/rss-filter-result@1"
+#+end_src
 
 **** =[capabilities]= Section (Optional)
 
@@ -1092,6 +1184,10 @@ wasm_file = "skill.wasm"
 
 [provides]
 functions = ["process"]
+
+[provides.function.process]
+abi = "json"
+description = "Process a message and return a result"
 EOF
 #+end_src
 
@@ -2029,12 +2125,19 @@ Based on =crichton.asd=:
    (crichton/skills:load-skill "my-skill")
    #+end_src
 
-4. Invoke skill:
+4. Invoke skill (i32 ABI, no params):
    #+begin_src lisp
    (crichton/skills:invoke-skill "my-skill")
    #+end_src
 
-5. Check WASM exports:
+5. Invoke skill (JSON ABI, with params):
+   #+begin_src lisp
+   (crichton/skills:invoke-skill "my-skill"
+     :entry-point "process"
+     :params '(:message "hello"))
+   #+end_src
+
+6. Check WASM exports:
    #+begin_src bash
    wasm-objdump -x ~/.crichton/skills/my-skill/skill.wasm | grep export
    #+end_src
