@@ -1,0 +1,1974 @@
+#+TITLE: Crichton Developer Documentation
+#+AUTHOR: Gordon J. Broom
+#+DATE: 2026-02-13
+#+STARTUP: overview
+#+TOC: headlines 2
+
+* Introduction
+
+Crichton is a secure background AI agent daemon built in SBCL Common Lisp. This document provides comprehensive technical documentation for developers working on or integrating with Crichton.
+
+**Design Philosophy**: Security-first microkernel architecture informed by a real-world audit of OpenClaw. All external code runs in WASM sandboxes with capability-based permissions.
+
+**Target Audience**: System developers, skill authors, integrators, and contributors to the Crichton codebase.
+
+For user-facing documentation, see [[file:README.md][README.md]]. For the full design specification, see [[file:AGENT_SPEC.org][AGENT_SPEC.org]].
+
+* Architecture Overview
+
+** System Architecture
+
+Crichton uses a microkernel architecture with strong process isolation:
+
+#+begin_example
+┌─────────────────────────────────────────────────────────────┐
+│                         User Space                          │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌──────────────┐                    ┌──────────────┐      │
+│  │   Client     │───NDJSON/socket───▶│    Daemon    │      │
+│  │  (crichton-  │◀───────────────────│  (crichton)  │      │
+│  │   client)    │                    │              │      │
+│  └──────────────┘                    └───────┬──────┘      │
+│                                              │              │
+│                                      NDJSON/socket          │
+│                                              │              │
+│                                              ▼              │
+│                                     ┌──────────────┐        │
+│                                     │    Runner    │        │
+│                                     │   Process    │        │
+│                                     │  (separate)  │        │
+│                                     └───────┬──────┘        │
+│                                             │               │
+│                                        wasmtime             │
+│                                             │               │
+│                                             ▼               │
+│                                    ┌────────────────┐       │
+│                                    │  WASM Skills   │       │
+│                                    │  (sandboxed)   │       │
+│                                    └────────────────┘       │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+#+end_example
+
+** Components
+
+*** Daemon (~crichton~ executable)
+- *Purpose*: Main agent process, LLM integration, credential management
+- *Runs as*: systemd user service
+- *Listens on*: =~/.crichton/daemon.sock= (Unix domain socket)
+- *Protocol*: NDJSON (newline-delimited JSON)
+- *Lifecycle*: Starts fresh on boot (no save-lisp-and-die), long-running
+
+*** Client (~crichton-client~ binary)
+- *Purpose*: Minimal command-line interface for interacting with daemon
+- *Dependencies*: Minimal (shasht, sb-bsd-sockets, cl-readline)
+- *No dependencies on*: cl+ssl, wasmtime, heavy libraries
+- *Protocol*: NDJSON over =daemon.sock=
+
+*** Runner Process
+- *Purpose*: Isolated WASM execution environment
+- *Spawned by*: Daemon on-demand
+- *Communication*: NDJSON over Unix socket
+- *Lifecycle*: Short-lived per-invocation (currently)
+- *Sandboxing*: WASM runtime (wasmtime) with capability manifests
+
+*** WASM Skills
+- *Language*: Any language compiling to WASM (Rust, C, AssemblyScript, etc.)
+- *Execution*: Inside runner process via wasmtime
+- *Capabilities*: Declared in =skill.toml=, enforced by runner
+- *Host functions*: =log=, =kv_get=, =kv_set=, =http_fetch=, etc.
+
+** Trust Boundaries
+
+#+begin_example
+Trust Level 1: User's local system
+  │
+  ├─▶ Trust Level 2: Daemon process
+  │     │
+  │     ├─▶ Trust Level 3: Runner process
+  │           │
+  │           └─▶ Trust Level 4: WASM skills (untrusted)
+  │
+  └─▶ Trust Level 3: Encrypted storage (age)
+#+end_example
+
+- **Trust Level 1** (User): Local system, file permissions, systemd
+- **Trust Level 2** (Daemon): Credential access, LLM API keys, session management
+- **Trust Level 3** (Runner): WASM execution, capability enforcement
+- **Trust Level 4** (Skills): Untrusted code, capability-constrained
+
+** Threading Model
+
+*** Daemon
+- *Main thread*: RPC accept loop
+- *Worker threads*: Per-client connection handlers
+- *Background threads*: Scheduler, channel managers (Discord, etc.)
+- *Synchronization*: Bordeaux-threads locks for shared state
+
+*** Runner
+- *Main thread*: RPC accept loop
+- *Worker thread*: Per-invocation handler
+- *WASM execution*: Synchronous, blocking
+
+** Data Flow: Chat Request
+
+1. User sends message via client → daemon socket
+2. Daemon receives NDJSON request, extracts text and session_id
+3. Daemon loads session history from =~/.crichton/sessions/=
+4. Daemon invokes LLM provider (Anthropic Claude)
+5. LLM may request tool use (e.g., weather, system-info)
+6. Daemon executes tools (built-in or WASM skills)
+7. For WASM skills: daemon → runner → wasmtime → skill
+8. Results flow back: skill → wasmtime → runner → daemon
+9. Daemon sends tool results to LLM
+10. LLM generates final response
+11. Daemon saves session history
+12. Daemon returns response to client
+13. Client displays to user
+
+* Wire Formats & Protocols
+
+** NDJSON Protocol Overview
+
+All inter-process communication uses **NDJSON** (Newline-Delimited JSON) over Unix domain sockets.
+
+- *Format*: One JSON object per line
+- *Encoding*: UTF-8
+- *Size limit*: 8 MB per message (configurable via =*max-message-bytes*=)
+- *Transport*: Unix domain sockets (no network exposure)
+
+** Daemon RPC Protocol (daemon.sock)
+
+*** Request Format
+
+#+begin_src json
+{
+  "id": 123,
+  "op": "operation_name",
+  "field1": "value1",
+  "field2": "value2"
+}
+#+end_src
+
+- =id=: Integer correlation ID (unique per request)
+- =op=: Operation string (e.g., "chat", "status", "ping")
+- Additional fields depend on operation
+
+*** Response Format (Success)
+
+#+begin_src json
+{
+  "id": 123,
+  "ok": true,
+  "result": { ... }
+}
+#+end_src
+
+- =id=: Matches request ID
+- =ok=: Boolean success flag (true)
+- =result=: Operation-specific result (any JSON type)
+
+*** Response Format (Error)
+
+#+begin_src json
+{
+  "id": 123,
+  "ok": false,
+  "error": {
+    "code": "error_code",
+    "message": "Human-readable error message"
+  }
+}
+#+end_src
+
+- =id=: Matches request ID
+- =ok=: Boolean success flag (false)
+- =error.code=: Machine-readable error code
+- =error.message=: Human-readable error description
+
+** Daemon Operations
+
+*** =ping=
+
+Test daemon connectivity.
+
+*Request*:
+#+begin_src json
+{
+  "id": 1,
+  "op": "ping"
+}
+#+end_src
+
+*Response*:
+#+begin_src json
+{
+  "id": 1,
+  "ok": true,
+  "result": "pong"
+}
+#+end_src
+
+*** =chat=
+
+Send a message to the agent.
+
+*Request*:
+#+begin_src json
+{
+  "id": 2,
+  "op": "chat",
+  "text": "What's the weather like?",
+  "session_id": "sess_abc123"
+}
+#+end_src
+
+- =text=: User message (required)
+- =session_id=: Session identifier (optional, auto-generated if omitted)
+
+*Response*:
+#+begin_src json
+{
+  "id": 2,
+  "ok": true,
+  "result": {
+    "text": "The current weather is...",
+    "session_id": "sess_abc123"
+  }
+}
+#+end_src
+
+*** =status=
+
+Get daemon status.
+
+*Request*:
+#+begin_src json
+{
+  "id": 3,
+  "op": "status"
+}
+#+end_src
+
+*Response*:
+#+begin_src json
+{
+  "id": 3,
+  "ok": true,
+  "result": {
+    "daemon": "running",
+    "version": "0.1.0",
+    "uptime_seconds": 3600
+  }
+}
+#+end_src
+
+*** =stop=
+
+Request graceful daemon shutdown.
+
+*Request*:
+#+begin_src json
+{
+  "id": 4,
+  "op": "stop"
+}
+#+end_src
+
+*Response*:
+#+begin_src json
+{
+  "id": 4,
+  "ok": true,
+  "result": "Shutting down..."
+}
+#+end_src
+
+** Runner RPC Protocol
+
+Communication between daemon and runner process.
+
+*** =invoke=
+
+Execute a WASM module.
+
+*Request*:
+#+begin_src json
+{
+  "id": 10,
+  "op": "invoke",
+  "wasm_b64": "<base64-encoded WASM bytes>",
+  "export": "main",
+  "args": [42],
+  "nresults": 1,
+  "manifest": { ... }
+}
+#+end_src
+
+- =wasm_b64=: Base64-encoded WASM binary (mutually exclusive with =wat=)
+- =wat=: WAT source string (mutually exclusive with =wasm_b64=)
+- =export=: Export function name to call
+- =args=: Array of i32 arguments (optional)
+- =nresults=: Number of expected return values (default: 1)
+- =manifest=: Capability manifest plist (optional)
+
+*Response*:
+#+begin_src json
+{
+  "id": 10,
+  "ok": true,
+  "result": [123]
+}
+#+end_src
+
+Result is an array of i32 return values.
+
+*** =invoke_json=
+
+Execute WASM with JSON-through-memory ABI.
+
+*Request*:
+#+begin_src json
+{
+  "id": 11,
+  "op": "invoke_json",
+  "wasm_b64": "<base64-encoded WASM bytes>",
+  "export": "filter_items",
+  "input": { "items": [...] },
+  "manifest": { ... }
+}
+#+end_src
+
+- =input=: Arbitrary JSON object to pass to skill
+- Other fields same as =invoke=
+
+*Response*:
+#+begin_src json
+{
+  "id": 11,
+  "ok": true,
+  "result": { "filtered": [...] }
+}
+#+end_src
+
+Result is the JSON object returned by the skill.
+
+** Error Codes
+
+Common error codes across both protocols:
+
+- =bad_request=: Invalid request format or missing required fields
+- =unknown_op=: Unknown operation
+- =internal_error=: Unexpected error in daemon/runner
+- =llm_error=: Error communicating with LLM provider
+- =rate_limited=: API rate limit exceeded
+- =auth_error=: Authentication failed
+- =agent_error=: Error in agent loop
+
+** WASM Host Function ABIs
+
+Skills running in WASM can call host functions using these ABIs:
+
+*** =log(ptr: i32, len: i32) -> void=
+
+Log a UTF-8 string to daemon logs.
+
+- =ptr=: Pointer to string in WASM linear memory
+- =len=: Length of string in bytes
+
+*** =kv_get(key_ptr: i32, key_len: i32, out_ptr: i32, out_cap: i32) -> i32=
+
+Get a value from skill-scoped persistent KV store.
+
+- =key_ptr=, =key_len=: Key string
+- =out_ptr=, =out_cap=: Output buffer
+- Returns: Bytes written, or -1 if not found
+
+*** =kv_set(key_ptr: i32, key_len: i32, val_ptr: i32, val_len: i32) -> i32=
+
+Set a value in skill-scoped persistent KV store.
+
+- =key_ptr=, =key_len=: Key string
+- =val_ptr=, =val_len=: Value bytes
+- Returns: 0 on success
+
+*** =http_fetch(url_ptr: i32, url_len: i32, out_ptr: i32, out_cap: i32) -> i32=
+
+Fetch a URL (subject to capability allowlist).
+
+- =url_ptr=, =url_len=: URL string
+- =out_ptr=, =out_cap=: Output buffer for response body
+- Returns: Bytes written, or -1 on error
+
+*** JSON-Through-Memory ABI
+
+For complex data exchange (used by =invoke_json=):
+
+1. Skill exports: =alloc(size: i32) -> i32=
+2. Skill exports: =dealloc(ptr: i32)=
+3. Runner serializes input JSON to bytes
+4. Runner calls =alloc(size)= to get WASM memory pointer
+5. Runner writes JSON bytes to WASM memory at pointer
+6. Runner calls skill's main export (e.g., =filter_items(ptr, len)=)
+7. Skill returns =(ptr, len)= pair (packed as single i64)
+8. Runner reads output JSON from WASM memory
+9. Runner calls =dealloc(ptr)=
+
+Rust example:
+#+begin_src rust
+#[no_mangle]
+pub extern "C" fn alloc(size: usize) -> *mut u8 {
+    let mut buf = Vec::with_capacity(size);
+    let ptr = buf.as_mut_ptr();
+    std::mem::forget(buf);
+    ptr
+}
+
+#[no_mangle]
+pub extern "C" fn dealloc(ptr: *mut u8) {
+    unsafe { drop(Vec::from_raw_parts(ptr, 0, 0)); }
+}
+
+#[no_mangle]
+pub extern "C" fn main_function(input_ptr: *const u8, input_len: usize) -> i64 {
+    // Parse JSON from input
+    let input_json = unsafe {
+        std::slice::from_raw_parts(input_ptr, input_len)
+    };
+
+    // Process and create output JSON
+    let output_bytes = b"{ \"result\": 123 }";
+    let output_ptr = alloc(output_bytes.len());
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            output_bytes.as_ptr(),
+            output_ptr,
+            output_bytes.len()
+        );
+    }
+
+    // Return (ptr, len) as packed i64
+    ((output_ptr as u64) << 32) | (output_bytes.len() as u64)
+}
+#+end_src
+
+* API Documentation
+
+** Storage API (~storage/store.lisp~)
+
+Persistent key-value store with namespace isolation and age encryption.
+
+*** Overview
+
+- *Location*: =~/.crichton/data/<namespace>.age=
+- *Format*: Age-encrypted JSON
+- *Namespaces*: =meters=, =rss=, =scheduler=, =knowledge=, etc.
+- *Thread safety*: All operations protected by =*storage-lock*=
+
+*** Functions
+
+**** =store-get (namespace key &optional default)=
+
+Get a value from storage.
+
+#+begin_src lisp
+(store-get "meters" "anthropic:input-units" 0)
+;; => 12345
+#+end_src
+
+**** =store-set (namespace key value)=
+
+Set a value in storage. Marks namespace as dirty.
+
+#+begin_src lisp
+(store-set "meters" "anthropic:input-units" 12345)
+;; => 12345
+#+end_src
+
+**** =store-delete (namespace key)=
+
+Delete a key from storage.
+
+#+begin_src lisp
+(store-delete "meters" "old-key")
+;; => T (if existed), NIL otherwise
+#+end_src
+
+**** =store-exists-p (namespace key)=
+
+Check if a key exists.
+
+#+begin_src lisp
+(store-exists-p "meters" "anthropic:input-units")
+;; => T or NIL
+#+end_src
+
+**** =store-list-keys (namespace &optional prefix)=
+
+List all keys in namespace, optionally filtered by prefix.
+
+#+begin_src lisp
+(store-list-keys "meters" "anthropic:")
+;; => ("anthropic:input-units" "anthropic:output-units")
+#+end_src
+
+**** =store-get-all (namespace)=
+
+Get all key-value pairs as an alist.
+
+#+begin_src lisp
+(store-get-all "meters")
+;; => (("anthropic:input-units" . 12345) ("anthropic:output-units" . 6789))
+#+end_src
+
+**** =store-set-all (namespace alist)=
+
+Replace all data in namespace with alist.
+
+#+begin_src lisp
+(store-set-all "meters" '(("key1" . "val1") ("key2" . "val2")))
+#+end_src
+
+**** =store-clear-namespace (namespace)=
+
+Delete all data in namespace.
+
+#+begin_src lisp
+(store-clear-namespace "test-namespace")
+;; => T
+#+end_src
+
+**** =flush-namespace (namespace)=
+
+Save namespace to disk immediately.
+
+#+begin_src lisp
+(flush-namespace "meters")
+#+end_src
+
+**** =flush-all-storage ()=
+
+Save all dirty namespaces to disk.
+
+#+begin_src lisp
+(flush-all-storage)
+#+end_src
+
+**** =preload-storage ()=
+
+Load all existing =.age= files from disk into memory.
+
+#+begin_src lisp
+(preload-storage)
+#+end_src
+
+Called automatically on daemon startup.
+
+**** =storage-usage (namespace)=
+
+Get statistics about a namespace.
+
+#+begin_src lisp
+(storage-usage "meters")
+;; => (:namespace "meters" :key-count 4 :disk-size 1234)
+#+end_src
+
+**** =storage-report ()=
+
+Generate human-readable report of all namespaces.
+
+#+begin_src lisp
+(storage-report)
+;; Prints to *standard-output*
+#+end_src
+
+** Credential API (~credentials/mediator.lisp~)
+
+Manage encrypted API keys and secrets.
+
+*** Functions
+
+**** =store-credential (name fields)=
+
+Store a credential with multiple fields.
+
+#+begin_src lisp
+(store-credential "anthropic-api-key"
+                  '(:api-key "sk-ant-..."))
+#+end_src
+
+**** =retrieve-credential (name field)=
+
+Retrieve a specific field from a credential.
+
+#+begin_src lisp
+(retrieve-credential "anthropic-api-key" :api-key)
+;; => "sk-ant-..."
+#+end_src
+
+**** =delete-credential (name)=
+
+Delete a credential.
+
+#+begin_src lisp
+(delete-credential "old-key")
+;; => T
+#+end_src
+
+**** =list-credentials ()=
+
+List all stored credential names.
+
+#+begin_src lisp
+(list-credentials)
+;; => ("anthropic-api-key" "discord-bot-token")
+#+end_src
+
+** Session API (~sessions/store.lisp~)
+
+Manage encrypted conversation sessions.
+
+*** Functions
+
+**** =create-session (&key id encrypted-p)=
+
+Create a new session.
+
+#+begin_src lisp
+(create-session)
+;; => (:id "sess_abc123" :encrypted-p T)
+#+end_src
+
+**** =save-session (session-id messages)=
+
+Save session messages to disk.
+
+#+begin_src lisp
+(save-session "sess_abc123" message-list)
+#+end_src
+
+**** =load-session (session-id)=
+
+Load session messages from disk.
+
+#+begin_src lisp
+(load-session "sess_abc123")
+;; => list of messages
+#+end_src
+
+**** =delete-session (session-id)=
+
+Delete a session.
+
+#+begin_src lisp
+(delete-session "sess_abc123")
+#+end_src
+
+** LLM Provider Protocol (~llm/protocol.lisp~)
+
+CLOS-based provider abstraction.
+
+*** Classes
+
+**** =llm-provider=
+
+Base class for LLM providers.
+
+Slots:
+- =provider-id=: String identifier (e.g., "anthropic")
+- =api-key=: API key for authentication
+- =default-model=: Default model to use
+
+Methods to implement:
+- =send-message (provider messages &key model max-tokens)=
+- =supports-tool-use-p (provider)= → boolean
+
+*** Example: Anthropic Provider
+
+#+begin_src lisp
+(defclass anthropic-provider (llm-provider)
+  ())
+
+(defmethod send-message ((provider anthropic-provider) messages
+                        &key (model "claude-sonnet-4-20250514")
+                             (max-tokens 4096))
+  ;; Send request to Anthropic API
+  ;; Return (values response-text tool-calls)
+  ...)
+
+(defmethod supports-tool-use-p ((provider anthropic-provider))
+  t)
+#+end_src
+
+*** Condition Types
+
+- =llm-error=: Base error class
+- =llm-api-error=: HTTP API errors (includes status code)
+- =llm-auth-error=: Authentication failures
+- =llm-rate-limit-error=: Rate limiting
+
+** Skill Registry API (~skills/registry.lisp~)
+
+Discover, load, and invoke WASM skills.
+
+*** Functions
+
+**** =discover-skills ()=
+
+Scan =~/.crichton/skills/= for skill manifests and populate registry.
+
+#+begin_src lisp
+(discover-skills)
+;; => 3 (number of skills found)
+#+end_src
+
+**** =list-skills ()=
+
+Return list of discovered skills.
+
+#+begin_src lisp
+(list-skills)
+;; => ((:name "rss-filter" :version "0.1.0" :loaded-p NIL) ...)
+#+end_src
+
+**** =skill-info (name)=
+
+Get detailed info about a skill.
+
+#+begin_src lisp
+(skill-info "rss-filter")
+;; => (:name "rss-filter" :version "0.1.0" :manifest ...)
+#+end_src
+
+**** =load-skill (name)=
+
+Load a skill's WASM bytecode into memory.
+
+#+begin_src lisp
+(load-skill "rss-filter")
+;; => #<SKILL-ENTRY "rss-filter">
+#+end_src
+
+**** =invoke-skill (name &key entry-point)=
+
+Load and invoke a skill.
+
+#+begin_src lisp
+(invoke-skill "rss-filter" :entry-point "filter_items")
+;; => 0 (i32 return value)
+#+end_src
+
+**** =unload-skill (name)=
+
+Unload a skill from memory.
+
+#+begin_src lisp
+(unload-skill "rss-filter")
+;; => T
+#+end_src
+
+** Agent Tools API (~agent/tools.lisp~)
+
+Register and manage tools available to the LLM agent.
+
+*** Functions
+
+**** =register-tool (name description handler schema)=
+
+Register a new agent tool.
+
+#+begin_src lisp
+(register-tool "weather"
+               "Get current weather conditions"
+               #'handle-weather-tool
+               '(:type "object"
+                 :properties ((:location (:type "string")))))
+#+end_src
+
+**** =register-all-tools ()=
+
+Re-register all built-in tools. Call after hot-reloading tool handler code.
+
+#+begin_src lisp
+(register-all-tools)
+#+end_src
+
+**** =get-tool (name)=
+
+Retrieve a registered tool.
+
+#+begin_src lisp
+(get-tool "weather")
+;; => #<AGENT-TOOL "weather">
+#+end_src
+
+** Channel Protocol API (~channels/protocol.lisp~)
+
+Abstract interface for chat channels (Discord, Mastodon, etc.).
+
+*** Classes
+
+**** =channel-adapter=
+
+Base class for channel adapters.
+
+Methods to implement:
+- =start-channel (adapter)=
+- =stop-channel (adapter)=
+- =send-message-to-channel (adapter channel-id text)=
+
+*** Message Structure
+
+#+begin_src lisp
+(make-instance 'channel-message
+  :channel-id "123456"
+  :user-id "user_789"
+  :text "Hello, Crichton!"
+  :timestamp (get-universal-time))
+#+end_src
+
+* Skill Development
+
+** Skill Manifest Format (skill.toml)
+
+Every skill must have a =skill.toml= manifest in its directory.
+
+*** Minimal Example
+
+#+begin_src toml
+[skill]
+name = "my-skill"
+version = "1.0.0"
+description = "A simple skill"
+author = "Your Name <you@example.com>"
+
+[metadata]
+wasm_file = "skill.wasm"
+
+[provides]
+functions = ["main"]
+#+end_src
+
+*** Full Example with Capabilities
+
+#+begin_src toml
+[skill]
+name = "weather-fetcher"
+version = "1.2.0"
+description = "Fetches weather data from external APIs"
+author = "Weather Corp <dev@weather.example>"
+
+[metadata]
+wasm_file = "weather.wasm"
+license = "MIT"
+repository = "https://github.com/example/weather-skill"
+
+[provides]
+functions = ["get_weather", "get_forecast"]
+
+[capabilities]
+http_domains = ["api.weather.gov", "api.openweathermap.org"]
+requires_credential = "openweathermap-api-key"
+max_memory_mb = 16
+max_cpu_seconds = 5
+
+[capabilities.kv_store]
+max_keys = 100
+max_total_bytes = 1048576
+#+end_src
+
+*** Manifest Fields
+
+**** =[skill]= Section (Required)
+
+- =name= (string, required): Unique skill identifier
+- =version= (string, required): SemVer version
+- =description= (string, optional): Human-readable description
+- =author= (string, optional): Author name and email
+
+**** =[metadata]= Section (Optional)
+
+- =wasm_file= (string): WASM filename (default: "skill.wasm")
+- =license= (string): License identifier (e.g., "MIT")
+- =repository= (string): Source repository URL
+
+**** =[provides]= Section (Optional)
+
+- =functions= (array of strings): Exported function names
+  - Default: =["main"]=
+  - First function is used as entry point
+
+**** =[capabilities]= Section (Optional)
+
+- =http_domains= (array): Allowed HTTP request domains
+- =requires_credential= (string): Credential name from credential store
+- =max_memory_mb= (integer): Memory limit in MB
+- =max_cpu_seconds= (integer): CPU time limit in seconds
+
+**** =[capabilities.kv_store]= Section (Optional)
+
+- =max_keys= (integer): Maximum number of keys in skill's KV store
+- =max_total_bytes= (integer): Total size limit for all values
+
+** Building a WASM Skill
+
+*** Rust Example
+
+1. Create a new Rust crate:
+
+#+begin_src bash
+cargo new --lib my-skill
+cd my-skill
+#+end_src
+
+2. Configure =Cargo.toml=:
+
+#+begin_src toml
+[package]
+name = "my-skill"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+#+end_src
+
+3. Write skill code in =src/lib.rs=:
+
+#+begin_src rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize)]
+struct Input {
+    message: String,
+}
+
+#[derive(Serialize)]
+struct Output {
+    result: String,
+}
+
+// Memory management for JSON ABI
+#[no_mangle]
+pub extern "C" fn alloc(size: usize) -> *mut u8 {
+    let mut buf = Vec::with_capacity(size);
+    let ptr = buf.as_mut_ptr();
+    std::mem::forget(buf);
+    ptr
+}
+
+#[no_mangle]
+pub extern "C" fn dealloc(ptr: *mut u8) {
+    unsafe { drop(Vec::from_raw_parts(ptr, 0, 0)); }
+}
+
+// Main entry point
+#[no_mangle]
+pub extern "C" fn process(input_ptr: *const u8, input_len: usize) -> i64 {
+    // Parse input JSON
+    let input_bytes = unsafe {
+        std::slice::from_raw_parts(input_ptr, input_len)
+    };
+
+    let input: Input = match serde_json::from_slice(input_bytes) {
+        Ok(i) => i,
+        Err(_) => return 0, // Error: return null pointer
+    };
+
+    // Process
+    let output = Output {
+        result: format!("Processed: {}", input.message),
+    };
+
+    // Serialize output
+    let output_bytes = serde_json::to_vec(&output).unwrap();
+    let output_len = output_bytes.len();
+    let output_ptr = alloc(output_len);
+
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            output_bytes.as_ptr(),
+            output_ptr,
+            output_len
+        );
+    }
+
+    // Return (ptr, len) as packed i64
+    ((output_ptr as u64) << 32) | (output_len as u64)
+}
+#+end_src
+
+4. Build the WASM module:
+
+#+begin_src bash
+cargo build --release --target wasm32-unknown-unknown
+#+end_src
+
+5. Copy to skills directory:
+
+#+begin_src bash
+mkdir -p ~/.crichton/skills/my-skill
+cp target/wasm32-unknown-unknown/release/my_skill.wasm \
+   ~/.crichton/skills/my-skill/skill.wasm
+#+end_src
+
+6. Create =skill.toml=:
+
+#+begin_src bash
+cat > ~/.crichton/skills/my-skill/skill.toml <<EOF
+[skill]
+name = "my-skill"
+version = "0.1.0"
+description = "My custom skill"
+author = "Me"
+
+[metadata]
+wasm_file = "skill.wasm"
+
+[provides]
+functions = ["process"]
+EOF
+#+end_src
+
+7. Refresh skill registry:
+
+#+begin_src bash
+crichton-client
+> I need to refresh the skill registry
+#+end_src
+
+Or via agent tool:
+#+begin_src text
+Please run the skills tool with action "refresh"
+#+end_src
+
+** Host Functions Available to Skills
+
+Skills can import these host functions:
+
+*** =log(ptr, len)=
+
+#+begin_src rust
+extern "C" {
+    fn log(ptr: *const u8, len: usize);
+}
+
+fn skill_log(msg: &str) {
+    unsafe { log(msg.as_ptr(), msg.len()); }
+}
+#+end_src
+
+*** =kv_get(key_ptr, key_len, out_ptr, out_cap) -> i32=
+
+#+begin_src rust
+extern "C" {
+    fn kv_get(key_ptr: *const u8, key_len: usize,
+              out_ptr: *mut u8, out_cap: usize) -> i32;
+}
+
+fn skill_kv_get(key: &str, buffer: &mut [u8]) -> Option<usize> {
+    let result = unsafe {
+        kv_get(key.as_ptr(), key.len(),
+               buffer.as_mut_ptr(), buffer.len())
+    };
+    if result >= 0 { Some(result as usize) } else { None }
+}
+#+end_src
+
+*** =kv_set(key_ptr, key_len, val_ptr, val_len) -> i32=
+
+#+begin_src rust
+extern "C" {
+    fn kv_set(key_ptr: *const u8, key_len: usize,
+              val_ptr: *const u8, val_len: usize) -> i32;
+}
+
+fn skill_kv_set(key: &str, value: &[u8]) -> bool {
+    let result = unsafe {
+        kv_set(key.as_ptr(), key.len(),
+               value.as_ptr(), value.len())
+    };
+    result == 0
+}
+#+end_src
+
+*** =http_fetch(url_ptr, url_len, out_ptr, out_cap) -> i32=
+
+#+begin_src rust
+extern "C" {
+    fn http_fetch(url_ptr: *const u8, url_len: usize,
+                  out_ptr: *mut u8, out_cap: usize) -> i32;
+}
+
+fn skill_http_get(url: &str, buffer: &mut [u8]) -> Option<usize> {
+    let result = unsafe {
+        http_fetch(url.as_ptr(), url.len(),
+                   buffer.as_mut_ptr(), buffer.len())
+    };
+    if result >= 0 { Some(result as usize) } else { None }
+}
+#+end_src
+
+** Testing Skills
+
+*** Manual Testing
+
+#+begin_src bash
+# Start Crichton daemon
+systemctl --user start crichton
+
+# Connect client
+crichton-client
+
+# Invoke your skill
+> Please invoke the my-skill skill
+#+end_src
+
+*** Unit Testing (Rust)
+
+#+begin_src rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process() {
+        let input = r#"{"message":"test"}"#;
+        let input_ptr = input.as_ptr();
+        let input_len = input.len();
+
+        let result = process(input_ptr, input_len);
+        let output_ptr = (result >> 32) as *const u8;
+        let output_len = (result & 0xFFFFFFFF) as usize;
+
+        let output_bytes = unsafe {
+            std::slice::from_raw_parts(output_ptr, output_len)
+        };
+
+        let output: Output = serde_json::from_slice(output_bytes).unwrap();
+        assert_eq!(output.result, "Processed: test");
+
+        unsafe { dealloc(output_ptr as *mut u8); }
+    }
+}
+#+end_src
+
+Run tests:
+#+begin_src bash
+cargo test
+#+end_src
+
+** Deployment
+
+1. Build release WASM:
+   #+begin_src bash
+   cargo build --release --target wasm32-unknown-unknown
+   #+end_src
+
+2. Copy to skills directory:
+   #+begin_src bash
+   cp target/wasm32-unknown-unknown/release/my_skill.wasm \
+      ~/.crichton/skills/my-skill/skill.wasm
+   #+end_src
+
+3. Ensure =skill.toml= is present and correct
+
+4. Refresh skill registry (via agent or restart daemon)
+
+* Build & Development
+
+** Prerequisites
+
+*** System Requirements
+
+- *OS*: Linux (tested on Debian/Ubuntu)
+- *Lisp*: SBCL ≥ 2.0
+- *Build tools*: gcc, make, git
+- *Optional*: Emacs with SLIME/SLY for interactive development
+
+*** Dependencies
+
+Install via your package manager:
+
+#+begin_src bash
+# Debian/Ubuntu
+sudo apt install sbcl build-essential git age
+
+# Arch Linux
+sudo pacman -S sbcl base-devel git age
+#+end_src
+
+*** Quicklisp
+
+Install Quicklisp if not already installed:
+
+#+begin_src bash
+curl -O https://beta.quicklisp.org/quicklisp.lisp
+sbcl --load quicklisp.lisp --eval '(quicklisp-quickstart:install)' --quit
+#+end_src
+
+Add to =~/.sbclrc=:
+#+begin_src lisp
+#-quicklisp
+(let ((quicklisp-init (merge-pathnames "quicklisp/setup.lisp"
+                                       (user-homedir-pathname))))
+  (when (probe-file quicklisp-init)
+    (load quicklisp-init)))
+#+end_src
+
+*** Clone Repository
+
+#+begin_src bash
+git clone https://github.com/gjbroom/crichton.git
+cd crichton
+#+end_src
+
+** Building the Daemon
+
+The daemon runs as a long-running systemd service and does NOT use save-lisp-and-die. It starts fresh on boot and loads all code via ASDF.
+
+*** Install System Service
+
+#+begin_src bash
+# Copy systemd unit file
+mkdir -p ~/.config/systemd/user
+cp assets/crichton.service ~/.config/systemd/user/
+
+# Reload systemd
+systemctl --user daemon-reload
+
+# Enable auto-start on login
+systemctl --user enable crichton.service
+
+# Start daemon
+systemctl --user start crichton.service
+
+# Check status
+systemctl --user status crichton.service
+#+end_src
+
+The service file (=assets/crichton.service=):
+#+begin_src ini
+[Unit]
+Description=Crichton AI Agent Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/sbcl --noinform --non-interactive \
+  --eval "(require :asdf)" \
+  --eval "(push #p\"/home/%u/devel/crichton/\" asdf:*central-registry*)" \
+  --eval "(asdf:load-system :crichton)" \
+  --eval "(crichton/daemon:start-daemon :foreground t)"
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+#+end_src
+
+** Building the Client
+
+The client is a standalone binary built via save-lisp-and-die.
+
+#+begin_src bash
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/home/gjbroom/devel/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton-client)' \
+  --eval "(sb-ext:save-lisp-and-die #p\"crichton-client\" :toplevel #'crichton-client:main :executable t :compression t)"
+#+end_src
+
+Install:
+#+begin_src bash
+mkdir -p ~/bin
+cp crichton-client ~/bin/
+chmod +x ~/bin/crichton-client
+#+end_src
+
+Ensure =~/bin= is in your PATH:
+#+begin_src bash
+export PATH="$HOME/bin:$PATH"
+#+end_src
+
+** Development Workflow
+
+*** Interactive Development with SLIME/SLY
+
+Crichton's daemon runs a Swank server on port 4005 for live code reloading.
+
+1. Start daemon:
+   #+begin_src bash
+   systemctl --user start crichton
+   #+end_src
+
+2. In Emacs, connect to Swank:
+   #+begin_src elisp
+   M-x slime-connect RET localhost RET 4005 RET
+   #+end_src
+
+3. Load your changes:
+   #+begin_src lisp
+   ;; Full system reload
+   (asdf:load-system :crichton :force t)
+
+   ;; Single file reload
+   (load "/path/to/modified/file.lisp")
+   #+end_src
+
+4. Re-register tools after changes to tool handlers:
+   #+begin_src lisp
+   (crichton/agent:register-all-tools)
+   #+end_src
+
+5. Reload config without restart:
+   #+begin_src lisp
+   (crichton/config:reload-config)
+   #+end_src
+
+*** Hot-Reloading from Command Line
+
+Without Emacs, use =swank-client= from the shell:
+
+#+begin_src bash
+sbcl --noinform --non-interactive \
+  --eval '(require :swank-client)' \
+  --eval "(swank-client:with-slime-connection (conn \"localhost\" 4005)
+           (swank-client:slime-eval '(asdf:load-system :crichton :force t) conn))"
+#+end_src
+
+*** Build Verification
+
+Check for compilation warnings:
+
+#+begin_src bash
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/home/gjbroom/devel/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton :force t)'
+#+end_src
+
+Target: **Zero STYLE-WARNING conditions**.
+
+** Running Tests
+
+(Note: Comprehensive test suite is a work in progress)
+
+*** Manual Integration Tests
+
+#+begin_src bash
+# Test daemon connectivity
+echo '{"id":1,"op":"ping"}' | nc -U ~/.crichton/daemon.sock
+
+# Test chat
+crichton-client
+> What is the current time?
+#+end_src
+
+*** Unit Tests
+
+Individual test files in =tests/=:
+
+#+begin_src bash
+sbcl --load tests/test-rss-persistence.lisp
+#+end_src
+
+** Logging & Debugging
+
+*** Log Location
+
+Daemon logs: =~/.crichton/logs/daemon.jsonl=
+
+View recent errors:
+#+begin_src bash
+tail -100 ~/.crichton/logs/daemon.jsonl | \
+  jq -r 'select(.level == "ERROR") | "\(.timestamp) [\(.level)]: \(.message)"'
+#+end_src
+
+Watch live:
+#+begin_src bash
+tail -f ~/.crichton/logs/daemon.jsonl | \
+  jq -r '"\(.timestamp) [\(.level)] \(.logger): \(.message)"'
+#+end_src
+
+*** Systemd Logs
+
+Compilation output and startup messages:
+
+#+begin_src bash
+journalctl --user -u crichton.service -f
+#+end_src
+
+*** Log Levels
+
+Set in =~/.crichton/config.toml=:
+
+#+begin_src toml
+[logging]
+level = "info"  # debug, info, warn, error
+#+end_src
+
+Or change at runtime via Swank:
+#+begin_src lisp
+(log:config :debug)  ; Set to debug level
+#+end_src
+
+* Configuration
+
+** Config File: ~/.crichton/config.toml
+
+*** Example Configuration
+
+#+begin_src toml
+# Crichton configuration file
+# Location: ~/.crichton/config.toml
+
+[llm]
+provider = "anthropic"
+model = "claude-sonnet-4-20250514"
+max_tokens = 4096
+
+[logging]
+level = "info"
+
+[sessions]
+encryption = true
+retention_days = 30
+
+[scheduler]
+enabled = true
+
+[battery]
+enabled = true
+threshold_low = 20
+threshold_critical = 10
+check_interval_seconds = 300
+
+[discord]
+enabled = false
+bot_token_credential = "discord-bot-token"
+#+end_src
+
+*** Configuration Sections
+
+**** =[llm]=
+
+- =provider= (string): LLM provider ("anthropic")
+- =model= (string): Default model to use
+- =max_tokens= (integer): Maximum tokens in response
+
+**** =[logging]=
+
+- =level= (string): Log level (debug, info, warn, error)
+
+**** =[sessions]=
+
+- =encryption= (boolean): Encrypt session storage
+- =retention_days= (integer): Auto-delete sessions after N days
+
+**** =[scheduler]=
+
+- =enabled= (boolean): Enable background task scheduler
+
+**** =[battery]=
+
+- =enabled= (boolean): Enable battery monitoring
+- =threshold_low= (integer): Low battery warning percentage
+- =threshold_critical= (integer): Critical battery percentage
+- =check_interval_seconds= (integer): Poll interval
+
+**** =[discord]=
+
+- =enabled= (boolean): Enable Discord channel adapter
+- =bot_token_credential= (string): Name of credential containing bot token
+
+** Credential Store Setup
+
+Credentials are stored age-encrypted in =~/.crichton/credentials/=.
+
+*** Store API Key
+
+#+begin_src bash
+crichton-client
+> Please store my Anthropic API key: sk-ant-api03-...
+#+end_src
+
+Or programmatically:
+#+begin_src lisp
+(crichton/credentials:store-credential
+  "anthropic-api-key"
+  '(:api-key "sk-ant-api03-..."))
+#+end_src
+
+*** List Credentials
+
+#+begin_src bash
+crichton-client
+> What credentials are stored?
+#+end_src
+
+Or:
+#+begin_src lisp
+(crichton/credentials:list-credentials)
+;; => ("anthropic-api-key" "discord-bot-token")
+#+end_src
+
+*** Delete Credential
+
+#+begin_src bash
+crichton-client
+> Delete the old-credential credential
+#+end_src
+
+Or:
+#+begin_src lisp
+(crichton/credentials:delete-credential "old-credential")
+#+end_src
+
+** Encryption Keys
+
+Crichton uses the =age= tool for encryption. On first use, an age identity is generated:
+
+- Location: =~/.crichton/age-identity.txt=
+- Permissions: 0600
+- Format: age secret key (bech32)
+
+**IMPORTANT**: Back up =age-identity.txt=. If lost, encrypted credentials and sessions are unrecoverable.
+
+* Storage Systems
+
+** Overview
+
+Crichton has multiple storage layers:
+
+| System              | Location                        | Encryption | Purpose                        |
+|---------------------+---------------------------------+------------+--------------------------------|
+| Credential Store    | =~/.crichton/credentials/*.age= | age        | API keys, tokens               |
+| Session Store       | =~/.crichton/sessions/*.age=    | age        | Conversation history           |
+| Persistent Storage  | =~/.crichton/data/*.age=        | age        | Daemon state (meters, RSS)     |
+| Skill KV Store      | =~/.crichton/skills-kv/*.age=   | age        | Per-skill persistent data      |
+| Scheduler Tasks     | =~/.crichton/tasks/*.age=       | age        | Scheduled task definitions     |
+| Logs                | =~/.crichton/logs/daemon.jsonl= | none       | Structured JSON logs (secrets redacted) |
+
+** Persistent Storage (storage/store.lisp)
+
+Namespace-based KV store for daemon state.
+
+*** Namespaces
+
+- =meters=: Token usage statistics
+- =rss=: RSS seen-item tracking
+- =scheduler=: Task persistence
+- =knowledge=: Future local knowledge base
+
+*** Format
+
+Each namespace is a separate =.age= file containing JSON:
+
+#+begin_src json
+{
+  "version": 1,
+  "namespace": "meters",
+  "updated_at": "2026-02-13T15:30:00Z",
+  "data": {
+    "anthropic:input-units": 12345,
+    "anthropic:output-units": 6789
+  }
+}
+#+end_src
+
+*** Lifecycle
+
+1. **Startup**: =preload-storage= loads all =*.age= files
+2. **Runtime**: Operations modify in-memory cache
+3. **Dirty tracking**: Modified namespaces marked dirty
+4. **Shutdown**: =flush-all-storage= saves dirty namespaces
+5. **Auto-persist**: Some systems (meters, RSS) auto-flush after writes
+
+## Skill KV Store (skills/kv-store.lisp)
+
+Per-skill isolated KV store with quotas.
+
+*** Features
+
+- Per-skill namespace isolation
+- Write-through cache
+- Quota enforcement (max keys, max total bytes)
+- Age encryption
+
+*** Location
+
+=~/.crichton/skills-kv/<skill-name>.age=
+
+*** Access
+
+Only accessible from WASM via =kv_get= and =kv_set= host functions.
+
+** Session Store (sessions/store.lisp)
+
+Conversation session persistence.
+
+*** Features
+
+- Optional age encryption (configurable)
+- Session retention policy (auto-delete old sessions)
+- Per-session files
+
+*** Location
+
+=~/.crichton/sessions/<session-id>.age= (or =.json= if unencrypted)
+
+*** Format
+
+JSON array of messages:
+#+begin_src json
+[
+  {"role": "user", "content": "Hello"},
+  {"role": "assistant", "content": "Hi there!"}
+]
+#+end_src
+
+* Security
+
+** Threat Model
+
+*** Assumptions
+
+1. **User's local system is trusted**: File permissions, systemd, age encryption
+2. **Daemon process is privileged**: Has access to credentials, LLM APIs
+3. **Runner process is semi-trusted**: Executes WASM but enforces capabilities
+4. **WASM skills are untrusted**: Potentially malicious or buggy
+
+*** Threats Mitigated
+
+- **Malicious WASM skills**: Sandboxed, no direct system access
+- **Network exfiltration**: HTTP allowlist enforced by capabilities
+- **Credential theft**: Encrypted at rest, mediated access
+- **Session snooping**: Optional encryption, file permissions
+- **Privilege escalation**: WASM has no syscall access
+
+### Threats NOT Mitigated
+
+- **Local root access**: root can read age-identity.txt and decrypt everything
+- **Memory forensics**: Keys briefly in RAM during encryption/decryption
+- **Side-channel attacks**: Not hardened against timing attacks
+- **Denial of service**: No rate limiting on local socket
+
+** Sandboxing
+
+*** WASM Isolation
+
+- **Runtime**: wasmtime (Mozilla-maintained, production-grade)
+- **No syscalls**: WASM has no access to OS syscalls
+- **Capability manifests**: Declare required permissions upfront
+- **Host function mediation**: All external access via controlled host functions
+
+*** Capability Enforcement
+
+Capabilities declared in =skill.toml= and enforced by runner:
+
+- =http_domains=: Allowlist of HTTP request targets
+- =max_memory_mb=: Memory limit
+- =max_cpu_seconds=: CPU time limit (future)
+- =kv_store.max_keys=: KV storage quota
+- =kv_store.max_total_bytes=: KV size quota
+
+Example enforcement (=runner/skill-context.lisp=):
+#+begin_src lisp
+(defun check-http-domain (url manifest)
+  (let ((allowed (getf manifest :http-domains)))
+    (unless (some (lambda (domain)
+                    (search domain url))
+                  allowed)
+      (error "HTTP request to ~A not allowed" url))))
+#+end_src
+
+** Encryption
+
+*** Age Encryption
+
+All sensitive data encrypted with =age= (https://age-encryption.org/):
+
+- **Identity**: =~/.crichton/age-identity.txt= (age secret key)
+- **Algorithm**: X25519 (ECDH) + ChaCha20-Poly1305
+- **Key derivation**: scrypt (for passphrase-protected keys)
+
+*** What's Encrypted
+
+- ✅ Credentials (API keys, tokens)
+- ✅ Sessions (optional, configurable)
+- ✅ Persistent storage (meters, RSS state)
+- ✅ Skill KV stores
+- ✅ Scheduler tasks
+- ❌ Logs (secrets redacted before logging)
+- ❌ Config file (no sensitive data)
+
+### Key Backup
+
+**CRITICAL**: Back up =~/.crichton/age-identity.txt=. Without it, all encrypted data is lost.
+
+#+begin_src bash
+# Backup identity
+cp ~/.crichton/age-identity.txt /secure/backup/location/
+
+# Restore identity
+cp /secure/backup/location/age-identity.txt ~/.crichton/
+chmod 600 ~/.crichton/age-identity.txt
+#+end_src
+
+** Secrets Handling
+
+*** Redaction
+
+Logs automatically redact secrets before writing:
+
+- Bearer tokens (regex: =Bearer [A-Za-z0-9._-]+=)
+- API keys (regex: =sk-[A-Za-z0-9]{20,}=)
+- Passwords, tokens (context-aware)
+
+Implementation: =logging/logger.lisp=, =redact-string=
+
+*** Credential Mediation
+
+Skills cannot directly access credentials. Must request via manifest:
+
+#+begin_src toml
+[capabilities]
+requires_credential = "openweathermap-api-key"
+#+end_src
+
+Daemon mediates access:
+1. Runner requests credential via skill context
+2. Daemon validates skill's manifest
+3. Daemon decrypts credential
+4. Daemon injects into skill context (not WASM memory)
+5. Skill calls =get_credential()= host function
+
+*** Secure Deletion
+
+Sensitive buffers are zeroed before deallocation:
+
+#+begin_src lisp
+(crichton/crypto:with-secure-buffer (buffer size)
+  ;; Use buffer
+  ...)
+;; Buffer zeroed on exit
+#+end_src
+
+** Audit Logging
+
+All agent interactions logged to =~/.crichton/logs/daemon.jsonl=:
+
+- User messages
+- Agent responses
+- Tool invocations
+- Skill executions
+- Errors and exceptions
+
+Log format (JSON Lines):
+#+begin_src json
+{
+  "timestamp": "2026-02-13T15:30:00Z",
+  "level": "INFO",
+  "logger": "crichton/agent",
+  "message": "Invoking tool: weather"
+}
+#+end_src
+
+## Network Egress Control
+
+HTTP requests from skills subject to allowlist:
+
+#+begin_src toml
+[capabilities]
+http_domains = ["api.weather.gov", "api.example.com"]
+#+end_src
+
+Enforcement: =runner/skill-context.lisp=, =check-http-allowlist=
+
+* Module Structure
+
+Based on =crichton.asd=:
+
+| Module               | Purpose                                    |
+|----------------------+--------------------------------------------|
+| =package=            | Package definitions and exports            |
+| =config/=            | Configuration loading (TOML)               |
+| =logging/=           | JSON structured logging                    |
+| =storage/=           | Persistent KV store                        |
+| =rpc/=               | NDJSON protocol                            |
+| =wasm/=              | WASM engine (wasmtime FFI)                 |
+| =skills/=            | Skill registry, manifest, signing          |
+| =skills/builtins/=   | Built-in skills (weather, RSS, etc.)       |
+| =crypto/=            | Age encryption, secure memory              |
+| =credentials/=       | Credential storage and mediation           |
+| =sessions/=          | Session storage and retention              |
+| =llm/=               | LLM provider abstraction (Anthropic)       |
+| =daemon/=            | Daemon lifecycle, RPC server, Swank        |
+| =agent/=             | Agent loop, tool registration              |
+| =channels/=          | Channel adapters (Discord, Mastodon)       |
+| =cli/=               | Client CLI (crichton-client)               |
+| =runner/=            | WASM runner process                        |
+
+* Appendix: Common Tasks
+
+** Add a New Built-in Skill
+
+1. Create =skills/builtins/my-skill.lisp=
+2. Define skill functions:
+   #+begin_src lisp
+   (defun my-skill-plist ()
+     ;; Return plist of results
+     ...)
+
+   (defun my-skill-report ()
+     ;; Return formatted string
+     (format nil "Result: ~A" (my-skill-plist)))
+   #+end_src
+
+3. Register as agent tool in =agent/tools.lisp=:
+   #+begin_src lisp
+   (register-tool "my-skill"
+                  "Description of what my-skill does"
+                  #'my-skill-tool-handler
+                  '(:type "object" :properties ...))
+   #+end_src
+
+4. Add to =crichton.asd=:
+   #+begin_src lisp
+   (:module "skills"
+    :components (...
+                 (:module "builtins"
+                  :components (...
+                               (:file "my-skill")))))
+   #+end_src
+
+5. Reload system:
+   #+begin_src lisp
+   (asdf:load-system :crichton :force t)
+   (crichton/agent:register-all-tools)
+   #+end_src
+
+** Add a New LLM Provider
+
+1. Create =llm/my-provider.lisp=
+2. Define provider class:
+   #+begin_src lisp
+   (defclass my-provider (llm-provider)
+     ((endpoint :initform "https://api.example.com")))
+   #+end_src
+
+3. Implement protocol methods:
+   #+begin_src lisp
+   (defmethod send-message ((provider my-provider) messages
+                           &key model max-tokens)
+     ;; HTTP request to provider API
+     ;; Return (values response-text tool-calls)
+     ...)
+
+   (defmethod supports-tool-use-p ((provider my-provider))
+     t)  ; or nil
+   #+end_src
+
+4. Register provider:
+   #+begin_src lisp
+   (crichton/llm:register-provider "my-provider" 'my-provider)
+   #+end_src
+
+5. Update config:
+   #+begin_src toml
+   [llm]
+   provider = "my-provider"
+   model = "gpt-4"
+   #+end_src
+
+** Hot-Reload After Code Changes
+
+#+begin_src lisp
+;; In Emacs SLIME/SLY connected to port 4005
+
+;; Full reload
+(asdf:load-system :crichton :force t)
+
+;; Re-register tools if changed
+(crichton/agent:register-all-tools)
+
+;; Reload config if changed
+(crichton/config:reload-config)
+
+;; Refresh skill registry
+(crichton/skills:discover-skills)
+#+end_src
+
+** Debug a Failing Skill
+
+1. Check daemon logs:
+   #+begin_src bash
+   tail -100 ~/.crichton/logs/daemon.jsonl | jq 'select(.level == "ERROR")'
+   #+end_src
+
+2. Test skill manifest:
+   #+begin_src lisp
+   (crichton/skills:parse-skill-manifest
+     #p"~/.crichton/skills/my-skill/skill.toml")
+   #+end_src
+
+3. Load skill manually:
+   #+begin_src lisp
+   (crichton/skills:load-skill "my-skill")
+   #+end_src
+
+4. Invoke skill:
+   #+begin_src lisp
+   (crichton/skills:invoke-skill "my-skill")
+   #+end_src
+
+5. Check WASM exports:
+   #+begin_src bash
+   wasm-objdump -x ~/.crichton/skills/my-skill/skill.wasm | grep export
+   #+end_src
+
+** View Token Usage Statistics
+
+#+begin_src lisp
+;; Via Swank REPL
+(crichton/skills:token-usage-report)
+
+;; Or via client
+#+end_src
+
+#+begin_src bash
+crichton-client
+> Show me token usage statistics
+#+end_src
+
+** Manually Flush Storage
+
+#+begin_src lisp
+;; Flush all dirty namespaces
+(crichton/storage:flush-all-storage)
+
+;; Flush specific namespace
+(crichton/storage:flush-namespace "meters")
+#+end_src
+
+* See Also
+
+- [[file:AGENT_SPEC.org][AGENT_SPEC.org]] - Complete design specification
+- [[file:AGENTS.org][AGENTS.org]] - Developer workflow and conventions
+- [[file:ROADMAP.org][ROADMAP.org]] - Development roadmap
+- [[file:SKILL_DEVELOPMENT.org][SKILL_DEVELOPMENT.org]] - Detailed skill authoring guide
+- [[file:SKILL_QUICKSTART.org][SKILL_QUICKSTART.org]] - Quick skill tutorial
+- [[file:README.md][README.md]] - User quick-start guide
+- [[https://age-encryption.org/][age]] - Encryption tool
+- [[https://wasmtime.dev/][wasmtime]] - WASM runtime
