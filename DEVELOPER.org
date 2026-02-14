@@ -806,11 +806,12 @@ Load a skill's WASM bytecode into memory.
 
 **** =invoke-skill (name &key entry-point)=
 
-Load and invoke a skill.
+Load and invoke a skill.  If the =:entry-point= keyword is supplied, override the
+default defined in the manifest.
 
 #+begin_src lisp
-(invoke-skill "rss-filter" :entry-point "filter_items")
-;; => 0 (i32 return value)
+(invoke-skill "meaning-of-life")
+;; => 42 (i32 return value)
 #+end_src
 
 **** =unload-skill (name)=

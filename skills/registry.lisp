@@ -208,11 +208,13 @@
 
 ;;; --- Invocation ---
 
-(defun invoke-skill (name &key (entry-point "main"))
+(defun invoke-skill (name &key (entry-point nil))
   "Load (if not loaded) and run the WASM skill with run-wasm-bytes-with-host-fns.
-   Sets up skill context from manifest.
-   Returns the WASM result (integer from main)."
+   Sets up skill context from manifest.  The ENTRY-POINT keyword allows you to
+   override the default (found in the manifest).  Returns the WASM
+   result (integer from main)."
   (let* ((entry (load-skill name))
+         (entry-point (or entry-point (skill-entry-entry-point entry)))
          (manifest (skill-entry-manifest entry))
          (context (crichton/runner:make-skill-context-from-manifest
                    manifest
