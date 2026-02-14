@@ -73,9 +73,18 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
 
 * Planned Features
 
-** TODO v0.2 "Polish & Channels" [6/9]
+** DONE v0.2 "Polish & Channels" [6/9]
+   CLOSED: [2026-02-13 Thu]
 
-   Focus on user experience improvements and completing channel integration.
+   Focus on user experience improvements and persistence.
+
+   *Shipped with:* Interface improvements, config hot-reload, complete persistence
+   system (daemon state + skill KV + task storage + RSS + token metering), external
+   skill registry, comprehensive developer documentation, battery monitoring, Amp
+   orchestration skill.
+
+   *Deferred to future releases:* Discord/Mastodon channel completion, user-facing
+   scheduler interface, Pushover notifications.
 
 *** TODO [#A] Discord Channel Completion
     - [ ] Discord bot authentication and authorization (cricht-fj5)

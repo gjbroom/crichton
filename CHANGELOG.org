@@ -23,7 +23,15 @@ This file tracks *user-visible* changes to Crichton across releases.
 
 For development details, see the git commit history and BEADS issue tracker.
 
-* Unreleased (v0.2 development)
+* Unreleased (v0.3 development)
+
+** Added
+
+** Changed
+
+** Fixed
+
+* v0.2 "Polish & Channels" (2026-02-13)
 
 ** Added
 

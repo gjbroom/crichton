@@ -11,7 +11,7 @@ WASM-isolated skill execution, network egress control, and Ed25519 code
 signing. Informed by a security audit of OpenClaw."
   :author "Gord Broom <gjbroom@thebrooms.ca>"
   :license "MIT"
-  :version "0.1.0"
+  :version "0.2.0"
   :depends-on (#:cffi
                #:bordeaux-threads
                #:usocket
