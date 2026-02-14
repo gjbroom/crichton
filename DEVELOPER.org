@@ -1,55 +1,105 @@
 #+TITLE: Crichton Developer Documentation
 #+AUTHOR: Gordon J. Broom
 #+DATE: 2026-02-13
+#+HEADER: :headers '("\\usepackage{tikz}")
+#+HEADER: :headers '("\\usetikzlibrary{positioning, arrows.meta, calc}")
 #+STARTUP: overview
 #+TOC: headlines 2
+#+OPTIONS: ':t
 
 * Introduction
 
-Crichton is a secure background AI agent daemon built in SBCL Common Lisp. This document provides comprehensive technical documentation for developers working on or integrating with Crichton.
+Crichton is a secure background AI agent daemon built in SBCL Common Lisp.
+/Named for "The Admirable Crichton" --- the quietly competent servant who's
+actually running everything./  This document provides comprehensive technical
+documentation for developers working on or integrating with Crichton.
 
-**Design Philosophy**: Security-first microkernel architecture informed by a real-world audit of OpenClaw. All external code runs in WASM sandboxes with capability-based permissions.
+**Design Philosophy**: Security-first microkernel architecture informed by a
+real-world audit of OpenClaw.  All external code runs in WASM sandboxes with
+capability-based permissions.
 
-**Target Audience**: System developers, skill authors, integrators, and contributors to the Crichton codebase.
+**Target Audience**: System developers, skill authors, integrators, and
+contributors to the Crichton codebase.
 
-For user-facing documentation, see [[file:README.md][README.md]]. For the full design specification, see [[file:AGENT_SPEC.org][AGENT_SPEC.org]].
+* Design Principles
+
+Derived from OpenClaw audit findings:
+
+1. *Skills must be isolated* --- no same-process execution (OpenClaw: CRITICAL finding)
+2. *Credentials must be encrypted at rest* --- not just file permissions (OpenClaw: plaintext with 0600)
+3. *Network egress must be controlled* --- skills cannot phone home (OpenClaw: unrestricted)
+4. *Code must be signed* --- no unsigned skill execution (OpenClaw: none)
+5. *Defense in depth* --- no single trust boundary (OpenClaw: "disk access is the trust boundary")
 
 * Architecture Overview
 
 ** System Architecture
 
-Crichton uses a microkernel architecture with strong process isolation:
+Crichton uses a microkernel architecture with strong process isolation: \\
+#+NAME: architecture-diagram
+#+BEGIN_SRC latex :exports results :results output file: architecture.png
+\begin{tikzpicture}[
+    box/.style={rectangle, draw, thick, text width=2.8cm, minimum height=1.2cm, align=center},
+    arrow/.style={-Stealth, very thick},
+    doublearrow/.style={Stealth-Stealth, very thick}
+]
 
-#+begin_example
-┌─────────────────────────────────────────────────────────────┐
-│                         User Space                          │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌──────────────┐                    ┌──────────────┐      │
-│  │   Client     │───NDJSON/socket───▶│    Daemon    │      │
-│  │  (crichton-  │◀───────────────────│  (crichton)  │      │
-│  │   client)    │                    │              │      │
-│  └──────────────┘                    └───────┬──────┘      │
-│                                              │              │
-│                                      NDJSON/socket          │
-│                                              │              │
-│                                              ▼              │
-│                                     ┌──────────────┐        │
-│                                     │    Runner    │        │
-│                                     │   Process    │        │
-│                                     │  (separate)  │        │
-│                                     └───────┬──────┘        │
-│                                             │               │
-│                                        wasmtime             │
-│                                             │               │
-│                                             ▼               │
-│                                    ┌────────────────┐       │
-│                                    │  WASM Skills   │       │
-│                                    │  (sandboxed)   │       │
-│                                    └────────────────┘       │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-#+end_example
+% Outer border
+\draw[very thick] (0,0) rectangle (14,11);
+\draw[very thick] (0,10.5) -- (14,10.5);
+\node at (7,10.75) {\textbf{User Space}};
+
+% Client
+\node[box] (client) at (2.5,7.5) {Client\\(crichton-\\client)};
+
+% Daemon
+\node[box] (daemon) at (9,7.5) {Daemon\\(crichton)};
+
+% Bidirectional arrow between client and daemon
+\draw[doublearrow] (client.east) -- node[above, font=\footnotesize] {NDJSON/socket} (daemon.west);
+
+% Arrow from daemon to runner
+\node[box] (runner) at (9,4) {Runner\\Process\\(separate)};
+\draw[arrow] (daemon.south) -- node[right, font=\footnotesize] {NDJSON/socket} (runner.north);
+
+% Arrow from runner to wasm
+\node[box] (wasm) at (9,1.2) {WASM Skills\\(sandboxed)};
+\draw[arrow] (runner.south) -- node[right, font=\footnotesize] {wasmtime} (wasm.north);
+
+\end{tikzpicture}
+#+END_SRC
+#+RESULTS: architecture-diagram
+#+BEGIN_LATEX
+[[file: architecture.png]]
+#+END_LATEX
+** Language/Runtime
+The daemon, skill runner, and client interface are all written in Common Lisp
+(specifically SBCL).
+
+*Rationale*:
+- *Live-coding*: Connect SLIME/SLY to the running daemon, redefine functions,
+  inspect state, fix bugs without restart.  This is the killer feature for a
+  long-running agent daemon.
+- *Condition system*: Restartable errors --- the daemon can encounter problems and
+  offer recovery strategies rather than crashing.
+- *Performance*: SBCL compiles to native code.  Competitive with Go for most
+  workloads.
+- *CFFI*: Mature foreign function interface for calling C libraries (wasmtime, OS
+  keychains, libsecret, etc.)
+
+*WASM integration path*: SBCL CFFI \rightarrow wasmtime C API (or wasmer C API).  No existing
+CL bindings exist --- we'll build thin CFFI wrappers as part of the project.  This
+is standard CL practice.
+
+*Key CL libraries to leverage*:
+- =cffi= --- FFI to wasmtime, libsecret, OS keychain APIs
+- =bordeaux-threads= --- portable threading
+- =usocket= / =sb-bsd-sockets= --- networking
+- =ironclad= --- pure CL crypto (Ed25519 signing, age encryption)
+- =cl-json= or =shasht= --- JSON handling
+- =hunchentoot= or =clack= --- HTTP server (for webhook endpoints)
+- =log4cl= --- structured logging
+- =dexador= --- HTTP client (for LLM API calls)
 
 ** Components
 
@@ -83,20 +133,24 @@ Crichton uses a microkernel architecture with strong process isolation:
 
 #+begin_example
 Trust Level 1: User's local system
-  │
-  ├─▶ Trust Level 2: Daemon process
-  │     │
-  │     ├─▶ Trust Level 3: Runner process
-  │           │
-  │           └─▶ Trust Level 4: WASM skills (untrusted)
-  │
-  └─▶ Trust Level 3: Encrypted storage (age)
+  |
+  +-> Trust Level 2: Daemon process
+  |     |
+  |     +-> Trust Level 3: Runner process
+  |           |
+  |           +-> Trust Level 4: WASM skills (untrusted)
+  |
+  +-> Trust Level 2: Encrypted storage (age)
 #+end_example
 
-- **Trust Level 1** (User): Local system, file permissions, systemd
-- **Trust Level 2** (Daemon): Credential access, LLM API keys, session management
-- **Trust Level 3** (Runner): WASM execution, capability enforcement
-- **Trust Level 4** (Skills): Untrusted code, capability-constrained
+- *Trust Level 1* (User): Local system, file permissions, systemd
+- *Trust Level 2* (Daemon): Credential access, LLM API keys, session management
+- *Trust Level 3* (Runner): WASM execution, capability enforcement
+- *Trust Level 4* (Skills): Untrusted code, capability-constrained
+
+*Trust boundary*: The RPC interface between daemon and skill-runner.  Skills never
+run in the daemon process.  The runner process can be killed/resource-limited
+independently.
 
 ** Threading Model
 
@@ -113,14 +167,14 @@ Trust Level 1: User's local system
 
 ** Data Flow: Chat Request
 
-1. User sends message via client → daemon socket
+1. User sends message via client \rightarrow daemon socket
 2. Daemon receives NDJSON request, extracts text and session_id
 3. Daemon loads session history from =~/.crichton/sessions/=
 4. Daemon invokes LLM provider (Anthropic Claude)
 5. LLM may request tool use (e.g., weather, system-info)
 6. Daemon executes tools (built-in or WASM skills)
-7. For WASM skills: daemon → runner → wasmtime → skill
-8. Results flow back: skill → wasmtime → runner → daemon
+7. For WASM skills: daemon \rightarrow runner \rightarrow wasmtime \rightarrow skill
+8. Results flow back: skill \rightarrow wasmtime \rightarrow runner \rightarrow daemon
 9. Daemon sends tool results to LLM
 10. LLM generates final response
 11. Daemon saves session history
@@ -682,7 +736,7 @@ Slots:
 
 Methods to implement:
 - =send-message (provider messages &key model max-tokens)=
-- =supports-tool-use-p (provider)= → boolean
+- =supports-tool-use-p (provider)= \rightarrow boolean
 
 *** Example: Anthropic Provider
 
@@ -1638,7 +1692,7 @@ Each namespace is a separate =.age= file containing JSON:
 4. **Shutdown**: =flush-all-storage= saves dirty namespaces
 5. **Auto-persist**: Some systems (meters, RSS) auto-flush after writes
 
-## Skill KV Store (skills/kv-store.lisp)
+** Skill KV Store (skills/kv-store.lisp)
 
 Per-skill isolated KV store with quotas.
 
@@ -1700,7 +1754,7 @@ JSON array of messages:
 - **Session snooping**: Optional encryption, file permissions
 - **Privilege escalation**: WASM has no syscall access
 
-### Threats NOT Mitigated
+*** Threats NOT Mitigated
 
 - **Local root access**: root can read age-identity.txt and decrypt everything
 - **Memory forensics**: Keys briefly in RAM during encryption/decryption
@@ -1748,17 +1802,20 @@ All sensitive data encrypted with =age= (https://age-encryption.org/):
 
 *** What's Encrypted
 
-- ✅ Credentials (API keys, tokens)
-- ✅ Sessions (optional, configurable)
-- ✅ Persistent storage (meters, RSS state)
-- ✅ Skill KV stores
-- ✅ Scheduler tasks
-- ❌ Logs (secrets redacted before logging)
-- ❌ Config file (no sensitive data)
+- Credentials (API keys, tokens)
+- Sessions (optional, configurable)
+- Persistent storage (meters, RSS state)
+- Skill KV stores
+- Scheduler tasks
 
-### Key Backup
+*** What's Not Encrypted
 
-**CRITICAL**: Back up =~/.crichton/age-identity.txt=. Without it, all encrypted data is lost.
+- Logs (secrets redacted before logging)
+- Config file (no sensitive data)
+
+*** Key Backup
+
+*CRITICAL*: Back up =~/.crichton/age-identity.txt=.  Without it, all encrypted data is lost.
 
 #+begin_src bash
 # Backup identity
@@ -1828,7 +1885,7 @@ Log format (JSON Lines):
 }
 #+end_src
 
-## Network Egress Control
+** Network Egress Control
 
 HTTP requests from skills subject to allowlist:
 
@@ -2005,13 +2062,3 @@ crichton-client
 (crichton/storage:flush-namespace "meters")
 #+end_src
 
-* See Also
-
-- [[file:AGENT_SPEC.org][AGENT_SPEC.org]] - Complete design specification
-- [[file:AGENTS.org][AGENTS.org]] - Developer workflow and conventions
-- [[file:ROADMAP.org][ROADMAP.org]] - Development roadmap
-- [[file:SKILL_DEVELOPMENT.org][SKILL_DEVELOPMENT.org]] - Detailed skill authoring guide
-- [[file:SKILL_QUICKSTART.org][SKILL_QUICKSTART.org]] - Quick skill tutorial
-- [[file:README.md][README.md]] - User quick-start guide
-- [[https://age-encryption.org/][age]] - Encryption tool
-- [[https://wasmtime.dev/][wasmtime]] - WASM runtime
