@@ -206,32 +206,99 @@
       (log:info "Loaded skill ~A (~D bytes)" name (length wasm-bytes))
       entry)))
 
+;;; --- ABI detection ---
+
+(defvar *max-skill-json-input-bytes* (* 4 1024 1024)
+  "Maximum serialized JSON input size in bytes for skill invocation (default 4MB).")
+
+(defun manifest-function-abi (manifest entry-point)
+  "Determine the ABI for ENTRY-POINT from MANIFEST.
+   Checks [provides.function.<entry-point>] for an 'abi' key.
+   Returns :JSON or :I32 (default)."
+  (let* ((provides (getf manifest :provides))
+         (function-table (getf provides :function)))
+    ;; function-table is a plist of function-name -> plist when parsed from
+    ;; [provides.function.<name>] TOML sections
+    (when function-table
+      (let ((func-info (getf function-table
+                             (intern (string-upcase
+                                      (substitute #\- #\_ entry-point))
+                                     :keyword))))
+        (when func-info
+          (let ((abi (getf func-info :abi)))
+            (when (and abi (string-equal abi "json"))
+              (return-from manifest-function-abi :json)))))))
+  :i32)
+
 ;;; --- Invocation ---
 
-(defun invoke-skill (name &key (entry-point nil))
-  "Load (if not loaded) and run the WASM skill with run-wasm-bytes-with-host-fns.
-   Sets up skill context from manifest.  The ENTRY-POINT keyword allows you to
-   override the default (found in the manifest).  Returns the WASM
-   result (integer from main)."
+(defun invoke-skill (name &key entry-point params (abi :auto))
+  "Load (if not loaded) and run the WASM skill.
+   Sets up skill context from manifest.
+
+   ENTRY-POINT — override the default export (found in the manifest).
+   PARAMS      — Lisp data to pass as JSON input (plist, hash-table, etc.).
+                 When non-nil, the JSON ABI is used automatically.
+   ABI         — :AUTO (default), :JSON, or :I32.
+                 :AUTO selects JSON ABI when PARAMS is non-nil or the manifest
+                 declares abi=\"json\" for the entry-point; otherwise i32.
+
+   Returns: parsed JSON result (for JSON ABI) or integer (for i32 ABI)."
   (let* ((entry (load-skill name))
          (entry-point (or entry-point (skill-entry-entry-point entry)))
          (manifest (skill-entry-manifest entry))
          (context (crichton/runner:make-skill-context-from-manifest
                    manifest
-                   :secret-resolver #'crichton/credentials:resolve-credential-for-skill)))
+                   :secret-resolver #'crichton/credentials:resolve-credential-for-skill))
+         ;; Resolve effective ABI
+         (effective-abi (case abi
+                          (:json :json)
+                          (:i32  :i32)
+                          (otherwise  ; :auto
+                           (cond
+                             (params :json)
+                             ((eq :json (manifest-function-abi manifest entry-point))
+                              :json)
+                             (t :i32))))))
 
-    (log:info "Invoking skill ~A (entry point: ~A)" name entry-point)
+    ;; Guard: params with i32 ABI is an error
+    (when (and params (eq effective-abi :i32))
+      (error "Skill ~S entry-point ~S uses i32 ABI but :params were provided. ~
+              Declare abi=\"json\" in the manifest or pass :abi :json."
+             name entry-point))
+
+    (log:info "Invoking skill ~A (entry point: ~A, abi: ~A)"
+              name entry-point effective-abi)
 
     (crichton/runner:call-with-skill-context context
       (lambda ()
         (handler-case
-            (let ((result (crichton/wasm:run-wasm-bytes-with-host-fns
-                           (skill-entry-wasm-bytes entry)
-                           entry-point
-                           :args nil
-                           :nresults 1)))
-              (log:info "Skill ~A returned: ~A" name result)
-              result)
+            (ecase effective-abi
+              (:json
+               (let* ((params (or params (make-hash-table :test #'equal)))
+                      ;; Size guard
+                      (json-preview (with-output-to-string (s)
+                                      (shasht:write-json params s)))
+                      (json-size (length (sb-ext:string-to-octets
+                                          json-preview
+                                          :external-format :utf-8))))
+                 (when (> json-size *max-skill-json-input-bytes*)
+                   (error "Skill ~S JSON input is ~D bytes, exceeding ~D byte limit"
+                          name json-size *max-skill-json-input-bytes*))
+                 (let ((result (crichton/wasm:run-wasm-bytes-json-call
+                                (skill-entry-wasm-bytes entry)
+                                entry-point
+                                params)))
+                   (log:info "Skill ~A returned: ~A" name result)
+                   result)))
+              (:i32
+               (let ((result (crichton/wasm:run-wasm-bytes-with-host-fns
+                              (skill-entry-wasm-bytes entry)
+                              entry-point
+                              :args nil
+                              :nresults 1)))
+                 (log:info "Skill ~A returned: ~A" name result)
+                 result)))
           (error (c)
             (log:error "Skill ~A failed: ~A" name c)
             (error c)))))))

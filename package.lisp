@@ -118,6 +118,7 @@
            #:load-skill
            #:invoke-skill
            #:unload-skill
+           #:*max-skill-json-input-bytes*
            #:skill-report
            #:weather-report
            #:weather-conditions

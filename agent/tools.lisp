@@ -539,10 +539,14 @@
          :enum ("list" "info" "invoke" "refresh")
          :required-p t)
        '("name" "string"
-         "Skill name. Required for info and invoke."))
+         "Skill name. Required for info and invoke.")
+       '("entry_point" "string"
+         "Function entry point to call. Optional; defaults to the manifest's declared entry point.")
+       '("params" "object"
+         "JSON parameters to pass to the skill. When provided, the JSON ABI is used automatically. Required for pure-function skills like rss-filter."))
     (register-tool
      "skills"
-     "Manage external WASM skills. Actions: 'list' (show all discovered skills), 'info' (get details for a specific skill), 'invoke' (run a skill), 'refresh' (re-scan skills directory). Skills are discovered from ~/.crichton/skills/ and can be scheduled using the scheduler tool."
+     "Manage external WASM skills. Actions: 'list' (show all discovered skills), 'info' (get details for a specific skill), 'invoke' (run a skill with optional params), 'refresh' (re-scan skills directory). Skills are discovered from ~/.crichton/skills/ and can be scheduled using the scheduler tool. Use 'params' to pass structured input to skills that expect JSON data (e.g., rss-filter)."
      (make-json-schema :type "object" :properties props :required required)
      (lambda (input)
        (block handler
@@ -561,11 +565,15 @@
                     (format nil "~S" info)
                     (format nil "Skill '~A' not found." name))))
              ((string-equal action "invoke")
-              (let ((name (hget input "name")))
+              (let ((name (hget input "name"))
+                    (entry-point (hget input "entry_point"))
+                    (params (hget input "params")))
                 (unless name
                   (return-from handler "Error: 'name' is required for invoke action."))
                 (handler-case
-                    (let ((result (crichton/skills:invoke-skill name)))
+                    (let ((result (crichton/skills:invoke-skill name
+                                   :entry-point entry-point
+                                   :params params)))
                       (format nil "Skill '~A' returned: ~A" name result))
                   (error (c)
                     (format nil "Error invoking skill '~A': ~A" name c)))))
