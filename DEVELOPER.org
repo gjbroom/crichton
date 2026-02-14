@@ -1360,6 +1360,49 @@ sbcl --noinform --non-interactive \
 
 Target: **Zero STYLE-WARNING conditions**.
 
+*** Coding Practices
+
+**** Prefer =defclass= over =defstruct=
+
+**Always use =defclass= instead of =defstruct=** for data types that may evolve.
+
+**Rationale:**
+- SBCL rejects incompatible struct redefinitions during hot-reload
+- CLOS classes update existing instances automatically via =update-instance-for-redefined-class=
+- Enables iterative development without daemon restart
+- No performance penalty in practice
+
+**When to use =defstruct=:**
+Only for truly fixed-layout, performance-critical types that will never change. In practice: almost never.
+
+**Example:**
+
+#+begin_src lisp
+;; BAD: Will break hot-reload if you add a slot later
+(defstruct my-data
+  (field1 nil)
+  (field2 0))
+
+;; GOOD: Safe for hot-reload
+(defclass my-data ()
+  ((field1 :initarg :field1
+           :initform nil
+           :accessor my-data-field1)
+   (field2 :initarg :field2
+           :initform 0
+           :accessor my-data-field2)))
+
+;; Constructor changes from make-my-data to:
+(make-instance 'my-data :field1 "value" :field2 42)
+#+end_src
+
+**History:**
+- cricht-rcl: Original conversion of core structs to classes
+- cricht-6d7: Skill registry inadvertently reintroduced defstruct
+- cricht-p6i: Policy bead documenting this preference
+
+See AGENTS.org for more development notes.
+
 ** Running Tests
 
 (Note: Comprehensive test suite is a work in progress)

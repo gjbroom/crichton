@@ -7,16 +7,51 @@
 
 ;;; --- Data structures ---
 
-(defstruct skill-entry
-  (name "" :type string)           ; from manifest skill.name
-  (version "" :type string)        ; from manifest skill.version
-  (description "" :type string)    ; from manifest skill.description
-  (author "" :type string)         ; from manifest skill.author
-  (path nil :type (or null pathname)) ; directory path
-  (manifest nil)                   ; full parsed manifest plist
-  (loaded-p nil :type boolean)     ; T if WASM bytes cached
-  (wasm-bytes nil)                 ; cached byte vector (loaded on demand)
-  (entry-point "main" :type string)) ; default export to call
+(defclass skill-entry ()
+  ((name :initarg :name
+         :initform ""
+         :accessor skill-entry-name
+         :type string
+         :documentation "Skill name from manifest skill.name")
+   (version :initarg :version
+            :initform ""
+            :accessor skill-entry-version
+            :type string
+            :documentation "Version from manifest skill.version")
+   (description :initarg :description
+                :initform ""
+                :accessor skill-entry-description
+                :type string
+                :documentation "Description from manifest skill.description")
+   (author :initarg :author
+           :initform ""
+           :accessor skill-entry-author
+           :type string
+           :documentation "Author from manifest skill.author")
+   (path :initarg :path
+         :initform nil
+         :accessor skill-entry-path
+         :type (or null pathname)
+         :documentation "Directory path")
+   (manifest :initarg :manifest
+             :initform nil
+             :accessor skill-entry-manifest
+             :documentation "Full parsed manifest plist")
+   (loaded-p :initarg :loaded-p
+             :initform nil
+             :accessor skill-entry-loaded-p
+             :type boolean
+             :documentation "T if WASM bytes cached")
+   (wasm-bytes :initarg :wasm-bytes
+               :initform nil
+               :accessor skill-entry-wasm-bytes
+               :documentation "Cached byte vector (loaded on demand)")
+   (entry-point :initarg :entry-point
+                :initform "main"
+                :accessor skill-entry-entry-point
+                :type string
+                :documentation "Default export to call"))
+  (:documentation "Registry entry for a discovered WASM skill"))
 
 (defvar *skill-registry* (make-hash-table :test #'equal)
   "Registry of discovered skills, keyed by skill name.")
@@ -55,7 +90,7 @@
                                       (first functions)
                                       "main")))
                 (when name
-                  (let ((entry (make-skill-entry
+                  (let ((entry (make-instance 'skill-entry
                                 :name name
                                 :version (or version "0.0.0")
                                 :description (or description "")
