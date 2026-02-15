@@ -337,129 +337,105 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
 
 ;;; --- RSS tool ---
 
-(defun register-rss-tool ()
-  (multiple-value-bind (props required)
-      (make-properties
-       '("action" "string"
-         "The RSS action: fetch (get all items), check (get new items only), monitor_start (begin periodic monitoring), monitor_stop (stop monitoring), list_monitors (show active monitors)."
-         :enum ("fetch" "check" "monitor_start" "monitor_stop" "list_monitors")
-         :required-p t)
-       '("url" "string"
-         "The RSS/Atom feed URL. Required for fetch, check, monitor_start.")
-       '("name" "string"
+(define-tool rss
+    (:description "Fetch, check, and monitor RSS/Atom feeds.  Use 'fetch' to read all items from a feed, 'check' to see only new items since last check, 'monitor_start' to begin periodic monitoring, 'monitor_stop' to stop a monitor, or 'list_monitors' to see active monitors.")
+  ((action "string"
+           "The RSS action: fetch (get all items), check (get new items only), monitor_start (begin periodic monitoring), monitor_stop (stop monitoring), list_monitors (show active monitors)."
+           :enum ("fetch" "check" "monitor_start" "monitor_stop" "list_monitors")
+           :required-p t)
+   (url "string"
+        "The RSS/Atom feed URL. Required for fetch, check, monitor_start.")
+   (name "string"
          "Monitor name (for monitor_start/monitor_stop). Conventionally 'rss:something'.")
-       '("interval_seconds" "integer"
-         "Polling interval in seconds for monitor_start. Default: 3600 (1 hour)."))
-    (register-tool
-     "rss"
-     "Fetch, check, and monitor RSS/Atom feeds. Use 'fetch' to read all items from a feed, 'check' to see only new items since last check, 'monitor_start' to begin periodic monitoring, 'monitor_stop' to stop a monitor, or 'list_monitors' to see active monitors."
-     (make-json-schema :type "object" :properties props :required required)
-     (lambda (input)
-       (let ((action (hget input "action"))
-             (url (hget input "url"))
-             (name (hget input "name"))
-             (interval (hget input "interval_seconds" 3600)))
-         (cond
-           ((string-equal action "fetch")
-            (if (null url)
-                "Error: 'url' is required for fetch"
-                (with-output-to-string (s)
-                  (crichton/skills:rss-report url :stream s))))
-           ((string-equal action "check")
-            (if (null url)
-                "Error: 'url' is required for check"
-                (with-output-to-string (s)
-                  (crichton/skills:rss-check-report url :stream s))))
-           ((string-equal action "monitor_start")
-            (if (null url)
-                "Error: 'url' is required for monitor_start"
-                (let ((task-name (or name (format nil "rss:~A" url))))
-                  (crichton/skills:rss-monitor-start task-name url interval)
-                  (format nil "Monitor started: ~A (every ~Ds)" task-name interval))))
-           ((string-equal action "monitor_stop")
-            (let ((task-name (or name "?")))
-              (if (crichton/skills:rss-monitor-stop task-name)
-                  (format nil "Monitor stopped: ~A" task-name)
-                  (format nil "Monitor not found: ~A" task-name))))
-           ((string-equal action "list_monitors")
-            (let ((monitors (crichton/skills:rss-list-monitors)))
-              (if monitors
-                  (format nil "~{~S~^~%~}" monitors)
-                  "No active RSS monitors.")))
-           (t (format nil "Unknown RSS action: ~A" action))))))))
+   (interval-seconds "integer"
+                     "Polling interval in seconds for monitor_start. Default: 3600 (1 hour)."
+                     :default 3600))
+  (cond
+    ((string-equal action "fetch")
+     (if (null url)
+         "Error: 'url' is required for fetch"
+         (with-output-to-string (s)
+           (crichton/skills:rss-report url :stream s))))
+    ((string-equal action "check")
+     (if (null url)
+         "Error: 'url' is required for check"
+         (with-output-to-string (s)
+           (crichton/skills:rss-check-report url :stream s))))
+    ((string-equal action "monitor_start")
+     (if (null url)
+         "Error: 'url' is required for monitor_start"
+         (let ((task-name (or name (format nil "rss:~A" url))))
+           (crichton/skills:rss-monitor-start task-name url interval-seconds)
+           (format nil "Monitor started: ~A (every ~Ds)" task-name interval-seconds))))
+    ((string-equal action "monitor_stop")
+     (let ((task-name (or name "?")))
+       (if (crichton/skills:rss-monitor-stop task-name)
+           (format nil "Monitor stopped: ~A" task-name)
+           (format nil "Monitor not found: ~A" task-name))))
+    ((string-equal action "list_monitors")
+     (let ((monitors (crichton/skills:rss-list-monitors)))
+       (if monitors
+           (format nil "~{~S~^~%~}" monitors)
+           "No active RSS monitors.")))
+    (t (format nil "Unknown RSS action: ~A" action))))
 
 ;;; --- Battery tool ---
 
-(defun register-battery-tool ()
-  (multiple-value-bind (props required)
-      (make-properties
-       '("action" "string"
-         "The battery action: status (current battery info), start_monitoring (enable periodic checks), stop_monitoring (disable periodic checks)."
-         :enum ("status" "start_monitoring" "stop_monitoring")
-         :required-p t))
-    (register-tool
-     "battery"
-     "Monitor battery level and charging status on laptop systems. Get current battery percentage, charging state, and time remaining. Can start/stop periodic monitoring with proactive alerts at configurable thresholds. Linux only (reads /sys/class/power_supply/)."
-     (make-json-schema :type "object" :properties props :required required)
-     (lambda (input)
-       (let ((action (hget input "action" "status")))
-         (cond
-           ((string-equal action "status")
-            (with-output-to-string (s)
-              (crichton/skills:battery-report s)))
-           ((string-equal action "start_monitoring")
-            (if (crichton/skills:start-battery-monitoring)
-                "Battery monitoring started. Will check periodically and alert on low battery."
-                "Battery monitoring not available (no batteries detected)."))
-           ((string-equal action "stop_monitoring")
-            (if (crichton/skills:stop-battery-monitoring)
-                "Battery monitoring stopped."
-                "Battery monitoring was not running."))
-           (t
-            (format nil "Unknown battery action: ~A" action))))))))
+(define-tool battery
+    (:description "Monitor battery level and charging status on laptop systems.  Get current battery percentage, charging state, and time remaining.  Can start/stop periodic monitoring with proactive alerts at configurable thresholds.  Linux only (reads /sys/class/power_supply/).")
+  ((action "string"
+           "The battery action: status (current battery info), start_monitoring (enable periodic checks), stop_monitoring (disable periodic checks)."
+           :enum ("status" "start_monitoring" "stop_monitoring")
+           :required-p t))
+  (cond
+    ((string-equal action "status")
+     (with-output-to-string (s)
+       (crichton/skills:battery-report s)))
+    ((string-equal action "start_monitoring")
+     (if (crichton/skills:start-battery-monitoring)
+         "Battery monitoring started. Will check periodically and alert on low battery."
+         "Battery monitoring not available (no batteries detected)."))
+    ((string-equal action "stop_monitoring")
+     (if (crichton/skills:stop-battery-monitoring)
+         "Battery monitoring stopped."
+         "Battery monitoring was not running."))
+    (t
+     (format nil "Unknown battery action: ~A" action))))
 
 ;;; --- Token/resource usage tool ---
 
-(defun register-usage-tool ()
-  (multiple-value-bind (props required)
-      (make-properties
-       '("action" "string"
-         "The action: summary (aggregate across all meters), meter (single meter detail), list (list meter names), recent (recent calls for a meter)."
-         :enum ("summary" "meter" "list" "recent")
-         :required-p t)
-       '("meter" "string"
-         "Meter name (for 'meter' and 'recent' actions). e.g. 'llm'.")
-       '("count" "integer"
-         "Number of recent records to return (for 'recent'). Default: 10."))
-    (register-tool
-     "resource_usage"
-     "Query metered resource usage, burn rate, and cost estimates. Tracks any service that consumes tokens or API calls (LLM, weather API, etc.). Use 'summary' for aggregate view, 'meter' for one service, 'list' to see meter names, 'recent' for call history."
-     (make-json-schema :type "object" :properties props :required required)
-     (lambda (input)
-       (let ((action (hget input "action" "summary"))
-             (meter-name (hget input "meter"))
-             (count (hget input "count" 10)))
-         (cond
-           ((string-equal action "summary")
-            (with-output-to-string (s)
-              (crichton/skills:usage-report :stream s)))
-           ((string-equal action "meter")
-            (if (null meter-name)
-                "Error: 'meter' parameter required for meter action"
-                (with-output-to-string (s)
-                  (crichton/skills:meter-report meter-name :stream s))))
-           ((string-equal action "list")
-            (let ((names (crichton/skills:list-meters)))
-              (if names
-                  (format nil "Active meters: ~{~A~^, ~}" names)
-                  "No active meters.")))
-           ((string-equal action "recent")
-            (if (null meter-name)
-                "Error: 'meter' parameter required for recent action"
-                (format nil "~{~S~^~%~}"
-                        (crichton/skills:meter-recent meter-name count))))
-           (t (format nil "Unknown action: ~A" action))))))))
-
+(define-tool usage
+    (:description "Query metered resource usage, burn rate, and cost estimates.  Tracks any service that consumes tokens or API calls (LLM, weather API, etc.).  Use 'summary' for aggregate view, 'meter' for one service, 'list' to see meter names, 'recent' for call history."
+     :tool-name "resource_usage")
+  ((action "string"
+           "The action: summary (aggregate across all meters), meter (single meter detail), list (list meter names), recent (recent calls for a meter)."
+           :enum ("summary" "meter" "list" "recent")
+           :required-p t)
+   (meter "string"
+          "Meter name (for 'meter' and 'recent' actions). e.g. 'llm'.")
+   (count "integer"
+          "Number of recent records to return (for 'recent'). Default: 10."
+          :default 10))
+  (cond
+    ((string-equal action "summary")
+     (with-output-to-string (s)
+       (crichton/skills:usage-report :stream s)))
+    ((string-equal action "meter")
+     (if (null meter)
+         "Error: 'meter' parameter required for meter action"
+         (with-output-to-string (s)
+           (crichton/skills:meter-report meter :stream s))))
+    ((string-equal action "list")
+     (let ((names (crichton/skills:list-meters)))
+       (if names
+           (format nil "Active meters: ~{~A~^, ~}" names)
+           "No active meters.")))
+    ((string-equal action "recent")
+     (if (null meter)
+         "Error: 'meter' parameter required for recent action"
+         (format nil "~{~S~^~%~}"
+                 (crichton/skills:meter-recent meter count))))
+    (t (format nil "Unknown action: ~A" action))))
 
 ;;; --- Daemon log inspector tool ---
 
@@ -475,48 +451,40 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
                   (gethash "logger" entry "?")
                   (gethash "message" entry ""))))))
 
-(defun register-log-inspector-tool ()
-  (multiple-value-bind (props required)
-      (make-properties
-       '("action" "string"
-         "The log inspection action to perform."
-         :enum ("summary" "recent" "errors" "search")
-         :required-p t)
-       '("count" "integer"
-         "Number of log entries to examine. Default: 50.")
-       '("pattern" "string"
-         "Search substring for the 'search' action. Case-insensitive match against message text.")
-       '("level" "string"
-         "Filter by log level (ERROR, WARN, INFO, DEBUG). Optional for 'search' action."
-         :enum ("ERROR" "WARN" "INFO" "DEBUG")))
-    (register-tool
-     "daemon_logs"
-     "Inspect the daemon's own log files. Use to check for errors, warnings, or verify that systems are functioning correctly. Logs are sanitized — safe to share with users."
-     (make-json-schema :type "object" :properties props :required required)
-     (lambda (input)
-       (let ((action (hget input "action" "summary"))
-             (count (hget input "count" 50))
-             (pattern (hget input "pattern"))
-             (level (hget input "level")))
-         (cond
-           ((string-equal action "summary")
-            (with-output-to-string (s)
-              (crichton/skills:log-report :stream s :count count)))
-           ((string-equal action "recent")
-            (format-log-entries
-             (crichton/skills:read-log-tail :count count)))
-           ((string-equal action "errors")
-            (format-log-entries
-             (crichton/skills:search-log :level "ERROR" :count count)))
-           ((string-equal action "search")
-            (if (and (null pattern) (null level))
-                "Error: 'pattern' and/or 'level' required for search action."
-                (format-log-entries
-                 (crichton/skills:search-log :pattern pattern
-                                             :level level
-                                             :count count))))
-           (t
-            (format nil "Unknown daemon_logs action: ~A" action))))))))
+(define-tool log-inspector
+    (:description "Inspect the daemon's own log files.  Use to check for errors, warnings, or verify that systems are functioning correctly.  Logs are sanitized — safe to share with users."
+     :tool-name "daemon_logs")
+  ((action "string"
+           "The log inspection action to perform."
+           :enum ("summary" "recent" "errors" "search")
+           :required-p t)
+   (count "integer"
+          "Number of log entries to examine. Default: 50."
+          :default 50)
+   (pattern "string"
+            "Search substring for the 'search' action. Case-insensitive match against message text.")
+   (level "string"
+          "Filter by log level (ERROR, WARN, INFO, DEBUG). Optional for 'search' action."
+          :enum ("ERROR" "WARN" "INFO" "DEBUG")))
+  (cond
+    ((string-equal action "summary")
+     (with-output-to-string (s)
+       (crichton/skills:log-report :stream s :count count)))
+    ((string-equal action "recent")
+     (format-log-entries
+      (crichton/skills:read-log-tail :count count)))
+    ((string-equal action "errors")
+     (format-log-entries
+      (crichton/skills:search-log :level "ERROR" :count count)))
+    ((string-equal action "search")
+     (if (and (null pattern) (null level))
+         "Error: 'pattern' and/or 'level' required for search action."
+         (format-log-entries
+          (crichton/skills:search-log :pattern pattern
+                                      :level level
+                                      :count count))))
+    (t
+     (format nil "Unknown daemon_logs action: ~A" action))))
 
 ;;; --- Amp orchestration tools ---
 
