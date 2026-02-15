@@ -101,42 +101,122 @@
                    (push name required)))))
     (values props (coerce (nreverse required) 'vector))))
 
+;;; --- define-tool macro ---
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun %symbol-to-underscored (sym)
+    "Convert a Lisp symbol to an underscored lowercase string.
+     E.g. SYSTEM-INFO → \"system_info\"."
+    (substitute #\_ #\- (string-downcase (symbol-name sym))))
+
+  (defun %extract-declarations (body)
+    "Separate leading DECLARE forms from BODY.
+     Returns (values declarations remaining-body)."
+    (loop for (form . rest) on body
+          while (and (consp form) (eq (car form) 'declare))
+          collect form into decls
+          finally (return (values decls (cons form rest)))))
+
+  (defun %register-fn-name (name)
+    "Derive the REGISTER-<NAME>-TOOL function name symbol, always interned
+     in the CRICHTON/AGENT package."
+    (intern (format nil "~A~A~A"
+                    (string '#:register-)
+                    (string-upcase (symbol-name name))
+                    (string '#:-tool))
+            (find-package '#:crichton/agent)))) ;; end eval-when
+
+(defmacro define-tool (name (&key description (tool-name nil tool-name-p))
+                       params &body body)
+  "Define a tool registration function.  NAME is a symbol used to derive the
+registration function name (REGISTER-<NAME>-TOOL) and, unless :TOOL-NAME is
+supplied, the tool name string (hyphens become underscores).
+
+PARAMS is a list of parameter specs:
+  (var-name type-string description &key required-p enum default)
+Each VAR-NAME is bound via HGET in the handler body.
+
+BODY is wrapped in (BLOCK HANDLER ...) so RETURN-FROM HANDLER is available.
+Leading DECLARE forms in BODY are placed before the BLOCK."
+  (let* ((tool-str (if tool-name-p
+                       tool-name
+                       (%symbol-to-underscored name)))
+         (register-fn (%register-fn-name name)))
+    ;; Build the make-properties argument forms and the let-bindings
+    (let ((prop-forms
+            (loop for spec in params
+                  collect
+                  (destructuring-bind (var type desc &key required-p enum
+                                                          default)
+                      spec
+                    (declare (ignore default))
+                    (let ((name-str (%symbol-to-underscored var)))
+                      `(list ,name-str ,type ,desc
+                             ,@(when required-p '(:required-p t))
+                             ,@(when enum `(:enum (list ,@enum))))))))
+          (let-bindings
+            (loop for spec in params
+                  collect
+                  (destructuring-bind (var type desc &key required-p enum
+                                                          default)
+                      spec
+                    (declare (ignore type desc required-p enum))
+                    (let ((name-str (%symbol-to-underscored var)))
+                      (if default
+                          `(,var (hget input ,name-str ,default))
+                          `(,var (hget input ,name-str))))))))
+      (multiple-value-bind (declarations real-body)
+          (%extract-declarations body)
+        (if params
+            ;; --- With parameters ---
+            `(defun ,register-fn ()
+               (multiple-value-bind (props required)
+                   (make-properties ,@prop-forms)
+                 (register-tool
+                  ,tool-str
+                  ,description
+                  (make-json-schema :type "object"
+                                    :properties props
+                                    :required required)
+                  (lambda (input)
+                    (let ,let-bindings
+                      ,@declarations
+                      (block handler
+                        ,@real-body))))))
+            ;; --- No parameters ---
+            `(defun ,register-fn ()
+               (register-tool
+                ,tool-str
+                ,description
+                (make-json-schema :type "object"
+                                  :properties (make-hash-table :test #'equal))
+                (lambda (input)
+                  (declare (ignore input))
+                  (block handler
+                    ,@real-body)))))))))
+
 ;;; --- Weather tool ---
 
-(defun register-weather-tool ()
-  (multiple-value-bind (props required)
-      (make-properties
-       '("city" "string"
+(define-tool weather
+    (:description "Get current weather conditions and forecast for a Canadian city.  Uses Environment Canada data.  Provides temperature, humidity, wind, pressure, and multi-day forecast.")
+  ((city "string"
          "Canadian city name for weather lookup. Default: configured city or Victoria."))
-    (register-tool
-     "weather"
-     "Get current weather conditions and forecast for a Canadian city. Uses Environment Canada data. Provides temperature, humidity, wind, pressure, and multi-day forecast."
-     (make-json-schema :type "object" :properties props :required required)
-     (lambda (input)
-       (let ((city (hget input "city")))
-         (with-output-to-string (s)
-           (crichton/skills:weather-report :city city :stream s)))))))
+  (with-output-to-string (s)
+    (crichton/skills:weather-report :city city :stream s)))
 
 ;;; --- System info tool ---
 
-(defun register-system-info-tool ()
-  (multiple-value-bind (props required)
-      (make-properties
-       '("include_load" "boolean" "Include CPU load average. Default: true.")
-       '("include_memory" "boolean" "Include memory statistics. Default: true.")
-       '("include_thermal" "boolean" "Include thermal zone temperatures. Default: true.")
-       '("include_disk" "boolean" "Include disk usage. Default: true."))
-    (declare (ignore required))
-    (register-tool
-     "system_info"
-     "Get current system health metrics: CPU load average, memory usage, thermal zones, and disk usage. Linux only (reads /proc and /sys). Use this to check if the system is healthy or under stress."
-     (make-json-schema :type "object" :properties props)
-     (lambda (input)
-       (declare (ignore input))
-       (with-output-to-string (s)
-         (crichton/skills:system-report
-          :stream s
-          :mounts '("/" "/home")))))))
+(define-tool system-info
+    (:description "Get current system health metrics: CPU load average, memory usage, thermal zones, and disk usage.  Linux only (reads /proc and /sys).  Use this to check if the system is healthy or under stress.")
+  ((include-load "boolean" "Include CPU load average. Default: true.")
+   (include-memory "boolean" "Include memory statistics. Default: true.")
+   (include-thermal "boolean" "Include thermal zone temperatures. Default: true.")
+   (include-disk "boolean" "Include disk usage. Default: true."))
+  (declare (ignore include-load include-memory include-thermal include-disk))
+  (with-output-to-string (s)
+    (crichton/skills:system-report
+     :stream s
+     :mounts '("/" "/home"))))
 
 ;;; --- Scheduler tool ---
 
@@ -237,31 +317,23 @@
 
 ;;; --- Current time tool ---
 
-(defun register-time-tool ()
-  (register-tool
-   "time"
-   "Get the current date and time. Returns the current date and time in both human-readable and Unix timestamp formats. Useful for understanding when events happen relative to the current moment."
-   (make-json-schema :type "object" :properties (make-hash-table :test #'equal))
-   (lambda (input)
-     (declare (ignore input))
-     (with-output-to-string (s)
-       (crichton/skills:current-time-report :stream s)
-       (let ((pl (crichton/skills:current-time-plist)))
-         (format s "Unix timestamp: ~D~%" (getf pl :unix-seconds)))))))
+(define-tool time
+    (:description "Get the current date and time.  Returns the current date and time in both human-readable and Unix timestamp formats.  Useful for understanding when events happen relative to the current moment.")
+  ()
+  (with-output-to-string (s)
+    (crichton/skills:current-time-report :stream s)
+    (let ((pl (crichton/skills:current-time-plist)))
+      (format s "Unix timestamp: ~D~%" (getf pl :unix-seconds)))))
 
 ;;; --- Ephemeris tool (solar + lunar) ---
 
-(defun register-ephemeris-tool ()
-  (register-tool
-   "ephemeris"
-   "Get solar and lunar ephemeris data for today. Includes sunrise, sunset, solar noon, day length, lunar phase, and illumination percentage. Uses the configured location. No input required."
-   (make-json-schema :type "object" :properties (make-hash-table :test #'equal))
-   (lambda (input)
-     (declare (ignore input))
-     (let ((lat (crichton/config:config-section-get :location :latitude 48.43))
-           (lon (crichton/config:config-section-get :location :longitude -123.37)))
-       (with-output-to-string (s)
-         (crichton/skills:ephemeris-report lat lon :stream s))))))
+(define-tool ephemeris
+    (:description "Get solar and lunar ephemeris data for today.  Includes sunrise, sunset, solar noon, day length, lunar phase, and illumination percentage.  Uses the configured location.  No input required.")
+  ()
+  (let ((lat (crichton/config:config-section-get :location :latitude 48.43))
+        (lon (crichton/config:config-section-get :location :longitude -123.37)))
+    (with-output-to-string (s)
+      (crichton/skills:ephemeris-report lat lon :stream s))))
 
 ;;; --- RSS tool ---
 
@@ -448,16 +520,12 @@
 
 ;;; --- Amp orchestration tools ---
 
-(defun register-amp-check-tool ()
-  (register-tool
-   "amp_check"
-   "Check whether the Amp CLI coding agent is available on this system. Returns availability status. Use this before attempting amp_code or amp_test tasks."
-   (make-json-schema :type "object" :properties (make-hash-table :test #'equal))
-   (lambda (input)
-     (declare (ignore input))
-     (if (crichton/skills:amp-available-p)
-         "Amp CLI is available and ready for coding/testing tasks."
-         "Amp CLI is NOT available. Install it to enable code delegation."))))
+(define-tool amp-check
+    (:description "Check whether the Amp CLI coding agent is available on this system.  Returns availability status.  Use this before attempting amp_code or amp_test tasks.")
+  ()
+  (if (crichton/skills:amp-available-p)
+      "Amp CLI is available and ready for coding/testing tasks."
+      "Amp CLI is NOT available. Install it to enable code delegation."))
 
 (defun register-amp-code-tool ()
   (multiple-value-bind (props required)
