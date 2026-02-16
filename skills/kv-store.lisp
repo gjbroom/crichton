@@ -27,15 +27,6 @@
 (defvar *kv-cache* (make-hash-table :test #'equal)
   "In-memory cache: skill-id string → hash-table of key→value.")
 
-;;; --- Timestamp ---
-
-(defun kv-iso8601-now ()
-  "Return current UTC time as ISO 8601 string."
-  (multiple-value-bind (sec min hour day month year)
-      (decode-universal-time (get-universal-time) 0)
-    (format nil "~4,'0D-~2,'0D-~2,'0DT~2,'0D:~2,'0D:~2,'0DZ"
-            year month day hour min sec)))
-
 ;;; --- Path helper ---
 
 (defun kv-file-path (skill-id)
@@ -50,10 +41,10 @@
   (let ((envelope (make-hash-table :test #'equal)))
     (setf (gethash "version" envelope) 1
           (gethash "skill_id" envelope) skill-id
-          (gethash "updated_at" envelope) (kv-iso8601-now)
+          (gethash "updated_at" envelope) (crichton/config:iso8601-now)
           (gethash "data" envelope) data-ht)
     (unless (gethash "created_at" envelope)
-      (setf (gethash "created_at" envelope) (kv-iso8601-now)))
+      (setf (gethash "created_at" envelope) (crichton/config:iso8601-now)))
     (let ((*print-pretty* nil))
       (with-output-to-string (s)
         (shasht:write-json envelope s)))))

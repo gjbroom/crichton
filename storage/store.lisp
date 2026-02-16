@@ -27,15 +27,6 @@
 (defvar *dirty-namespaces* (make-hash-table :test #'equal)
   "Set of namespace names that have unsaved changes.")
 
-;;; --- Timestamp ---
-
-(defun storage-iso8601-now ()
-  "Return current UTC time as ISO 8601 string."
-  (multiple-value-bind (sec min hour day month year)
-      (decode-universal-time (get-universal-time) 0)
-    (format nil "~4,'0D-~2,'0D-~2,'0DT~2,'0D:~2,'0D:~2,'0DZ"
-            year month day hour min sec)))
-
 ;;; --- Path helper ---
 
 (defun storage-file-path (namespace)
@@ -50,7 +41,7 @@
   (let ((envelope (make-hash-table :test #'equal)))
     (setf (gethash "version" envelope) 1
           (gethash "namespace" envelope) namespace
-          (gethash "updated_at" envelope) (storage-iso8601-now)
+          (gethash "updated_at" envelope) (crichton/config:iso8601-now)
           (gethash "data" envelope) data-ht)
     (let ((*print-pretty* t))
       (with-output-to-string (s)

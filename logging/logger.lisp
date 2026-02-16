@@ -25,15 +25,6 @@
   `(let ((*redaction-patterns* (append (list ,@patterns) *redaction-patterns*)))
      ,@body))
 
-;;; --- Timestamp ---
-
-(defun iso8601-now ()
-  "Return current UTC time as ISO 8601 string."
-  (multiple-value-bind (sec min hour day month year)
-      (decode-universal-time (get-universal-time) 0)
-    (format nil "~4,'0D-~2,'0D-~2,'0DT~2,'0D:~2,'0D:~2,'0DZ"
-            year month day hour min sec)))
-
 ;;; --- JSON Lines Appender ---
 
 (defvar *json-appender* nil
@@ -49,7 +40,7 @@
 (defun make-log-entry (level-name category message)
   "Build a hash-table representing one JSON log line."
   (let ((ht (make-hash-table :test #'equal)))
-    (setf (gethash "timestamp" ht) (iso8601-now)
+    (setf (gethash "timestamp" ht) (crichton/config:iso8601-now)
           (gethash "level" ht) level-name
           (gethash "logger" ht) (or category "")
           (gethash "message" ht) message)

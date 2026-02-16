@@ -36,13 +36,6 @@
   "Return current Unix timestamp as an integer."
   (- (get-universal-time) 2208988800))
 
-(defun iso8601-now ()
-  "Return current UTC time as ISO 8601 string."
-  (multiple-value-bind (sec min hour day month year)
-      (decode-universal-time (get-universal-time) 0)
-    (format nil "~4,'0D-~2,'0D-~2,'0DT~2,'0D:~2,'0D:~2,'0DZ"
-            year month day hour min sec)))
-
 ;;; --- Session operations ---
 
 (defun session-file-path (session-id)
@@ -101,7 +94,7 @@
   "Create a new session. Returns a plist with :ID, :CREATED-AT, :MESSAGES, :METADATA.
    Does NOT persist — call save-session to write to disk."
   (list :id (generate-session-id)
-        :created-at (iso8601-now)
+        :created-at (crichton/config:iso8601-now)
         :messages (make-array 0 :adjustable t :fill-pointer 0)
         :metadata (or metadata (make-hash-table :test #'equal))))
 
@@ -182,6 +175,6 @@
         (msg (make-hash-table :test #'equal)))
     (setf (gethash "role" msg) (string-downcase (symbol-name role))
           (gethash "content" msg) content
-          (gethash "timestamp" msg) (iso8601-now))
+          (gethash "timestamp" msg) (crichton/config:iso8601-now))
     (vector-push-extend msg messages)
     session))
