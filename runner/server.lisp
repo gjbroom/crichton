@@ -26,17 +26,17 @@
   (let ((id (crichton/rpc:msg-id msg))
         (op (crichton/rpc:msg-op msg)))
     (handler-case
-        (cond
-          ((string-equal op "ping")
+        (crichton/config:string-case op
+          ("ping"
            (crichton/rpc:make-ok-response id "pong"))
 
-          ((string-equal op "invoke")
+          ("invoke"
            (handle-invoke id msg))
 
-          ((string-equal op "invoke_json")
+          ("invoke_json"
            (handle-invoke-json id msg))
 
-          (t
+          (otherwise
            (crichton/rpc:make-error-response
             id "unknown_op"
             (format nil "Unknown operation: ~A" op))))
