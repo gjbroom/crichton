@@ -109,6 +109,11 @@
            #:manifest-skill-name
            #:manifest-skill-version
            #:manifest-capabilities
+           #:manifest-function-info
+           #:manifest-function-abi
+           #:manifest-function-input-type
+           #:manifest-function-output-type
+           #:manifest-function-description
            #:manifest-error
            #:manifest-error-path
            #:manifest-error-problems
@@ -127,6 +132,13 @@
            #:unload-skill
            #:*max-skill-json-input-bytes*
            #:skill-report
+           ;; pipeline executor
+           #:execute-pipeline
+           #:pipeline-error
+           #:pipeline-error-step-id
+           #:pipeline-error-step-skill
+           #:register-pipeline-builtin
+           #:register-default-pipeline-builtins
            #:weather-report
            #:weather-conditions
            #:system-loadavg

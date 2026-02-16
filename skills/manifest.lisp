@@ -84,6 +84,40 @@
 (defun manifest-capabilities (manifest)
   (getf manifest :capabilities))
 
+(defun manifest-function-info (manifest entry-point)
+  "Look up [provides.function.<entry-point>] metadata from MANIFEST.
+   Returns the function info plist, or NIL if not declared."
+  (let* ((provides (getf manifest :provides))
+         (function-table (getf provides :function)))
+    (when function-table
+      (getf function-table
+            (intern (string-upcase (substitute #\- #\_ entry-point))
+                    :keyword)))))
+
+(defun manifest-function-abi (manifest entry-point)
+  "Return the ABI (:JSON or :I32) for ENTRY-POINT from MANIFEST."
+  (let ((info (manifest-function-info manifest entry-point)))
+    (when info
+      (let ((abi (getf info :abi)))
+        (when (and abi (string-equal abi "json"))
+          (return-from manifest-function-abi :json)))))
+  :i32)
+
+(defun manifest-function-input-type (manifest entry-point)
+  "Return the declared input_type string for ENTRY-POINT, or NIL."
+  (let ((info (manifest-function-info manifest entry-point)))
+    (when info (getf info :input-type))))
+
+(defun manifest-function-output-type (manifest entry-point)
+  "Return the declared output_type string for ENTRY-POINT, or NIL."
+  (let ((info (manifest-function-info manifest entry-point)))
+    (when info (getf info :output-type))))
+
+(defun manifest-function-description (manifest entry-point)
+  "Return the declared description string for ENTRY-POINT, or NIL."
+  (let ((info (manifest-function-info manifest entry-point)))
+    (when info (getf info :description))))
+
 ;;; --- Capability validation against policy ---
 
 (defun validate-capabilities (manifest policy)

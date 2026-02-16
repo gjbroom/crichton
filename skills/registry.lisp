@@ -211,25 +211,6 @@
 (defvar *max-skill-json-input-bytes* (* 4 1024 1024)
   "Maximum serialized JSON input size in bytes for skill invocation (default 4MB).")
 
-(defun manifest-function-abi (manifest entry-point)
-  "Determine the ABI for ENTRY-POINT from MANIFEST.
-   Checks [provides.function.<entry-point>] for an 'abi' key.
-   Returns :JSON or :I32 (default)."
-  (let* ((provides (getf manifest :provides))
-         (function-table (getf provides :function)))
-    ;; function-table is a plist of function-name -> plist when parsed from
-    ;; [provides.function.<name>] TOML sections
-    (when function-table
-      (let ((func-info (getf function-table
-                             (intern (string-upcase
-                                      (substitute #\- #\_ entry-point))
-                                     :keyword))))
-        (when func-info
-          (let ((abi (getf func-info :abi)))
-            (when (and abi (string-equal abi "json"))
-              (return-from manifest-function-abi :json)))))))
-  :i32)
-
 ;;; --- Invocation ---
 
 (defun invoke-skill (name &key entry-point params (abi :auto))

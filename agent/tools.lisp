@@ -530,17 +530,19 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
 ;;; --- Skills tool ---
 
 (define-tool skills
-    (:description "Manage external WASM skills.  Actions: 'list' (show all discovered skills), 'info' (get details for a specific skill), 'invoke' (run a skill with optional params), 'refresh' (re-scan skills directory).  Skills are discovered from ~/.crichton/skills/ and can be scheduled using the scheduler tool.  Use 'params' to pass structured input to skills that expect JSON data (e.g., rss-filter).")
+    (:description "Manage external WASM skills and pipelines.  Actions: 'list' (show all discovered skills), 'info' (get details for a specific skill), 'invoke' (run a skill with optional params), 'refresh' (re-scan skills directory), 'pipeline' (run a multi-step pipeline chaining skills together).  Skills are discovered from ~/.crichton/skills/ and can be scheduled using the scheduler tool.  Use 'params' to pass structured input to skills that expect JSON data (e.g., rss-filter).  Use 'pipeline' to chain multiple steps where later steps reference earlier results via {\"ref\": \"step_id.key\"}.")
   ((action "string"
            "The skills action to perform."
-           :enum ("list" "info" "invoke" "refresh")
+           :enum ("list" "info" "invoke" "refresh" "pipeline")
            :required-p t)
    (name "string"
          "Skill name. Required for info and invoke.")
    (entry-point "string"
                 "Function entry point to call. Optional; defaults to the manifest's declared entry point.")
    (params "object"
-           "JSON parameters to pass to the skill. When provided, the JSON ABI is used automatically. Required for pure-function skills like rss-filter."))
+           "JSON parameters to pass to the skill. When provided, the JSON ABI is used automatically. Required for pure-function skills like rss-filter.")
+   (steps "array"
+          "Pipeline steps array (for 'pipeline' action). Each step is an object with: id (string, required), kind ('wasm'/'builtin'/'auto'), skill (string, for WASM steps), builtin (string, for builtin steps like 'rss_fetch', 'rss_check', 'weather'), entry_point (string), params (object, may contain {\"ref\": \"step_id.key\"} references to earlier step outputs)."))
   (cond
     ((string-equal action "list")
      (crichton/skills:discover-skills)            ; refresh before listing
@@ -563,6 +565,23 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
            (format nil "Skill '~A' returned: ~A" name result))
        (error (c)
          (format nil "Error invoking skill '~A': ~A" name c))))
+    ((string-equal action "pipeline")
+     (unless steps
+       (return-from handler "Error: 'steps' array is required for pipeline action."))
+     (handler-case
+         (let* ((step-list (coerce steps 'list))
+                (results (crichton/skills:execute-pipeline step-list))
+                (step-count (hash-table-count results)))
+           (with-output-to-string (s)
+             (format s "Pipeline completed (~D step~:P):~%" step-count)
+             (maphash (lambda (id result)
+                        (format s "  ~A: ~S~%" id result))
+                      results)))
+       (crichton/skills:pipeline-error (c)
+         (format nil "Pipeline failed at step '~A': ~A"
+                 (crichton/skills:pipeline-error-step-id c) c))
+       (error (c)
+         (format nil "Pipeline error: ~A" c))))
     ((string-equal action "refresh")
      (let ((count (crichton/skills:discover-skills)))
        (format nil "Discovered ~D skill~:P." count)))
@@ -586,4 +605,6 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
   (register-amp-code-tool)
   (register-amp-test-tool)
   (register-skills-tool)
+  ;; Register pipeline built-in functions
+  (crichton/skills:register-default-pipeline-builtins)
   (log:info "Registered ~D agent tools" (hash-table-count *agent-tools*)))
