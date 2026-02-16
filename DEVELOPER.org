@@ -1054,6 +1054,213 @@ Default builtins (registered via =register-default-pipeline-builtins=):
             (pipeline-error-step-id c) c)))
 #+end_src
 
+** RSS Data Protocols
+
+The built-in RSS reader (~skills/builtins/rss.lisp~) and the =rss-filter=
+WASM skill (~examples/skills/rss-filter/~) communicate through a shared JSON
+schema.  This section documents the exact data formats produced and consumed
+at each stage.
+
+*** Canonical RSS Item Schema
+
+All RSS functions produce items using a single canonical plist schema (via
+=feed-item-to-plist=).  When serialized to JSON by =normalize-for-json= in
+=wasm/engine.lisp=, plist keywords become lowercase underscored strings
+(e.g. =:feed-name= → =feed_name=).
+
+*Plist form (Lisp side):*
+
+#+begin_src lisp
+(:id "https://example.com/article-1"   ; guid or link (required)
+ :title "Article Title"                 ; item title (required)
+ :description "Summary text..."         ; item summary
+ :link "https://example.com/article-1"  ; URL to full article
+ :published "Mon, 10 Feb 2026 12:00:00" ; publication date string
+ :feed-name "Example Feed")             ; source feed title
+#+end_src
+
+*JSON form (WASM side):*
+
+#+begin_src json
+{
+  "id": "https://example.com/article-1",
+  "title": "Article Title",
+  "description": "Summary text...",
+  "link": "https://example.com/article-1",
+  "published": "Mon, 10 Feb 2026 12:00:00",
+  "feed_name": "Example Feed"
+}
+#+end_src
+
+| Field         | Plist key      | JSON key      | Type   | Required | Notes                             |
+|---------------+----------------+---------------+--------+----------+-----------------------------------|
+| Identifier    | =:id=          | =id=          | string | yes      | From RSS =<guid>= or =<link>=    |
+| Title         | =:title=       | =title=       | string | yes      |                                   |
+| Description   | =:description= | =description= | string | no       | RSS =<description>= / Atom =<summary>= |
+| Content       | (not produced) | =content=     | string | no       | Reserved for full-text (future)   |
+| Link          | =:link=        | =link=        | string | no       | URL to the full article           |
+| Published     | =:published=   | =published=   | string | no       | Date string (format varies by feed) |
+| Feed name     | =:feed-name=   | =feed_name=   | string | no       | Title of the source feed          |
+
+*** =rss_fetch= Output (Built-in)
+
+=rss-fetch= returns a plist describing the feed and its items:
+
+#+begin_src lisp
+(rss-fetch "https://example.com/rss" :max-items 50)
+;; =>
+(:url "https://example.com/rss"
+ :title "Example Feed"
+ :format :rss            ; :rss, :rdf, or :atom
+ :count 12
+ :items ((:id "..." :title "..." :description "..." :link "..."
+          :published "..." :feed-name "Example Feed")
+         ...))
+#+end_src
+
+Serialized to JSON (e.g. as pipeline step output):
+
+#+begin_src json
+{
+  "url": "https://example.com/rss",
+  "title": "Example Feed",
+  "format": "rss",
+  "count": 12,
+  "items": [
+    {
+      "id": "...",
+      "title": "...",
+      "description": "...",
+      "link": "...",
+      "published": "...",
+      "feed_name": "Example Feed"
+    }
+  ]
+}
+#+end_src
+
+*** =rss_check= Output (Built-in)
+
+=rss-check= returns only new (unseen) items:
+
+#+begin_src lisp
+(rss-check "https://example.com/rss")
+;; =>
+(:url "https://example.com/rss"
+ :title "Example Feed"
+ :new-count 3
+ :total-count 12
+ :new-items ((:id "..." :title "..." :description "..." :link "..."
+              :published "..." :feed-name "Example Feed")
+             ...))
+#+end_src
+
+*** =rss-filter= / =filter_items= Input (WASM)
+
+The =filter_items= function expects a JSON object containing the items to
+filter and keyword parameters:
+
+#+begin_src json
+{
+  "items": [                          
+    {
+      "id": "guid-1",
+      "title": "Carney announces rate decision",
+      "description": "Bank of Canada governor spoke today",
+      "link": "https://example.com/1",
+      "published": "2026-02-10T12:00:00Z",
+      "feed_name": "CBC News"
+    }
+  ],
+  "keywords": ["Carney", "Bank of Canada"],
+  "match_mode": "any",
+  "search_fields": ["title", "description"],
+  "case_sensitive": false
+}
+#+end_src
+
+| Field            | Type          | Required | Default                    | Description                    |
+|------------------+---------------+----------+----------------------------+--------------------------------|
+| =items=          | array         | yes      | —                          | RSS items (canonical schema)   |
+| =keywords=       | array         | yes      | —                          | Strings to match against items |
+| =match_mode=     | string        | no       | ="any"=                    | ="any"= (OR) or ="all"= (AND) |
+| =search_fields=  | array         | no       | =["title","description"]=  | Fields to search               |
+| =case_sensitive= | boolean       | no       | =false=                    | Case-sensitive matching        |
+
+*** =rss-filter= / =filter_items= Output (WASM)
+
+Returns matched items with the keywords that triggered each match:
+
+#+begin_src json
+{
+  "matches": [
+    {
+      "id": "guid-1",
+      "title": "Carney announces rate decision",
+      "description": "Bank of Canada governor spoke today",
+      "link": "https://example.com/1",
+      "published": "2026-02-10T12:00:00Z",
+      "feed_name": "CBC News",
+      "matched_keywords": ["Carney", "Bank of Canada"]
+    }
+  ],
+  "statistics": {
+    "items_scanned": 12,
+    "items_matched": 1
+  }
+}
+#+end_src
+
+*** Pipeline Composition
+
+The schemas are designed to compose via pipeline references.  The =items=
+field from =rss_fetch= output feeds directly into the =items= parameter of
+=filter_items=:
+
+#+begin_src json
+[
+  {
+    "id": "fetch",
+    "builtin": "rss_fetch",
+    "params": {"url": "https://www.cbc.ca/webfeed/rss/rss-topstories"}
+  },
+  {
+    "id": "filter",
+    "skill": "rss-filter",
+    "entry_point": "filter_items",
+    "params": {
+      "items": {"ref": "fetch.items"},
+      "keywords": ["Carney", "Bank of Canada"],
+      "match_mode": "any"
+    }
+  }
+]
+#+end_src
+
+Equivalent Lisp invocation (without pipelines):
+
+#+begin_src lisp
+(let* ((feed (rss-fetch "https://www.cbc.ca/webfeed/rss/rss-topstories"))
+       (result (invoke-skill "rss-filter"
+                 :entry-point "filter_items"
+                 :params (list :items (getf feed :items)
+                               :keywords '("Carney" "Bank of Canada")
+                               :match-mode "any"))))
+  (getf result :matches))
+#+end_src
+
+*** JSON Serialization Notes
+
+Lisp plist params are automatically converted to JSON objects by
+=normalize-for-json= in =wasm/engine.lisp= before WASM invocation:
+
+- Keyword keys are downcased and hyphens become underscores:
+  =:feed-name= → ="feed_name"=, =:match-mode= → ="match_mode"=
+- Nested plists are recursively converted
+- Hash-tables pass through unchanged
+- Lists that don't look like plists (first element not a keyword)
+  are serialized as JSON arrays
+
 ** Agent Tools API (~agent/tools.lisp~)
 
 Register and manage tools available to the LLM agent.
