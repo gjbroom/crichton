@@ -606,9 +606,15 @@ instead of a WAT string.  Returns i32 result (or NIL if nresults=0)."
 (defconstant +json-output-buffer-size+ 65536
   "Default output buffer size for JSON ABI calls (64 KiB).")
 
-(defun get-wasm-memory (context instance)
-  "Get the WASM linear memory base pointer and size from INSTANCE.
-Returns (values base-pointer memory-size memory-ptr)."
+;;; NOTE on wasmtime value lifetimes:
+;;; wasmtime_func_t and wasmtime_memory_t are value types embedded inside
+;;; wasmtime_extern_t.  Pointers to them are only valid while the containing
+;;; extern struct is alive.  Never cache such pointers across scopes — always
+;;; look up exports and use them within the same with-foreign-object scope.
+
+(defun with-wasm-memory (context instance fn)
+  "Look up WASM linear memory and call FN with (base mem-size).
+   The base pointer is only valid within FN's dynamic extent."
   (cffi:with-foreign-object (mem-ext '(:struct wasmtime-extern))
     (unless (wasmtime-instance-export-get context instance "memory" 6 mem-ext)
       (error "WASM module does not export 'memory'"))
@@ -617,116 +623,113 @@ Returns (values base-pointer memory-size memory-ptr)."
            (mem-size (wasmtime-memory-data-size context mem-ptr)))
       (when (cffi:null-pointer-p base)
         (error "WASM memory base pointer is null"))
-      (values base mem-size mem-ptr))))
+      (funcall fn base mem-size))))
 
-(defun get-wasm-export-func (context instance name)
-  "Get a function export from INSTANCE by NAME. Returns the func pointer."
+(defun call-export-by-name (context instance name args nresults)
+  "Look up export NAME, call it with i32 ARGS, return i32 result.
+   The export handle is kept alive for the duration of the call."
   (cffi:with-foreign-object (ext '(:struct wasmtime-extern))
     (unless (wasmtime-instance-export-get
              context instance name (length name) ext)
       (error "Export ~S not found" name))
-    (wasmtime-extern-func-ptr ext)))
-
-(defun call-wasm-alloc (context alloc-func size)
-  "Call the WASM alloc(size) -> ptr function. Returns the i32 pointer.
-Signals an error if alloc returns 0 (null)."
-  (cffi:with-foreign-objects ((args '(:struct wasmtime-val) 1)
-                              (results '(:struct wasmtime-val) 1)
-                              (trap-ptr :pointer))
-    (setf (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 0)) size)
-    (setf (cffi:mem-ref trap-ptr :pointer) (cffi:null-pointer))
-    (let ((err (wasmtime-func-call context alloc-func args 1 results 1 trap-ptr)))
-      (check-wasmtime-error err trap-ptr "alloc"))
-    (let ((ptr (wasmtime-val-i32 results)))
-      (when (zerop ptr)
-        (error "WASM alloc(~D) returned null pointer" size))
-      ptr)))
-
-(defun call-wasm-dealloc (context dealloc-func ptr size)
-  "Call the WASM dealloc(ptr, size) function. Ignores errors from dealloc."
-  (handler-case
-      (cffi:with-foreign-objects ((args '(:struct wasmtime-val) 2)
-                                  (trap-ptr :pointer))
-        (setf (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 0)) ptr)
-        (setf (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 1)) size)
-        (setf (cffi:mem-ref trap-ptr :pointer) (cffi:null-pointer))
-        (let ((err (wasmtime-func-call context dealloc-func args 2
-                                       (cffi:null-pointer) 0 trap-ptr)))
-          (check-wasmtime-error err trap-ptr "dealloc")))
-    (error (c)
-      (log:warn "dealloc failed (non-fatal): ~A" c))))
+    (let* ((func-ptr (wasmtime-extern-func-ptr ext))
+           (nargs (length args)))
+      (cffi:with-foreign-objects ((wasm-args '(:struct wasmtime-val) (max nargs 1))
+                                  (wasm-results '(:struct wasmtime-val) (max nresults 1))
+                                  (call-trap :pointer))
+        (loop for val in args
+              for i from 0
+              do (setf (wasmtime-val-i32
+                        (cffi:mem-aptr wasm-args '(:struct wasmtime-val) i))
+                       val))
+        (setf (cffi:mem-ref call-trap :pointer) (cffi:null-pointer))
+        (let ((call-err (wasmtime-func-call
+                         context func-ptr
+                         (if (zerop nargs) (cffi:null-pointer) wasm-args)
+                         nargs
+                         (if (zerop nresults) (cffi:null-pointer) wasm-results)
+                         nresults
+                         call-trap)))
+          (check-wasmtime-error call-err call-trap name)
+          (if (zerop nresults)
+              nil
+              (wasmtime-val-i32 wasm-results)))))))
 
 (defun write-bytes-to-wasm-memory (context instance bytes wasm-ptr)
   "Write BYTES (an octet vector) into WASM linear memory at WASM-PTR offset."
-  (multiple-value-bind (base mem-size) (get-wasm-memory context instance)
-    (let ((len (length bytes)))
-      (when (> (+ wasm-ptr len) mem-size)
-        (error "Write would exceed WASM memory: offset ~D + len ~D > size ~D"
-               wasm-ptr len mem-size))
-      (loop for i below len
-            do (setf (cffi:mem-aref base :uint8 (+ wasm-ptr i))
-                     (aref bytes i))))))
+  (with-wasm-memory context instance
+    (lambda (base mem-size)
+      (let ((len (length bytes)))
+        (when (> (+ wasm-ptr len) mem-size)
+          (error "Write would exceed WASM memory: offset ~D + len ~D > size ~D"
+                 wasm-ptr len mem-size))
+        (loop for i below len
+              do (setf (cffi:mem-aref base :uint8 (+ wasm-ptr i))
+                       (aref bytes i)))))))
 
 (defun read-bytes-from-wasm-memory (context instance wasm-ptr len)
   "Read LEN bytes from WASM linear memory at WASM-PTR offset.
-Returns a Lisp string (UTF-8 decoded)."
-  (multiple-value-bind (base mem-size) (get-wasm-memory context instance)
-    (when (> (+ wasm-ptr len) mem-size)
-      (error "Read would exceed WASM memory: offset ~D + len ~D > size ~D"
-             wasm-ptr len mem-size))
-    (cffi:foreign-string-to-lisp (cffi:inc-pointer base wasm-ptr)
-                                 :count len :encoding :utf-8)))
-
-(defun call-wasm-json-func (context func-ptr params-ptr params-len out-ptr out-len)
-  "Call a WASM function with JSON ABI signature:
-  (i32 params_ptr, i32 params_len, i32 out_ptr, i32 out_len) -> i32
-Returns the i32 return code."
-  (cffi:with-foreign-objects ((args '(:struct wasmtime-val) 4)
-                              (results '(:struct wasmtime-val) 1)
-                              (trap-ptr :pointer))
-    (setf (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 0)) params-ptr)
-    (setf (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 1)) params-len)
-    (setf (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 2)) out-ptr)
-    (setf (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 3)) out-len)
-    (setf (cffi:mem-ref trap-ptr :pointer) (cffi:null-pointer))
-    (let ((err (wasmtime-func-call context func-ptr args 4 results 1 trap-ptr)))
-      (check-wasmtime-error err trap-ptr "json_func_call"))
-    (wasmtime-val-i32 results)))
+   Returns a Lisp string (UTF-8 decoded)."
+  (with-wasm-memory context instance
+    (lambda (base mem-size)
+      (when (> (+ wasm-ptr len) mem-size)
+        (error "Read would exceed WASM memory: offset ~D + len ~D > size ~D"
+               wasm-ptr len mem-size))
+      (cffi:foreign-string-to-lisp (cffi:inc-pointer base wasm-ptr)
+                                   :count len :encoding :utf-8))))
 
 (defun json-call-with-instance (context instance export-name params
                                 &key (output-buffer-size +json-output-buffer-size+))
   "Execute a JSON ABI call on an already-instantiated WASM module.
-PARAMS is a Lisp data structure (hash-table, plist, etc.) to serialize as JSON.
-Returns the parsed JSON result."
+   PARAMS is a Lisp data structure (hash-table, plist, etc.) to serialize as
+   JSON.  Returns the parsed JSON result.  All export handles are looked up
+   fresh for each call to avoid dangling pointers."
   (let* ((json-string (with-output-to-string (s)
                         (shasht:write-json params s)))
          (json-bytes (sb-ext:string-to-octets json-string :external-format :utf-8))
          (json-len (length json-bytes))
-         (alloc-func (get-wasm-export-func context instance "alloc"))
-         (dealloc-func (get-wasm-export-func context instance "dealloc"))
-         (target-func (get-wasm-export-func context instance export-name))
          (in-ptr 0)
          (out-ptr 0))
     (unwind-protect
          (progn
-           (setf in-ptr (call-wasm-alloc context alloc-func json-len))
+           ;; Allocate input buffer and write JSON bytes
+           (let ((ptr (call-export-by-name context instance "alloc"
+                                           (list json-len) 1)))
+             (when (zerop ptr)
+               (error "WASM alloc(~D) returned null pointer" json-len))
+             (setf in-ptr ptr))
            (write-bytes-to-wasm-memory context instance json-bytes in-ptr)
-           (setf out-ptr (call-wasm-alloc context alloc-func output-buffer-size))
-           (let ((rc (call-wasm-json-func context target-func
-                                          in-ptr json-len
-                                          out-ptr output-buffer-size)))
+           ;; Allocate output buffer
+           (let ((ptr (call-export-by-name context instance "alloc"
+                                           (list output-buffer-size) 1)))
+             (when (zerop ptr)
+               (error "WASM alloc(~D) returned null pointer" output-buffer-size))
+             (setf out-ptr ptr))
+           ;; Call the target function
+           (let ((rc (call-export-by-name context instance export-name
+                                          (list in-ptr json-len
+                                                out-ptr output-buffer-size)
+                                          1)))
              (unless (zerop rc)
                (error "WASM JSON function ~S returned non-zero: ~D" export-name rc))
+             ;; Read and parse result JSON
              (let ((result-str (read-bytes-from-wasm-memory
                                 context instance out-ptr output-buffer-size)))
                (let ((trimmed (string-right-trim '(#\Nul) result-str)))
                  (if (zerop (length trimmed))
                      nil
                      (shasht:read-json trimmed))))))
+      ;; Cleanup: dealloc both buffers (ignore errors)
       (when (plusp in-ptr)
-        (call-wasm-dealloc context dealloc-func in-ptr json-len))
+        (handler-case
+            (call-export-by-name context instance "dealloc"
+                                 (list in-ptr json-len) 0)
+          (error (c) (log:warn "dealloc failed (non-fatal): ~A" c))))
       (when (plusp out-ptr)
-        (call-wasm-dealloc context dealloc-func out-ptr output-buffer-size)))))
+        (handler-case
+            (call-export-by-name context instance "dealloc"
+                                 (list out-ptr output-buffer-size) 0)
+          (error (c) (log:warn "dealloc failed (non-fatal): ~A" c)))))))
 
 (defun run-wasm-json-call (wat-string export-name params
                            &key (output-buffer-size +json-output-buffer-size+))
