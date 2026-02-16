@@ -11,7 +11,14 @@
            #:load-config
            #:reload-config
            #:config-get
-           #:config-section-get))
+           #:config-section-get
+           ;; shared utilities (config/util.lisp)
+           #:iso8601-now
+           #:safe-intern-keyword
+           #:plist-to-json-bytes
+           #:json-bytes-to-plist
+           #:delete-file-if-exists
+           #:string-case))
 
 (defpackage #:crichton/storage
   (:use #:cl)

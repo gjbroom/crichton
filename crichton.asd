@@ -30,7 +30,8 @@ signing. Informed by a security audit of OpenClaw."
   :components ((:file "package")
                (:module "config"
                 :components ((:file "paths")
-                             (:file "loader")))
+                             (:file "loader")
+                             (:file "util")))
                (:module "logging"
                 :components ((:file "logger")))
                (:module "storage"
