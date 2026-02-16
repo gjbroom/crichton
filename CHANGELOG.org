@@ -43,6 +43,7 @@ For development details, see the git commit history and BEADS issue tracker.
 
 ** Fixed
 
+- rss-filter JSON parsing failures: plist params (from Lisp code and pipeline builtins) were serialized as JSON arrays instead of objects, causing WASM skills to fail with "failed to parse input JSON". Added =normalize-for-json= to recursively convert plists to hash-tables before serialization.
 - rss-filter WASM skill panic: missing =#[link(wasm_import_module = "env")]= on Rust extern block caused =log()= host function to resolve to an abort stub instead of a proper WASM import (cricht-as0)
 
 * v0.2 "Polish & Channels" (2026-02-13)

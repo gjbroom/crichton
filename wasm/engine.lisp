@@ -678,14 +678,46 @@ instead of a WAT string.  Returns i32 result (or NIL if nresults=0)."
       (cffi:foreign-string-to-lisp (cffi:inc-pointer base wasm-ptr)
                                    :count len :encoding :utf-8))))
 
+(defun plist-like-p (list)
+  "Return T if LIST looks like a plist: non-empty, even length, keyword first elements."
+  (and (consp list)
+       (keywordp (first list))
+       (evenp (length list))))
+
+(defun normalize-for-json (value)
+  "Recursively normalize VALUE for JSON serialization.
+   Converts plists to hash-tables (with downcased, underscored string keys)
+   so shasht serializes them as JSON objects instead of arrays."
+  (cond
+    ((hash-table-p value)
+     (let ((ht (make-hash-table :test #'equal)))
+       (maphash (lambda (k v)
+                  (setf (gethash k ht) (normalize-for-json v)))
+                value)
+       ht))
+    ((plist-like-p value)
+     (let ((ht (make-hash-table :test #'equal)))
+       (loop for (k v) on value by #'cddr
+             do (setf (gethash (substitute #\_ #\-
+                                           (string-downcase (symbol-name k)))
+                               ht)
+                      (normalize-for-json v)))
+       ht))
+    ((and (listp value) (not (null value)))
+     (mapcar #'normalize-for-json value))
+    ((and (vectorp value) (not (stringp value)))
+     (map 'vector #'normalize-for-json value))
+    (t value)))
+
 (defun json-call-with-instance (context instance export-name params
-                                &key (output-buffer-size +json-output-buffer-size+))
+                                 &key (output-buffer-size +json-output-buffer-size+))
   "Execute a JSON ABI call on an already-instantiated WASM module.
    PARAMS is a Lisp data structure (hash-table, plist, etc.) to serialize as
    JSON.  Returns the parsed JSON result.  All export handles are looked up
    fresh for each call to avoid dangling pointers."
-  (let* ((json-string (with-output-to-string (s)
-                        (shasht:write-json params s)))
+  (let* ((normalized (normalize-for-json params))
+         (json-string (with-output-to-string (s)
+                        (shasht:write-json normalized s)))
          (json-bytes (sb-ext:string-to-octets json-string :external-format :utf-8))
          (json-len (length json-bytes))
          (in-ptr 0)
