@@ -143,6 +143,39 @@
             (wasm-valtype-vec-new results-vec nresults result-arr)))
       (wasm-functype-new params-vec results-vec))))
 
+;;; --- defhost-callback macro ---
+
+(defmacro defhost-callback (name arg-bindings &body body)
+  "Define a CFFI callback for a WASM host function.  ARG-BINDINGS is a list
+of symbols bound to successive wasmtime-val-i32 extractions from the args
+array.  The generated callback validates that NARGS >= (length ARG-BINDINGS),
+wraps BODY in handler-case, and always returns a null pointer.  BODY may
+reference CALLER, RESULTS, and NRESULTS freely; unused params are declared
+ignorable so no warnings are emitted."
+  (let ((nargs-required (length arg-bindings)))
+    `(cffi:defcallback ,name :pointer
+         ((env :pointer) (caller :pointer)
+          (args :pointer) (nargs :size)
+          (results :pointer) (nresults :size))
+       (declare (ignore env)
+                (ignorable caller results nresults))
+       (handler-case
+           (progn
+             (unless (>= nargs ,nargs-required)
+               (log:debug "~A: expected nargs >= ~D, got ~A"
+                          ',name ,nargs-required nargs)
+               (return-from ,name (cffi:null-pointer)))
+             (let* (,@(loop for sym in arg-bindings
+                            for i from 0
+                            collect `(,sym (wasmtime-val-i32
+                                           (cffi:mem-aptr args
+                                                          '(:struct wasmtime-val)
+                                                          ,i)))))
+               ,@body))
+         (error (c)
+           (log:error "Host ~A callback error: ~A" ',name c)))
+       (cffi:null-pointer))))
+
 ;;; --- Host function: log ---
 ;;;
 ;;; WASM signature: (i32 level, i32 ptr, i32 len) -> ()
@@ -185,58 +218,31 @@
       (log:error "read-wasm-string: memory access violation: ~A" c)
       "")))
 
-(cffi:defcallback host-log-callback :pointer
-    ((env :pointer) (caller :pointer)
-     (args :pointer) (nargs :size)
-     (results :pointer) (nresults :size))
-  (declare (ignore env results nresults))
-  (handler-case
-      (progn
-        ;; Validate argument count
-        (unless (>= nargs 3)
-          (log:debug "host-log-callback: expected nargs >= 3, got ~A" nargs)
-          (return-from host-log-callback (cffi:null-pointer)))
-        
-        ;; Extract and validate level (should be 0-3, allow larger values for extension)
-        (let* ((level (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 0)))
-               (ptr   (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 1)))
-               (len   (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 2))))
-          
-          ;; Validate level is a reasonable integer (0-3 standard, but be permissive)
-          (unless (and (>= level 0) (<= level 255))
-            (log:debug "host-log-callback: level ~A out of range [0, 255]" level)
-            (return-from host-log-callback (cffi:null-pointer)))
-          
-          ;; Validate ptr and len: both should be non-negative and reasonable
-          ;; Negative values (from signed i32) are invalid memory offsets
-          (unless (>= ptr 0)
-            (log:debug "host-log-callback: negative ptr ~A" ptr)
-            (return-from host-log-callback (cffi:null-pointer)))
-          (unless (>= len 0)
-            (log:debug "host-log-callback: negative len ~A" len)
-            (return-from host-log-callback (cffi:null-pointer)))
-          
-          ;; Sanity cap: len > 1MB indicates likely corruption
-          (when (> len 1048576)
-            (log:debug "host-log-callback: len ~A exceeds 1MB cap" len)
-            (return-from host-log-callback (cffi:null-pointer)))
-          
-          ;; Validate caller is non-null before calling read-wasm-string
-          (when (cffi:null-pointer-p caller)
-            (log:debug "host-log-callback: caller is null pointer")
-            (return-from host-log-callback (cffi:null-pointer)))
-          
-          ;; Read string from WASM memory and log
-          (let ((msg (read-wasm-string caller ptr len)))
-            (case level
-              (0 (log:debug "~A" msg))
-              (1 (log:info  "~A" msg))
-              (2 (log:warn  "~A" msg))
-              (3 (log:error "~A" msg))
-              (t (log:info  "[level=~A] ~A" level msg))))))
-    (error (c)
-      (log:error "Host log callback error: ~A" c)))
-  (cffi:null-pointer))
+(defhost-callback host-log-callback (level ptr len)
+  ;; Validate level is a reasonable integer (0-3 standard, but be permissive)
+  (unless (and (>= level 0) (<= level 255))
+    (log:debug "host-log-callback: level ~A out of range [0, 255]" level)
+    (return-from host-log-callback (cffi:null-pointer)))
+  ;; Validate ptr and len: both should be non-negative and reasonable
+  ;; Negative values (from signed i32) are invalid memory offsets
+  (unless (>= ptr 0)
+    (log:debug "host-log-callback: negative ptr ~A" ptr)
+    (return-from host-log-callback (cffi:null-pointer)))
+  (unless (>= len 0)
+    (log:debug "host-log-callback: negative len ~A" len)
+    (return-from host-log-callback (cffi:null-pointer)))
+  ;; Sanity cap: len > 1MB indicates likely corruption
+  (when (> len 1048576)
+    (log:debug "host-log-callback: len ~A exceeds 1MB cap" len)
+    (return-from host-log-callback (cffi:null-pointer)))
+  ;; Read string from WASM memory and log
+  (let ((msg (read-wasm-string caller ptr len)))
+    (case level
+      (0 (log:debug "~A" msg))
+      (1 (log:info  "~A" msg))
+      (2 (log:warn  "~A" msg))
+      (3 (log:error "~A" msg))
+      (t (log:info  "[level=~A] ~A" level msg)))))
 
 ;;; --- Helper: register a host function in the linker ---
 
@@ -254,499 +260,305 @@
     (unless (cffi:null-pointer-p def-err)
       (error "Linker define error: ~A" (wasmtime-error-to-string def-err)))))
 
+;;; --- Standard host function registration ---
+
+(defun register-standard-host-fns (linker engine)
+  "Register all 8 standard host functions in LINKER.  Returns a list of
+functype pointers that the caller must delete with wasm-functype-delete."
+  (let* ((log-ft (make-functype (list +wasm-i32+ +wasm-i32+ +wasm-i32+) '()))
+         (kv-get-ft (make-functype (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
+         (kv-set-ft (make-functype (list +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+)
+                                   (list +wasm-i32+)))
+         (kv-delete-ft (make-functype (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
+         (kv-exists-ft (make-functype (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
+         (kv-list-ft (make-functype (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
+         (http-ft (make-functype (list +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+
+                                       +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+)
+                                 (list +wasm-i32+)))
+         (secret-ft (make-functype (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+))))
+    (define-host-fn linker engine log-ft
+                    "env" 3 "log" 3
+                    (cffi:callback host-log-callback))
+    (define-host-fn linker engine kv-get-ft
+                    "env" 3 "kv_get" 6
+                    (cffi:callback host-kv-get-callback))
+    (define-host-fn linker engine kv-set-ft
+                    "env" 3 "kv_set" 6
+                    (cffi:callback host-kv-set-callback))
+    (define-host-fn linker engine kv-delete-ft
+                    "env" 3 "kv_delete" 9
+                    (cffi:callback host-kv-delete-callback))
+    (define-host-fn linker engine kv-exists-ft
+                    "env" 3 "kv_exists" 9
+                    (cffi:callback host-kv-exists-callback))
+    (define-host-fn linker engine kv-list-ft
+                    "env" 3 "kv_list" 7
+                    (cffi:callback host-kv-list-callback))
+    (define-host-fn linker engine http-ft
+                    "env" 3 "http_request" 12
+                    (cffi:callback host-http-request-callback))
+    (define-host-fn linker engine secret-ft
+                    "env" 3 "get_secret" 10
+                    (cffi:callback host-get-secret-callback))
+    (list log-ft kv-get-ft kv-set-ft kv-delete-ft
+          kv-exists-ft kv-list-ft http-ft secret-ft)))
+
+;;; --- WASM host environment macro ---
+
+(defmacro with-wasm-host-environment ((context instance) (source-type source-form)
+                                      &body body)
+  "Set up a complete WASM host environment and execute BODY.  SOURCE-TYPE is
+either :WAT (a WAT string) or :WASM (a WASM byte vector).  Binds CONTEXT and
+INSTANCE for use in BODY.  Handles engine/store/linker/module creation, host
+function registration, instantiation, and full cleanup on unwind."
+  (let ((engine (gensym "ENGINE"))
+        (store (gensym "STORE"))
+        (module (gensym "MODULE"))
+        (linker (gensym "LINKER"))
+        (functypes (gensym "FUNCTYPES"))
+        (source (gensym "SOURCE"))
+        (module-ptr (gensym "MODULE-PTR"))
+        (trap-ptr (gensym "TRAP-PTR"))
+        (mod-err (gensym "MOD-ERR"))
+        (inst-err (gensym "INST-ERR")))
+    `(progn
+       (ensure-wasmtime-loaded)
+       (assert-wasmtime-abi)
+       (let ((,engine (wasm-engine-new))
+             (,store nil)
+             (,module nil)
+             (,linker nil)
+             (,functypes nil)
+             (,source ,source-form))
+         (when (cffi:null-pointer-p ,engine)
+           (error "Failed to create wasmtime engine"))
+         (unwind-protect
+              (progn
+                (setf ,store (wasmtime-store-new ,engine
+                                                 (cffi:null-pointer)
+                                                 (cffi:null-pointer)))
+                (when (cffi:null-pointer-p ,store)
+                  (error "Failed to create wasmtime store"))
+                (setf ,linker (wasmtime-linker-new ,engine))
+                (when (cffi:null-pointer-p ,linker)
+                  (error "Failed to create wasmtime linker"))
+                (let ((,context (wasmtime-store-context ,store)))
+                  (setf ,functypes
+                        (register-standard-host-fns ,linker ,engine))
+                  ,@(ecase source-type
+                      (:wat
+                       `((cffi:with-foreign-object (wasm-bytes
+                                                    '(:struct wasm-byte-vec))
+                           (let ((wat-err (wasmtime-wat2wasm
+                                           ,source (length ,source) wasm-bytes)))
+                             (unless (cffi:null-pointer-p wat-err)
+                               (error "WAT parse error: ~A"
+                                      (wasmtime-error-to-string wat-err)))
+                             (unwind-protect
+                                  (let ((wasm-data
+                                          (cffi:foreign-slot-value
+                                           wasm-bytes '(:struct wasm-byte-vec) 'data))
+                                        (wasm-size
+                                          (cffi:foreign-slot-value
+                                           wasm-bytes '(:struct wasm-byte-vec) 'size)))
+                                    (cffi:with-foreign-object (,module-ptr :pointer)
+                                      (let ((,mod-err (wasmtime-module-new
+                                                       ,engine wasm-data wasm-size
+                                                       ,module-ptr)))
+                                        (unless (cffi:null-pointer-p ,mod-err)
+                                          (error "Module compile error: ~A"
+                                                 (wasmtime-error-to-string ,mod-err)))
+                                        (setf ,module (cffi:mem-ref ,module-ptr :pointer))
+                                        (cffi:with-foreign-objects
+                                            ((,instance '(:struct wasmtime-instance))
+                                             (,trap-ptr :pointer))
+                                          (setf (cffi:mem-ref ,trap-ptr :pointer)
+                                                (cffi:null-pointer))
+                                          (let ((,inst-err
+                                                  (wasmtime-linker-instantiate
+                                                   ,linker ,context ,module
+                                                   ,instance ,trap-ptr)))
+                                            (check-wasmtime-error ,inst-err ,trap-ptr
+                                                                  "linker_instantiate"))
+                                          ,@body))))
+                               (wasm-byte-vec-delete wasm-bytes))))))
+                      (:wasm
+                       (let ((wasm-len (gensym "WASM-LEN"))
+                             (wasm-ptr (gensym "WASM-PTR")))
+                         `((let ((,wasm-len (length ,source)))
+                             (cffi:with-foreign-object (,wasm-ptr :uint8 ,wasm-len)
+                               (loop for i below ,wasm-len
+                                     do (setf (cffi:mem-aref ,wasm-ptr :uint8 i)
+                                              (aref ,source i)))
+                               (cffi:with-foreign-object (,module-ptr :pointer)
+                                 (let ((,mod-err (wasmtime-module-new
+                                                  ,engine ,wasm-ptr ,wasm-len
+                                                  ,module-ptr)))
+                                   (unless (cffi:null-pointer-p ,mod-err)
+                                     (error "Module compile error: ~A"
+                                            (wasmtime-error-to-string ,mod-err)))
+                                   (setf ,module (cffi:mem-ref ,module-ptr :pointer))
+                                   (cffi:with-foreign-objects
+                                       ((,instance '(:struct wasmtime-instance))
+                                        (,trap-ptr :pointer))
+                                     (setf (cffi:mem-ref ,trap-ptr :pointer)
+                                           (cffi:null-pointer))
+                                     (let ((,inst-err
+                                             (wasmtime-linker-instantiate
+                                              ,linker ,context ,module
+                                              ,instance ,trap-ptr)))
+                                       (check-wasmtime-error ,inst-err ,trap-ptr
+                                                             "linker_instantiate"))
+                                     ,@body)))))))))))
+           (dolist (ft ,functypes)
+             (when ft (wasm-functype-delete ft)))
+           (when ,linker (wasmtime-linker-delete ,linker))
+           (when ,module (wasmtime-module-delete ,module))
+           (when ,store (wasmtime-store-delete ,store))
+           (wasm-engine-delete ,engine))))))
+
+;;; --- Export call helper ---
+
+(defun call-i32-export (context instance export-name args nresults)
+  "Get export EXPORT-NAME from INSTANCE, call with i32 ARGS list, return result.
+NRESULTS should be 0 or 1.  Returns NIL if nresults=0."
+  (cffi:with-foreign-object (ext '(:struct wasmtime-extern))
+    (unless (wasmtime-instance-export-get
+             context instance
+             export-name (length export-name)
+             ext)
+      (error "Export ~S not found" export-name))
+    (let* ((func-ptr (wasmtime-extern-func-ptr ext))
+           (nargs (length args)))
+      (cffi:with-foreign-objects ((wasm-args '(:struct wasmtime-val) (max nargs 1))
+                                  (wasm-results '(:struct wasmtime-val) (max nresults 1))
+                                  (call-trap :pointer))
+        (loop for val in args
+              for i from 0
+              do (setf (wasmtime-val-i32
+                        (cffi:mem-aptr wasm-args '(:struct wasmtime-val) i))
+                       val))
+        (setf (cffi:mem-ref call-trap :pointer) (cffi:null-pointer))
+        (let ((call-err (wasmtime-func-call
+                         context func-ptr
+                         (if (zerop nargs) (cffi:null-pointer) wasm-args)
+                         nargs
+                         (if (zerop nresults) (cffi:null-pointer) wasm-results)
+                         nresults
+                         call-trap)))
+          (check-wasmtime-error call-err call-trap "func_call")
+          (if (zerop nresults)
+              nil
+              (wasmtime-val-i32 wasm-results)))))))
+
 ;;; --- Linker-based module execution (with host functions) ---
 
 (defun run-wasm-with-host-fns (wat-string export-name
                                 &key (args nil) (nresults 1))
   "Compile WAT, register host functions via linker, instantiate, call export.
-    ARGS is a list of i32 values to pass. Returns i32 result (or NIL if nresults=0)."
-  (ensure-wasmtime-loaded)
-  (assert-wasmtime-abi)
-  (let ((engine (wasm-engine-new))
-      (store nil)
-      (module nil)
-      (linker nil)
-      (log-functype nil)
-      (kv-get-functype nil)
-      (kv-set-functype nil)
-      (kv-delete-functype nil)
-      (kv-exists-functype nil)
-      (kv-list-functype nil)
-      (http-functype nil)
-      (secret-functype nil))
-  (when (cffi:null-pointer-p engine)
-    (error "Failed to create wasmtime engine"))
-  (unwind-protect
-       (progn
-         (setf store (wasmtime-store-new engine (cffi:null-pointer) (cffi:null-pointer)))
-         (when (cffi:null-pointer-p store)
-           (error "Failed to create wasmtime store"))
-         (setf linker (wasmtime-linker-new engine))
-         (when (cffi:null-pointer-p linker)
-           (error "Failed to create wasmtime linker"))
-         (let ((context (wasmtime-store-context store)))
-           ;; Register host functions
-           ;; env.log: (i32, i32, i32) -> ()
-           (setf log-functype (make-functype
-                               (list +wasm-i32+ +wasm-i32+ +wasm-i32+)
-                               '()))
-           (define-host-fn linker engine log-functype
-                          "env" 3 "log" 3
-                          (cffi:callback host-log-callback))
-           
-           ;; env.kv_get: (i32, i32) -> (i32)
-           (setf kv-get-functype (make-functype
-                                  (list +wasm-i32+ +wasm-i32+)
-                                  (list +wasm-i32+)))
-           (define-host-fn linker engine kv-get-functype
-                          "env" 3 "kv_get" 6
-                          (cffi:callback host-kv-get-callback))
-           
-           ;; env.kv_set: (i32, i32, i32, i32) -> (i32)
-           (setf kv-set-functype (make-functype
-                                  (list +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+)
-                                  (list +wasm-i32+)))
-           (define-host-fn linker engine kv-set-functype
-                          "env" 3 "kv_set" 6
-                          (cffi:callback host-kv-set-callback))
-           
-           ;; env.kv_delete: (i32, i32) -> (i32)
-           (setf kv-delete-functype (make-functype
-                                     (list +wasm-i32+ +wasm-i32+)
-                                     (list +wasm-i32+)))
-           (define-host-fn linker engine kv-delete-functype
-                          "env" 3 "kv_delete" 9
-                          (cffi:callback host-kv-delete-callback))
-           
-           ;; env.kv_exists: (i32, i32) -> (i32)
-           (setf kv-exists-functype (make-functype
-                                     (list +wasm-i32+ +wasm-i32+)
-                                     (list +wasm-i32+)))
-           (define-host-fn linker engine kv-exists-functype
-                          "env" 3 "kv_exists" 9
-                          (cffi:callback host-kv-exists-callback))
-           
-           ;; env.kv_list: (i32, i32) -> (i32)
-           (setf kv-list-functype (make-functype
-                                   (list +wasm-i32+ +wasm-i32+)
-                                   (list +wasm-i32+)))
-           (define-host-fn linker engine kv-list-functype
-                          "env" 3 "kv_list" 7
-                          (cffi:callback host-kv-list-callback))
-           
-           ;; env.http_request: (i32×8) -> (i32)
-           (setf http-functype (make-functype
-                                (list +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+
-                                      +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+)
-                                (list +wasm-i32+)))
-           (define-host-fn linker engine http-functype
-                          "env" 3 "http_request" 12
-                          (cffi:callback host-http-request-callback))
-           
-           ;; env.get_secret: (i32, i32) -> (i32)
-           (setf secret-functype (make-functype
-                                  (list +wasm-i32+ +wasm-i32+)
-                                  (list +wasm-i32+)))
-           (define-host-fn linker engine secret-functype
-                          "env" 3 "get_secret" 10
-                          (cffi:callback host-get-secret-callback))
-           ;; Compile WAT → module
-           (cffi:with-foreign-object (wasm-bytes '(:struct wasm-byte-vec))
-               (let ((wat-err (wasmtime-wat2wasm wat-string (length wat-string) wasm-bytes)))
-                 (unless (cffi:null-pointer-p wat-err)
-                   (error "WAT parse error: ~A" (wasmtime-error-to-string wat-err)))
-                 (unwind-protect
-                      (let ((wasm-data (cffi:foreign-slot-value wasm-bytes '(:struct wasm-byte-vec) 'data))
-                            (wasm-size (cffi:foreign-slot-value wasm-bytes '(:struct wasm-byte-vec) 'size)))
-                        (cffi:with-foreign-object (module-ptr :pointer)
-                          (let ((mod-err (wasmtime-module-new engine wasm-data wasm-size module-ptr)))
-                            (unless (cffi:null-pointer-p mod-err)
-                              (error "Module compile error: ~A" (wasmtime-error-to-string mod-err)))
-                            (setf module (cffi:mem-ref module-ptr :pointer))
-                            ;; Instantiate via linker
-                            (cffi:with-foreign-objects ((instance '(:struct wasmtime-instance))
-                                                       (trap-ptr :pointer))
-                              (setf (cffi:mem-ref trap-ptr :pointer) (cffi:null-pointer))
-                              (let ((inst-err (wasmtime-linker-instantiate
-                                              linker context module
-                                              instance trap-ptr)))
-                                (check-wasmtime-error inst-err trap-ptr "linker_instantiate"))
-                              ;; Get and call the export
-                              (cffi:with-foreign-object (ext '(:struct wasmtime-extern))
-                                (unless (wasmtime-instance-export-get
-                                         context instance
-                                         export-name (length export-name)
-                                         ext)
-                                  (error "Export ~S not found" export-name))
-                                (let* ((func-ptr (wasmtime-extern-func-ptr ext))
-                                       (nargs (length args)))
-                                  (cffi:with-foreign-objects ((wasm-args '(:struct wasmtime-val) (max nargs 1))
-                                                             (wasm-results '(:struct wasmtime-val) (max nresults 1))
-                                                             (call-trap :pointer))
-                                    (loop for val in args
-                                          for i from 0
-                                          do (setf (wasmtime-val-i32
-                                                    (cffi:mem-aptr wasm-args '(:struct wasmtime-val) i))
-                                                   val))
-                                    (setf (cffi:mem-ref call-trap :pointer) (cffi:null-pointer))
-                                    (let ((call-err (wasmtime-func-call
-                                                     context func-ptr
-                                                     (if (zerop nargs) (cffi:null-pointer) wasm-args)
-                                                     nargs
-                                                     (if (zerop nresults) (cffi:null-pointer) wasm-results)
-                                                     nresults
-                                                     call-trap)))
-                                      (check-wasmtime-error call-err call-trap "func_call")
-                                      (if (zerop nresults)
-                                          nil
-                                          (wasmtime-val-i32 wasm-results))))))))))
-                                          (wasm-byte-vec-delete wasm-bytes))))))
-                                          (when log-functype (wasm-functype-delete log-functype))
-                                          (when kv-get-functype (wasm-functype-delete kv-get-functype))
-                                          (when kv-set-functype (wasm-functype-delete kv-set-functype))
-                                          (when kv-delete-functype (wasm-functype-delete kv-delete-functype))
-                                          (when kv-exists-functype (wasm-functype-delete kv-exists-functype))
-                                          (when kv-list-functype (wasm-functype-delete kv-list-functype))
-                                          (when http-functype (wasm-functype-delete http-functype))
-                                          (when secret-functype (wasm-functype-delete secret-functype))
-                                          (when linker (wasmtime-linker-delete linker))
-                                          (when module (wasmtime-module-delete module))
-                                          (when store (wasmtime-store-delete store))
-                                          (wasm-engine-delete engine))))
+ARGS is a list of i32 values to pass.  Returns i32 result (or NIL if nresults=0)."
+  (with-wasm-host-environment (context instance) (:wat wat-string)
+    (call-i32-export context instance export-name args nresults)))
 
-                                          ;;; --- Test WAT for host log function ---
-
-                                          ;;; --- Binary WASM module execution (with host functions) ---
-
-                                          (defun run-wasm-bytes-with-host-fns (wasm-bytes export-name
-                                       &key (args nil) (nresults 1))
+(defun run-wasm-bytes-with-host-fns (wasm-bytes export-name
+                                      &key (args nil) (nresults 1))
   "Like run-wasm-with-host-fns but accepts pre-compiled WASM bytes (octet vector)
-    instead of a WAT string. Returns i32 result (or NIL if nresults=0)."
-  (ensure-wasmtime-loaded)
-  (assert-wasmtime-abi)
-  (let ((engine (wasm-engine-new))
-       (store nil)
-       (module nil)
-       (linker nil)
-       (log-functype nil)
-       (kv-get-functype nil)
-       (kv-set-functype nil)
-       (kv-delete-functype nil)
-       (kv-exists-functype nil)
-       (kv-list-functype nil)
-       (http-functype nil)
-       (secret-functype nil)
-       (wasm-len (length wasm-bytes)))
-   (when (cffi:null-pointer-p engine)
-     (error "Failed to create wasmtime engine"))
-   (unwind-protect
-        (progn
-          (setf store (wasmtime-store-new engine (cffi:null-pointer) (cffi:null-pointer)))
-          (when (cffi:null-pointer-p store)
-            (error "Failed to create wasmtime store"))
-          (setf linker (wasmtime-linker-new engine))
-          (when (cffi:null-pointer-p linker)
-            (error "Failed to create wasmtime linker"))
-          (let ((context (wasmtime-store-context store)))
-            ;; Register host functions
-            ;; env.log: (i32, i32, i32) -> ()
-            (setf log-functype (make-functype
-                                (list +wasm-i32+ +wasm-i32+ +wasm-i32+)
-                                '()))
-            (define-host-fn linker engine log-functype
-                           "env" 3 "log" 3
-                           (cffi:callback host-log-callback))
-            
-            ;; env.kv_get: (i32, i32) -> (i32)
-            (setf kv-get-functype (make-functype
-                                   (list +wasm-i32+ +wasm-i32+)
-                                   (list +wasm-i32+)))
-            (define-host-fn linker engine kv-get-functype
-                           "env" 3 "kv_get" 6
-                           (cffi:callback host-kv-get-callback))
-            
-            ;; env.kv_set: (i32, i32, i32, i32) -> (i32)
-            (setf kv-set-functype (make-functype
-                                   (list +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+)
-                                   (list +wasm-i32+)))
-            (define-host-fn linker engine kv-set-functype
-                           "env" 3 "kv_set" 6
-                           (cffi:callback host-kv-set-callback))
-            
-            ;; env.kv_delete: (i32, i32) -> (i32)
-            (setf kv-delete-functype (make-functype
-                                      (list +wasm-i32+ +wasm-i32+)
-                                      (list +wasm-i32+)))
-            (define-host-fn linker engine kv-delete-functype
-                           "env" 3 "kv_delete" 9
-                           (cffi:callback host-kv-delete-callback))
-            
-            ;; env.kv_exists: (i32, i32) -> (i32)
-            (setf kv-exists-functype (make-functype
-                                      (list +wasm-i32+ +wasm-i32+)
-                                      (list +wasm-i32+)))
-            (define-host-fn linker engine kv-exists-functype
-                           "env" 3 "kv_exists" 9
-                           (cffi:callback host-kv-exists-callback))
-            
-            ;; env.kv_list: (i32, i32) -> (i32)
-            (setf kv-list-functype (make-functype
-                                    (list +wasm-i32+ +wasm-i32+)
-                                    (list +wasm-i32+)))
-            (define-host-fn linker engine kv-list-functype
-                           "env" 3 "kv_list" 7
-                           (cffi:callback host-kv-list-callback))
-            
-            ;; env.http_request: (i32×8) -> (i32)
-            (setf http-functype (make-functype
-                                 (list +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+
-                                       +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+)
-                                 (list +wasm-i32+)))
-            (define-host-fn linker engine http-functype
-                           "env" 3 "http_request" 12
-                           (cffi:callback host-http-request-callback))
-            
-            ;; env.get_secret: (i32, i32) -> (i32)
-            (setf secret-functype (make-functype
-                                   (list +wasm-i32+ +wasm-i32+)
-                                   (list +wasm-i32+)))
-            (define-host-fn linker engine secret-functype
-                           "env" 3 "get_secret" 10
-                           (cffi:callback host-get-secret-callback))
-            ;; Copy WASM bytes to foreign memory and compile
-             (cffi:with-foreign-object (wasm-ptr :uint8 wasm-len)
-               (loop for i below wasm-len
-                     do (setf (cffi:mem-aref wasm-ptr :uint8 i)
-                              (aref wasm-bytes i)))
-               (cffi:with-foreign-object (module-ptr :pointer)
-                 (let ((mod-err (wasmtime-module-new engine wasm-ptr wasm-len module-ptr)))
-                   (unless (cffi:null-pointer-p mod-err)
-                     (error "Module compile error: ~A" (wasmtime-error-to-string mod-err)))
-                   (setf module (cffi:mem-ref module-ptr :pointer))
-                   ;; Instantiate via linker
-                   (cffi:with-foreign-objects ((instance '(:struct wasmtime-instance))
-                                              (trap-ptr :pointer))
-                     (setf (cffi:mem-ref trap-ptr :pointer) (cffi:null-pointer))
-                     (let ((inst-err (wasmtime-linker-instantiate
-                                     linker context module
-                                     instance trap-ptr)))
-                       (check-wasmtime-error inst-err trap-ptr "linker_instantiate"))
-                     ;; Get and call the export
-                     (cffi:with-foreign-object (ext '(:struct wasmtime-extern))
-                       (unless (wasmtime-instance-export-get
-                                context instance
-                                export-name (length export-name)
-                                ext)
-                         (error "Export ~S not found" export-name))
-                       (let* ((func-ptr (wasmtime-extern-func-ptr ext))
-                              (nargs (length args)))
-                         (cffi:with-foreign-objects ((wasm-args '(:struct wasmtime-val) (max nargs 1))
-                                                    (wasm-results '(:struct wasmtime-val) (max nresults 1))
-                                                    (call-trap :pointer))
-                           (loop for val in args
-                                 for i from 0
-                                 do (setf (wasmtime-val-i32
-                                           (cffi:mem-aptr wasm-args '(:struct wasmtime-val) i))
-                                          val))
-                           (setf (cffi:mem-ref call-trap :pointer) (cffi:null-pointer))
-                           (let ((call-err (wasmtime-func-call
-                                            context func-ptr
-                                            (if (zerop nargs) (cffi:null-pointer) wasm-args)
-                                            nargs
-                                            (if (zerop nresults) (cffi:null-pointer) wasm-results)
-                                            nresults
-                                            call-trap)))
-                             (check-wasmtime-error call-err call-trap "func_call")
-                             (if (zerop nresults)
-                                 nil
-                                 (wasmtime-val-i32 wasm-results))))))))))))
-                                 (when log-functype (wasm-functype-delete log-functype))
-                                 (when kv-get-functype (wasm-functype-delete kv-get-functype))
-                                 (when kv-set-functype (wasm-functype-delete kv-set-functype))
-                                 (when kv-delete-functype (wasm-functype-delete kv-delete-functype))
-                                 (when kv-exists-functype (wasm-functype-delete kv-exists-functype))
-                                 (when kv-list-functype (wasm-functype-delete kv-list-functype))
-                                 (when http-functype (wasm-functype-delete http-functype))
-                                 (when secret-functype (wasm-functype-delete secret-functype))
-                                 (when linker (wasmtime-linker-delete linker))
-                                 (when module (wasmtime-module-delete module))
-                                 (when store (wasmtime-store-delete store))
-                                 (wasm-engine-delete engine))))
+instead of a WAT string.  Returns i32 result (or NIL if nresults=0)."
+  (with-wasm-host-environment (context instance) (:wasm wasm-bytes)
+    (call-i32-export context instance export-name args nresults)))
 
-                                 ;;; --- Host function: kv_get ---
+;;; --- Host function: kv_get ---
 ;;;
 ;;; WASM signature: (i32 key_ptr, i32 key_len) -> (i32)
 ;;; Returns: 0=found, -1=not found, -2=error
 
-(cffi:defcallback host-kv-get-callback :pointer
-    ((env :pointer) (caller :pointer)
-     (args :pointer) (nargs :size)
-     (results :pointer) (nresults :size))
-  (declare (ignore env nresults))
-  (handler-case
-      (progn
-        (unless (>= nargs 2)
-          (log:debug "host-kv-get-callback: expected nargs >= 2, got ~A" nargs)
-          (return-from host-kv-get-callback (cffi:null-pointer)))
-        
-        (let* ((key-ptr (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 0)))
-               (key-len (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 1)))
-               (key (read-wasm-string caller key-ptr key-len)))
-          
-          (handler-case
-              (let* ((ctx (crichton/runner:current-skill-context))
-                     (skill-id (crichton/runner:skill-context-id ctx))
-                     (value (crichton/skills:kv-get skill-id key)))
-                (if value
-                    (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 0)
-                    (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -1)))
-            (error (c)
-              (log:error "kv_get error: ~A" c)
-              (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -2)))))
-    (error (c)
-      (log:error "Host kv-get callback error: ~A" c)))
-  (cffi:null-pointer))
+(defhost-callback host-kv-get-callback (key-ptr key-len)
+  (let ((key (read-wasm-string caller key-ptr key-len)))
+    (handler-case
+        (let* ((ctx (crichton/runner:current-skill-context))
+               (skill-id (crichton/runner:skill-context-id ctx))
+               (value (crichton/skills:kv-get skill-id key)))
+          (if value
+              (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 0)
+              (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -1)))
+      (error (c)
+        (log:error "kv_get error: ~A" c)
+        (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -2)))))
 
 ;;; --- Host function: kv_set ---
 ;;;
 ;;; WASM signature: (i32 key_ptr, i32 key_len, i32 val_ptr, i32 val_len) -> (i32)
 ;;; Returns: 0=success, -1=quota exceeded, -2=other error
 
-(cffi:defcallback host-kv-set-callback :pointer
-    ((env :pointer) (caller :pointer)
-     (args :pointer) (nargs :size)
-     (results :pointer) (nresults :size))
-  (declare (ignore env nresults))
-  (handler-case
-      (progn
-        (unless (>= nargs 4)
-          (log:debug "host-kv-set-callback: expected nargs >= 4, got ~A" nargs)
-          (return-from host-kv-set-callback (cffi:null-pointer)))
-        
-        (let* ((key-ptr (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 0)))
-               (key-len (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 1)))
-               (val-ptr (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 2)))
-               (val-len (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 3)))
-               (key (read-wasm-string caller key-ptr key-len))
-               (val (read-wasm-string caller val-ptr val-len)))
-          
-          (handler-case
-              (let* ((ctx (crichton/runner:current-skill-context))
-                     (skill-id (crichton/runner:skill-context-id ctx)))
-                (crichton/skills:kv-set skill-id key val)
-                (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 0))
-            (crichton/skills:kv-quota-exceeded (c)
-              (log:warn "kv_set quota exceeded: ~A" c)
-              (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -1))
-            (error (c)
-              (log:error "kv_set error: ~A" c)
-              (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -2)))))
-    (error (c)
-      (log:error "Host kv-set callback error: ~A" c)))
-  (cffi:null-pointer))
+(defhost-callback host-kv-set-callback (key-ptr key-len val-ptr val-len)
+  (let ((key (read-wasm-string caller key-ptr key-len))
+        (val (read-wasm-string caller val-ptr val-len)))
+    (handler-case
+        (let* ((ctx (crichton/runner:current-skill-context))
+               (skill-id (crichton/runner:skill-context-id ctx)))
+          (crichton/skills:kv-set skill-id key val)
+          (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 0))
+      (crichton/skills:kv-quota-exceeded (c)
+        (log:warn "kv_set quota exceeded: ~A" c)
+        (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -1))
+      (error (c)
+        (log:error "kv_set error: ~A" c)
+        (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -2)))))
 
 ;;; --- Host function: kv_delete ---
 ;;;
 ;;; WASM signature: (i32 key_ptr, i32 key_len) -> (i32)
 ;;; Returns: 0=deleted, 1=not found, -1=error
 
-(cffi:defcallback host-kv-delete-callback :pointer
-    ((env :pointer) (caller :pointer)
-     (args :pointer) (nargs :size)
-     (results :pointer) (nresults :size))
-  (declare (ignore env nresults))
-  (handler-case
-      (progn
-        (unless (>= nargs 2)
-          (log:debug "host-kv-delete-callback: expected nargs >= 2, got ~A" nargs)
-          (return-from host-kv-delete-callback (cffi:null-pointer)))
-        
-        (let* ((key-ptr (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 0)))
-               (key-len (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 1)))
-               (key (read-wasm-string caller key-ptr key-len)))
-          
-          (handler-case
-              (let* ((ctx (crichton/runner:current-skill-context))
-                     (skill-id (crichton/runner:skill-context-id ctx))
-                     (deleted (crichton/skills:kv-delete skill-id key)))
-                (if deleted
-                    (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 0)
-                    (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 1)))
-            (error (c)
-              (log:error "kv_delete error: ~A" c)
-              (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -1)))))
-    (error (c)
-      (log:error "Host kv-delete callback error: ~A" c)))
-  (cffi:null-pointer))
+(defhost-callback host-kv-delete-callback (key-ptr key-len)
+  (let ((key (read-wasm-string caller key-ptr key-len)))
+    (handler-case
+        (let* ((ctx (crichton/runner:current-skill-context))
+               (skill-id (crichton/runner:skill-context-id ctx))
+               (deleted (crichton/skills:kv-delete skill-id key)))
+          (if deleted
+              (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 0)
+              (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 1)))
+      (error (c)
+        (log:error "kv_delete error: ~A" c)
+        (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -1)))))
 
 ;;; --- Host function: kv_exists ---
 ;;;
 ;;; WASM signature: (i32 key_ptr, i32 key_len) -> (i32)
 ;;; Returns: 1=exists, 0=not exists, -1=error
 
-(cffi:defcallback host-kv-exists-callback :pointer
-    ((env :pointer) (caller :pointer)
-     (args :pointer) (nargs :size)
-     (results :pointer) (nresults :size))
-  (declare (ignore env nresults))
-  (handler-case
-      (progn
-        (unless (>= nargs 2)
-          (log:debug "host-kv-exists-callback: expected nargs >= 2, got ~A" nargs)
-          (return-from host-kv-exists-callback (cffi:null-pointer)))
-        
-        (let* ((key-ptr (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 0)))
-               (key-len (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 1)))
-               (key (read-wasm-string caller key-ptr key-len)))
-          
-          (handler-case
-              (let* ((ctx (crichton/runner:current-skill-context))
-                     (skill-id (crichton/runner:skill-context-id ctx))
-                     (exists (crichton/skills:kv-exists-p skill-id key)))
-                (if exists
-                    (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 1)
-                    (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 0)))
-            (error (c)
-              (log:error "kv_exists error: ~A" c)
-              (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -1)))))
-    (error (c)
-      (log:error "Host kv-exists callback error: ~A" c)))
-  (cffi:null-pointer))
+(defhost-callback host-kv-exists-callback (key-ptr key-len)
+  (let ((key (read-wasm-string caller key-ptr key-len)))
+    (handler-case
+        (let* ((ctx (crichton/runner:current-skill-context))
+               (skill-id (crichton/runner:skill-context-id ctx))
+               (exists (crichton/skills:kv-exists-p skill-id key)))
+          (if exists
+              (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 1)
+              (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 0)))
+      (error (c)
+        (log:error "kv_exists error: ~A" c)
+        (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -1)))))
 
 ;;; --- Host function: kv_list ---
 ;;;
 ;;; WASM signature: (i32 prefix_ptr, i32 prefix_len) -> (i32)
 ;;; Returns: count of matching keys, or -1 on error
 
-(cffi:defcallback host-kv-list-callback :pointer
-    ((env :pointer) (caller :pointer)
-     (args :pointer) (nargs :size)
-     (results :pointer) (nresults :size))
-  (declare (ignore env nresults))
-  (handler-case
-      (progn
-        (unless (>= nargs 2)
-          (log:debug "host-kv-list-callback: expected nargs >= 2, got ~A" nargs)
-          (return-from host-kv-list-callback (cffi:null-pointer)))
-        
-        (let* ((prefix-ptr (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 0)))
-               (prefix-len (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 1)))
-               (prefix (if (zerop prefix-len)
-                           nil
-                           (read-wasm-string caller prefix-ptr prefix-len))))
-          
-          (handler-case
-              (let* ((ctx (crichton/runner:current-skill-context))
-                     (skill-id (crichton/runner:skill-context-id ctx))
-                     (keys (crichton/skills:kv-list skill-id prefix)))
-                (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0))
-                      (length keys)))
-            (error (c)
-              (log:error "kv_list error: ~A" c)
-              (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -1)))))
-    (error (c)
-      (log:error "Host kv-list callback error: ~A" c)))
-  (cffi:null-pointer))
+(defhost-callback host-kv-list-callback (prefix-ptr prefix-len)
+  (let ((prefix (if (zerop prefix-len)
+                    nil
+                    (read-wasm-string caller prefix-ptr prefix-len))))
+    (handler-case
+        (let* ((ctx (crichton/runner:current-skill-context))
+               (skill-id (crichton/runner:skill-context-id ctx))
+               (keys (crichton/skills:kv-list skill-id prefix)))
+          (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0))
+                (length keys)))
+      (error (c)
+        (log:error "kv_list error: ~A" c)
+        (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -1)))))
 
 ;;; --- Host function: http_request ---
 ;;;
@@ -754,68 +566,30 @@
 ;;;                  i32 headers_ptr, i32 headers_len, i32 body_ptr, i32 body_len)
 ;;;                -> (i32 status_code or -1 on error)
 
-(cffi:defcallback host-http-request-callback :pointer
-    ((env :pointer) (caller :pointer)
-     (args :pointer) (nargs :size)
-     (results :pointer) (nresults :size))
-  (declare (ignore env nresults))
-  (handler-case
-      (progn
-        (unless (>= nargs 8)
-          (log:debug "host-http-request-callback: expected nargs >= 8, got ~A" nargs)
-          (return-from host-http-request-callback (cffi:null-pointer)))
-        
-        (let* ((method (read-wasm-string caller
-                         (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 0))
-                         (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 1))))
-               (url (read-wasm-string caller
-                     (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 2))
-                     (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 3))))
-               (headers (read-wasm-string caller
-                          (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 4))
-                          (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 5))))
-               (body (read-wasm-string caller
-                      (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 6))
-                      (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 7)))))
-          
-          ;; TODO: validate against allowlist and make HTTP request
-          (declare (ignore method url headers body))
-          (log:debug "http_request called (not yet implemented)")
-          
-          ;; Return 403 (forbidden) for now
-          (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 403)))
-    (error (c)
-      (log:error "Host http-request callback error: ~A" c)))
-  (cffi:null-pointer))
+(defhost-callback host-http-request-callback
+    (method-ptr method-len url-ptr url-len
+     headers-ptr headers-len body-ptr body-len)
+  (let ((method (read-wasm-string caller method-ptr method-len))
+        (url (read-wasm-string caller url-ptr url-len))
+        (headers (read-wasm-string caller headers-ptr headers-len))
+        (body (read-wasm-string caller body-ptr body-len)))
+    ;; TODO: validate against allowlist and make HTTP request
+    (declare (ignore method url headers body))
+    (log:debug "http_request called (not yet implemented)")
+    ;; Return 403 (forbidden) for now
+    (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 403)))
 
 ;;; --- Host function: get_secret ---
 ;;;
 ;;; WASM signature: (i32 name_ptr, i32 name_len) -> (i32 value_ptr or -1 if not found)
 
-(cffi:defcallback host-get-secret-callback :pointer
-    ((env :pointer) (caller :pointer)
-     (args :pointer) (nargs :size)
-     (results :pointer) (nresults :size))
-  (declare (ignore env nresults))
-  (handler-case
-      (progn
-        (unless (>= nargs 2)
-          (log:debug "host-get-secret-callback: expected nargs >= 2, got ~A" nargs)
-          (return-from host-get-secret-callback (cffi:null-pointer)))
-        
-        (let* ((name (read-wasm-string caller
-                       (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 0))
-                       (wasmtime-val-i32 (cffi:mem-aptr args '(:struct wasmtime-val) 1)))))
-          
-          ;; TODO: contact daemon via RPC to resolve credential
-          (declare (ignore name))
-          (log:debug "get_secret called (not yet implemented)")
-          
-          ;; Return -1 (not found) for now
-          (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -1)))
-    (error (c)
-      (log:error "Host get-secret callback error: ~A" c)))
-  (cffi:null-pointer))
+(defhost-callback host-get-secret-callback (name-ptr name-len)
+  (let ((name (read-wasm-string caller name-ptr name-len)))
+    ;; TODO: contact daemon via RPC to resolve credential
+    (declare (ignore name))
+    (log:debug "get_secret called (not yet implemented)")
+    ;; Return -1 (not found) for now
+    (setf (wasmtime-val-i32 (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -1)))
 
 ;;; --- JSON-through-memory ABI ---
 ;;;
@@ -957,222 +731,19 @@ Returns the parsed JSON result."
 (defun run-wasm-json-call (wat-string export-name params
                            &key (output-buffer-size +json-output-buffer-size+))
   "Compile WAT, register host functions via linker, instantiate, and call
-EXPORT-NAME using the JSON-through-memory ABI.
-PARAMS is a Lisp data structure to serialize as JSON input.
-Returns the parsed JSON result."
-  (ensure-wasmtime-loaded)
-  (assert-wasmtime-abi)
-  (let ((engine (wasm-engine-new))
-        (store nil)
-        (module nil)
-        (linker nil)
-        (log-functype nil)
-        (kv-get-functype nil)
-        (kv-set-functype nil)
-        (kv-delete-functype nil)
-        (kv-exists-functype nil)
-        (kv-list-functype nil)
-        (http-functype nil)
-        (secret-functype nil))
-    (when (cffi:null-pointer-p engine)
-      (error "Failed to create wasmtime engine"))
-    (unwind-protect
-         (progn
-           (setf store (wasmtime-store-new engine (cffi:null-pointer) (cffi:null-pointer)))
-           (when (cffi:null-pointer-p store)
-             (error "Failed to create wasmtime store"))
-           (setf linker (wasmtime-linker-new engine))
-           (when (cffi:null-pointer-p linker)
-             (error "Failed to create wasmtime linker"))
-           (let ((context (wasmtime-store-context store)))
-             (setf log-functype (make-functype
-                                 (list +wasm-i32+ +wasm-i32+ +wasm-i32+) '()))
-             (define-host-fn linker engine log-functype
-                            "env" 3 "log" 3
-                            (cffi:callback host-log-callback))
-             (setf kv-get-functype (make-functype
-                                    (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
-             (define-host-fn linker engine kv-get-functype
-                            "env" 3 "kv_get" 6
-                            (cffi:callback host-kv-get-callback))
-             (setf kv-set-functype (make-functype
-                                    (list +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+)
-                                    (list +wasm-i32+)))
-             (define-host-fn linker engine kv-set-functype
-                            "env" 3 "kv_set" 6
-                            (cffi:callback host-kv-set-callback))
-             (setf kv-delete-functype (make-functype
-                                       (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
-             (define-host-fn linker engine kv-delete-functype
-                            "env" 3 "kv_delete" 9
-                            (cffi:callback host-kv-delete-callback))
-             (setf kv-exists-functype (make-functype
-                                       (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
-             (define-host-fn linker engine kv-exists-functype
-                            "env" 3 "kv_exists" 9
-                            (cffi:callback host-kv-exists-callback))
-             (setf kv-list-functype (make-functype
-                                     (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
-             (define-host-fn linker engine kv-list-functype
-                            "env" 3 "kv_list" 7
-                            (cffi:callback host-kv-list-callback))
-             (setf http-functype (make-functype
-                                  (list +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+
-                                        +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+)
-                                  (list +wasm-i32+)))
-             (define-host-fn linker engine http-functype
-                            "env" 3 "http_request" 12
-                            (cffi:callback host-http-request-callback))
-             (setf secret-functype (make-functype
-                                    (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
-             (define-host-fn linker engine secret-functype
-                            "env" 3 "get_secret" 10
-                            (cffi:callback host-get-secret-callback))
-             (cffi:with-foreign-object (wasm-bytes '(:struct wasm-byte-vec))
-               (let ((wat-err (wasmtime-wat2wasm wat-string (length wat-string) wasm-bytes)))
-                 (unless (cffi:null-pointer-p wat-err)
-                   (error "WAT parse error: ~A" (wasmtime-error-to-string wat-err)))
-                 (unwind-protect
-                      (let ((wasm-data (cffi:foreign-slot-value
-                                        wasm-bytes '(:struct wasm-byte-vec) 'data))
-                            (wasm-size (cffi:foreign-slot-value
-                                        wasm-bytes '(:struct wasm-byte-vec) 'size)))
-                        (cffi:with-foreign-object (module-ptr :pointer)
-                          (let ((mod-err (wasmtime-module-new
-                                         engine wasm-data wasm-size module-ptr)))
-                            (unless (cffi:null-pointer-p mod-err)
-                              (error "Module compile error: ~A"
-                                     (wasmtime-error-to-string mod-err)))
-                            (setf module (cffi:mem-ref module-ptr :pointer))
-                            (cffi:with-foreign-objects ((instance '(:struct wasmtime-instance))
-                                                       (trap-ptr :pointer))
-                              (setf (cffi:mem-ref trap-ptr :pointer) (cffi:null-pointer))
-                              (let ((inst-err (wasmtime-linker-instantiate
-                                              linker context module
-                                              instance trap-ptr)))
-                                (check-wasmtime-error inst-err trap-ptr "linker_instantiate"))
-                              (json-call-with-instance
-                               context instance export-name params
-                               :output-buffer-size output-buffer-size)))))
-                   (wasm-byte-vec-delete wasm-bytes))))))
-      (when log-functype (wasm-functype-delete log-functype))
-      (when kv-get-functype (wasm-functype-delete kv-get-functype))
-      (when kv-set-functype (wasm-functype-delete kv-set-functype))
-      (when kv-delete-functype (wasm-functype-delete kv-delete-functype))
-      (when kv-exists-functype (wasm-functype-delete kv-exists-functype))
-      (when kv-list-functype (wasm-functype-delete kv-list-functype))
-      (when http-functype (wasm-functype-delete http-functype))
-      (when secret-functype (wasm-functype-delete secret-functype))
-      (when linker (wasmtime-linker-delete linker))
-      (when module (wasmtime-module-delete module))
-      (when store (wasmtime-store-delete store))
-      (wasm-engine-delete engine))))
+EXPORT-NAME using the JSON-through-memory ABI.  PARAMS is a Lisp data
+structure to serialize as JSON input.  Returns the parsed JSON result."
+  (with-wasm-host-environment (context instance) (:wat wat-string)
+    (json-call-with-instance context instance export-name params
+                             :output-buffer-size output-buffer-size)))
 
 (defun run-wasm-bytes-json-call (wasm-bytes export-name params
                                  &key (output-buffer-size +json-output-buffer-size+))
   "Like run-wasm-json-call but accepts pre-compiled WASM bytes (octet vector)
 instead of a WAT string."
-  (ensure-wasmtime-loaded)
-  (assert-wasmtime-abi)
-  (let ((engine (wasm-engine-new))
-        (store nil)
-        (module nil)
-        (linker nil)
-        (log-functype nil)
-        (kv-get-functype nil)
-        (kv-set-functype nil)
-        (kv-delete-functype nil)
-        (kv-exists-functype nil)
-        (kv-list-functype nil)
-        (http-functype nil)
-        (secret-functype nil)
-        (wasm-len (length wasm-bytes)))
-    (when (cffi:null-pointer-p engine)
-      (error "Failed to create wasmtime engine"))
-    (unwind-protect
-         (progn
-           (setf store (wasmtime-store-new engine (cffi:null-pointer) (cffi:null-pointer)))
-           (when (cffi:null-pointer-p store)
-             (error "Failed to create wasmtime store"))
-           (setf linker (wasmtime-linker-new engine))
-           (when (cffi:null-pointer-p linker)
-             (error "Failed to create wasmtime linker"))
-           (let ((context (wasmtime-store-context store)))
-             (setf log-functype (make-functype
-                                 (list +wasm-i32+ +wasm-i32+ +wasm-i32+) '()))
-             (define-host-fn linker engine log-functype
-                            "env" 3 "log" 3
-                            (cffi:callback host-log-callback))
-             (setf kv-get-functype (make-functype
-                                    (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
-             (define-host-fn linker engine kv-get-functype
-                            "env" 3 "kv_get" 6
-                            (cffi:callback host-kv-get-callback))
-             (setf kv-set-functype (make-functype
-                                    (list +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+)
-                                    (list +wasm-i32+)))
-             (define-host-fn linker engine kv-set-functype
-                            "env" 3 "kv_set" 6
-                            (cffi:callback host-kv-set-callback))
-             (setf kv-delete-functype (make-functype
-                                       (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
-             (define-host-fn linker engine kv-delete-functype
-                            "env" 3 "kv_delete" 9
-                            (cffi:callback host-kv-delete-callback))
-             (setf kv-exists-functype (make-functype
-                                       (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
-             (define-host-fn linker engine kv-exists-functype
-                            "env" 3 "kv_exists" 9
-                            (cffi:callback host-kv-exists-callback))
-             (setf kv-list-functype (make-functype
-                                     (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
-             (define-host-fn linker engine kv-list-functype
-                            "env" 3 "kv_list" 7
-                            (cffi:callback host-kv-list-callback))
-             (setf http-functype (make-functype
-                                  (list +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+
-                                        +wasm-i32+ +wasm-i32+ +wasm-i32+ +wasm-i32+)
-                                  (list +wasm-i32+)))
-             (define-host-fn linker engine http-functype
-                            "env" 3 "http_request" 12
-                            (cffi:callback host-http-request-callback))
-             (setf secret-functype (make-functype
-                                    (list +wasm-i32+ +wasm-i32+) (list +wasm-i32+)))
-             (define-host-fn linker engine secret-functype
-                            "env" 3 "get_secret" 10
-                            (cffi:callback host-get-secret-callback))
-             (cffi:with-foreign-object (wasm-ptr :uint8 wasm-len)
-               (loop for i below wasm-len
-                     do (setf (cffi:mem-aref wasm-ptr :uint8 i)
-                              (aref wasm-bytes i)))
-               (cffi:with-foreign-object (module-ptr :pointer)
-                 (let ((mod-err (wasmtime-module-new engine wasm-ptr wasm-len module-ptr)))
-                   (unless (cffi:null-pointer-p mod-err)
-                     (error "Module compile error: ~A"
-                            (wasmtime-error-to-string mod-err)))
-                   (setf module (cffi:mem-ref module-ptr :pointer))
-                   (cffi:with-foreign-objects ((instance '(:struct wasmtime-instance))
-                                              (trap-ptr :pointer))
-                     (setf (cffi:mem-ref trap-ptr :pointer) (cffi:null-pointer))
-                     (let ((inst-err (wasmtime-linker-instantiate
-                                     linker context module
-                                     instance trap-ptr)))
-                       (check-wasmtime-error inst-err trap-ptr "linker_instantiate"))
-                     (json-call-with-instance
-                      context instance export-name params
-                      :output-buffer-size output-buffer-size)))))))
-      (when log-functype (wasm-functype-delete log-functype))
-      (when kv-get-functype (wasm-functype-delete kv-get-functype))
-      (when kv-set-functype (wasm-functype-delete kv-set-functype))
-      (when kv-delete-functype (wasm-functype-delete kv-delete-functype))
-      (when kv-exists-functype (wasm-functype-delete kv-exists-functype))
-      (when kv-list-functype (wasm-functype-delete kv-list-functype))
-      (when http-functype (wasm-functype-delete http-functype))
-      (when secret-functype (wasm-functype-delete secret-functype))
-      (when linker (wasmtime-linker-delete linker))
-      (when module (wasmtime-module-delete module))
-      (when store (wasmtime-store-delete store))
-      (wasm-engine-delete engine))))
+  (with-wasm-host-environment (context instance) (:wasm wasm-bytes)
+    (json-call-with-instance context instance export-name params
+                             :output-buffer-size output-buffer-size)))
 
 ;;; --- Test WAT for host functions ---
 
