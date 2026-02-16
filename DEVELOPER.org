@@ -507,6 +507,69 @@ pub extern "C" fn main_function(input_ptr: *const u8, input_len: usize) -> i64 {
 }
 #+end_src
 
+** WASM Engine Internal Macros (~wasm/engine.lisp~)
+
+Two macros reduce duplication in the WASM host function layer.
+
+*** =defhost-callback=
+
+Defines a CFFI callback for a WASM host function with standard validation,
+argument extraction, error handling, and null-pointer return.
+
+#+begin_src lisp
+(defhost-callback host-kv-get-callback (key-ptr key-len)
+  (let ((key (read-wasm-string caller key-ptr key-len)))
+    (handler-case
+        (let* ((ctx (crichton/runner:current-skill-context))
+               (skill-id (crichton/runner:skill-context-id ctx))
+               (value (crichton/skills:kv-get skill-id key)))
+          (if value
+              (setf (wasmtime-val-i32
+                      (cffi:mem-aptr results '(:struct wasmtime-val) 0)) 0)
+              (setf (wasmtime-val-i32
+                      (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -1)))
+      (error (c)
+        (log:error "kv_get error: ~A" c)
+        (setf (wasmtime-val-i32
+                (cffi:mem-aptr results '(:struct wasmtime-val) 0)) -2)))))
+#+end_src
+
+The argument bindings are symbols bound to successive =wasmtime-val-i32=
+extractions.  The body has access to =caller=, =results=, and =nresults=.
+The macro generates the =nargs >= N= check automatically from the binding count.
+
+*** =with-wasm-host-environment=
+
+Wraps the full WASM lifecycle: engine/store/linker creation, all 8 host function
+registrations, module compilation, linker instantiation, and cleanup.
+
+#+begin_src lisp
+;; From WAT source:
+(with-wasm-host-environment (context instance) (:wat wat-string)
+  (call-i32-export context instance "main" '(42) 1))
+
+;; From pre-compiled WASM bytes:
+(with-wasm-host-environment (context instance) (:wasm wasm-bytes)
+  (json-call-with-instance context instance "filter_items" params))
+#+end_src
+
+=CONTEXT= and =INSTANCE= are bound for use in the body.  The source type is
+either =:wat= (WAT text compiled via =wasmtime-wat2wasm=) or =:wasm= (an octet
+vector copied to foreign memory).  All resources (engine, store, linker, module,
+8 functypes) are cleaned up via =unwind-protect=.
+
+*** =register-standard-host-fns (linker engine)=
+
+Registers all 8 standard host functions (=log=, =kv_get=, =kv_set=,
+=kv_delete=, =kv_exists=, =kv_list=, =http_request=, =get_secret=) in the
+linker.  Returns a list of functype pointers for cleanup.  Used internally by
+=with-wasm-host-environment=.
+
+*** =call-i32-export (context instance export-name args nresults)=
+
+Get an export by name, marshal i32 arguments, call, and return the i32 result.
+Used by =run-wasm-with-host-fns= and =run-wasm-bytes-with-host-fns=.
+
 * API Documentation
 
 ** Storage API (~storage/store.lisp~)
@@ -856,23 +919,58 @@ Unload a skill from memory.
 
 Register and manage tools available to the LLM agent.
 
-*** Functions
+*** =define-tool= Macro
 
-**** =register-tool (name description handler schema)=
-
-Register a new agent tool.
+All 13 built-in tools are defined with the =define-tool= macro, which
+eliminates the boilerplate of =make-properties= + =register-tool= +
+=make-json-schema= + handler lambda + =hget= extraction.
 
 #+begin_src lisp
-(register-tool "weather"
-               "Get current weather conditions"
-               #'handle-weather-tool
-               '(:type "object"
-                 :properties ((:location (:type "string")))))
+(define-tool weather
+    (:description "Get current weather conditions and forecast.")
+  ((city "string" "Canadian city name for weather lookup."))
+  (with-output-to-string (s)
+    (crichton/skills:weather-report :city city :stream s)))
 #+end_src
+
+This expands to a =defun register-weather-tool= function.  The macro:
+
+- Derives the tool name string from the symbol (=system-info= → ="system_info"=)
+- Converts each param spec into a =make-properties= call and an =hget= binding
+- Wraps the body in =(block handler ...)= so tools can use =return-from handler=
+- Generates =(declare (ignore input))= when there are no parameters
+
+**** Parameter specs
+
+Each parameter: =(name type description &key required-p enum default)=
+
+- =name=: Symbol used as the binding variable.  Converted to underscored string for the JSON schema (=action-name= → ="action_name"=).
+- =type=: JSON Schema type string (="string"=, ="integer"=, ="boolean"=, ="object"=).
+- =:required-p t=: Marks the parameter as required.
+- =:enum ("a" "b")=: Restricts to enumerated string values.
+- =:default VALUE=: Default value for =hget= when the LLM omits the parameter.
+
+**** Overriding the tool name
+
+When the registration function name doesn't match the tool name string, use
+=:tool-name= to override:
+
+#+begin_src lisp
+(define-tool log-inspector
+    (:description "Inspect daemon logs." :tool-name "daemon_logs")
+  ...)
+;; Defines register-log-inspector-tool, registers as "daemon_logs"
+#+end_src
+
+*** Functions
+
+**** =register-tool (name description schema handler)=
+
+Low-level tool registration.  Prefer =define-tool= for new tools.
 
 **** =register-all-tools ()=
 
-Re-register all built-in tools. Call after hot-reloading tool handler code.
+Re-register all built-in tools.  Call after hot-reloading tool handler code.
 
 #+begin_src lisp
 (register-all-tools)
