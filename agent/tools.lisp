@@ -220,100 +220,81 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
 
 ;;; --- Scheduler tool ---
 
-(defun register-scheduler-tool ()
-  (multiple-value-bind (props required)
-      (make-properties
-       '("action" "string"
-         "The scheduler action to perform."
-         :enum ("status" "list" "actions" "schedule_every" "schedule_daily" "schedule_once" "cancel")
-         :required-p t)
-       '("action_name" "string"
-         "Name of the schedulable action to run (use 'actions' to list available). Required for schedule_every, schedule_daily, schedule_once.")
-       '("interval_seconds" "integer"
-         "Interval in seconds for schedule_every. Required for schedule_every.")
-       '("hour" "integer"
+(define-tool scheduler
+    (:description "Manage the daemon's task scheduler.  Actions: 'status' (overview), 'list' (all tasks), 'actions' (list schedulable actions), 'schedule_every' (recurring task), 'schedule_daily' (daily at specific time), 'schedule_once' (one-shot after delay), 'cancel' (remove a task by name).")
+  ((action "string"
+           "The scheduler action to perform."
+           :enum ("status" "list" "actions" "schedule_every" "schedule_daily" "schedule_once" "cancel")
+           :required-p t)
+   (action-name "string"
+                "Name of the schedulable action to run (use 'actions' to list available). Required for schedule_every, schedule_daily, schedule_once.")
+   (interval-seconds "integer"
+                     "Interval in seconds for schedule_every. Required for schedule_every.")
+   (hour "integer"
          "Hour (0-23) for schedule_daily. Required for schedule_daily.")
-       '("minute" "integer"
-         "Minute (0-59) for schedule_daily. Required for schedule_daily.")
-       '("delay_seconds" "integer"
-         "Delay in seconds from now for schedule_once. Required for schedule_once.")
-       '("name" "string"
+   (minute "integer"
+           "Minute (0-59) for schedule_daily. Required for schedule_daily.")
+   (delay-seconds "integer"
+                  "Delay in seconds from now for schedule_once. Required for schedule_once.")
+   (name "string"
          "Task name. Auto-generated with 'user:' prefix if omitted."))
-    (register-tool
-     "scheduler"
-     "Manage the daemon's task scheduler. Actions: 'status' (overview), 'list' (all tasks), 'actions' (list schedulable actions), 'schedule_every' (recurring task), 'schedule_daily' (daily at specific time), 'schedule_once' (one-shot after delay), 'cancel' (remove a task by name)."
-     (make-json-schema :type "object" :properties props :required required)
-     (lambda (input)
-       (block handler
-         (let ((action (hget input "action" "status")))
-           (cond
-             ((string-equal action "status")
-              (format nil "~S" (crichton/skills:scheduler-status)))
-             ((string-equal action "list")
-              (format nil "~S" (crichton/skills:list-tasks)))
-             ((string-equal action "actions")
-              (let ((actions (crichton/skills:list-schedulable-actions)))
-                (if actions
-                    (with-output-to-string (s)
-                      (format s "Available schedulable actions:~%")
-                      (dolist (a actions)
-                        (format s "  ~A - ~A~%" (getf a :name) (getf a :description))))
-                    "No schedulable actions registered.")))
-             ((string-equal action "schedule_every")
-              (let* ((action-name (hget input "action_name"))
-                     (interval (hget input "interval_seconds"))
-                     (task-name (or (hget input "name")
-                                    (format nil "user:~A" action-name))))
-                (unless action-name
-                  (return-from handler "Error: 'action_name' is required. Use action 'actions' to list available."))
-                (unless interval
-                  (return-from handler "Error: 'interval_seconds' is required."))
-                (let ((act (crichton/skills:get-schedulable-action action-name)))
-                  (unless act
-                    (return-from handler (format nil "Error: unknown action '~A'. Use action 'actions' to list available." action-name)))
-                  (crichton/skills:schedule-every task-name interval (getf act :fn)
-                                                   :replace t :action-name action-name)
-                  (format nil "Scheduled '~A' every ~Ds as task '~A'." action-name interval task-name))))
-             ((string-equal action "schedule_daily")
-              (let* ((action-name (hget input "action_name"))
-                     (hour (hget input "hour"))
-                     (minute (hget input "minute" 0))
-                     (task-name (or (hget input "name")
-                                    (format nil "user:~A" action-name))))
-                (unless action-name
-                  (return-from handler "Error: 'action_name' is required."))
-                (unless hour
-                  (return-from handler "Error: 'hour' is required for schedule_daily."))
-                (let ((act (crichton/skills:get-schedulable-action action-name)))
-                  (unless act
-                    (return-from handler (format nil "Error: unknown action '~A'." action-name)))
-                  (crichton/skills:schedule-daily task-name hour minute (getf act :fn)
-                                                   :replace t :action-name action-name)
-                  (format nil "Scheduled '~A' daily at ~2,'0D:~2,'0D as task '~A'." action-name hour minute task-name))))
-             ((string-equal action "schedule_once")
-              (let* ((action-name (hget input "action_name"))
-                     (delay (hget input "delay_seconds"))
-                     (task-name (or (hget input "name")
-                                    (format nil "user:~A" action-name))))
-                (unless action-name
-                  (return-from handler "Error: 'action_name' is required."))
-                (unless delay
-                  (return-from handler "Error: 'delay_seconds' is required."))
-                (let ((act (crichton/skills:get-schedulable-action action-name)))
-                  (unless act
-                    (return-from handler (format nil "Error: unknown action '~A'." action-name)))
-                  (crichton/skills:schedule-at task-name (+ (get-universal-time) delay) (getf act :fn)
-                                               :replace t :action-name action-name)
-                  (format nil "Scheduled '~A' to run once in ~Ds as task '~A'." action-name delay task-name))))
-             ((string-equal action "cancel")
-              (let ((task-name (hget input "name")))
-                (unless task-name
-                  (return-from handler "Error: 'name' is required for cancel."))
-                (if (crichton/skills:cancel-task task-name)
-                    (format nil "Cancelled task '~A'." task-name)
-                    (format nil "No task found with name '~A'." task-name))))
-             (t
-              (format nil "Unknown scheduler action: ~A" action)))))))))
+  (let ((task-name (or name (when action-name
+                               (format nil "user:~A" action-name)))))
+    (cond
+      ((string-equal action "status")
+       (format nil "~S" (crichton/skills:scheduler-status)))
+      ((string-equal action "list")
+       (format nil "~S" (crichton/skills:list-tasks)))
+      ((string-equal action "actions")
+       (let ((actions (crichton/skills:list-schedulable-actions)))
+         (if actions
+             (with-output-to-string (s)
+               (format s "Available schedulable actions:~%")
+               (dolist (a actions)
+                 (format s "  ~A - ~A~%" (getf a :name) (getf a :description))))
+             "No schedulable actions registered.")))
+      ((string-equal action "schedule_every")
+       (unless action-name
+         (return-from handler "Error: 'action_name' is required. Use action 'actions' to list available."))
+       (unless interval-seconds
+         (return-from handler "Error: 'interval_seconds' is required."))
+       (let ((act (crichton/skills:get-schedulable-action action-name)))
+         (unless act
+           (return-from handler (format nil "Error: unknown action '~A'. Use action 'actions' to list available." action-name)))
+         (crichton/skills:schedule-every task-name interval-seconds (getf act :fn)
+                                         :replace t :action-name action-name)
+         (format nil "Scheduled '~A' every ~Ds as task '~A'." action-name interval-seconds task-name)))
+      ((string-equal action "schedule_daily")
+       (unless action-name
+         (return-from handler "Error: 'action_name' is required."))
+       (unless hour
+         (return-from handler "Error: 'hour' is required for schedule_daily."))
+       (let ((act (crichton/skills:get-schedulable-action action-name))
+             (min (or minute 0)))
+         (unless act
+           (return-from handler (format nil "Error: unknown action '~A'." action-name)))
+         (crichton/skills:schedule-daily task-name hour min (getf act :fn)
+                                         :replace t :action-name action-name)
+         (format nil "Scheduled '~A' daily at ~2,'0D:~2,'0D as task '~A'." action-name hour min task-name)))
+      ((string-equal action "schedule_once")
+       (unless action-name
+         (return-from handler "Error: 'action_name' is required."))
+       (unless delay-seconds
+         (return-from handler "Error: 'delay_seconds' is required."))
+       (let ((act (crichton/skills:get-schedulable-action action-name)))
+         (unless act
+           (return-from handler (format nil "Error: unknown action '~A'." action-name)))
+         (crichton/skills:schedule-at task-name (+ (get-universal-time) delay-seconds) (getf act :fn)
+                                      :replace t :action-name action-name)
+         (format nil "Scheduled '~A' to run once in ~Ds as task '~A'." action-name delay-seconds task-name)))
+      ((string-equal action "cancel")
+       (unless name
+         (return-from handler "Error: 'name' is required for cancel."))
+       (if (crichton/skills:cancel-task name)
+           (format nil "Cancelled task '~A'." name)
+           (format nil "No task found with name '~A'." name)))
+      (t
+       (format nil "Unknown scheduler action: ~A" action)))))
 
 ;;; --- Current time tool ---
 
@@ -495,129 +476,98 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
       "Amp CLI is available and ready for coding/testing tasks."
       "Amp CLI is NOT available. Install it to enable code delegation."))
 
-(defun register-amp-code-tool ()
-  (multiple-value-bind (props required)
-      (make-properties
-       '("description" "string"
-         "Description of the coding task to delegate to Amp. Be specific about what code to write or modify."
-         :required-p t)
-       '("repo_path" "string"
-         "Absolute path to the repository to work in. Amp will run with this as the working directory.")
-       '("files" "string"
-         "Comma-separated list of file paths to focus on (relative to repo_path).")
-       '("context" "string"
-         "Additional context for the task (e.g., coding standards, constraints, existing patterns).")
-       '("timeout_seconds" "integer"
-         "Maximum time in seconds to wait for Amp to complete. Default: 300 (5 minutes)."))
-    (register-tool
-     "amp_code"
-     "Delegate a coding task to the Amp CLI agent. Amp is an AI coding assistant that can read, write, and modify code files. Use this for implementation tasks: writing new functions, fixing bugs, refactoring code, adding features. Requires Amp CLI to be installed (check with amp_check first)."
-     (make-json-schema :type "object" :properties props :required required)
-     (lambda (input)
-       (let ((description (hget input "description"))
-             (repo-path (hget input "repo_path"))
-             (files-str (hget input "files"))
-             (context (hget input "context"))
-             (timeout (hget input "timeout_seconds" 300)))
-         (let ((files (when files-str
-                        (mapcar (lambda (f)
-                                  (string-trim '(#\Space) f))
-                                (cl-ppcre:split "," files-str)))))
-           (let ((result (crichton/skills:amp-code-task
-                          description
-                          :repo-path repo-path
-                          :files files
-                          :context context
-                          :timeout-seconds timeout)))
-             (with-output-to-string (s)
-               (crichton/skills:amp-report result :stream s)))))))))
+(define-tool amp-code
+    (:description "Delegate a coding task to the Amp CLI agent.  Amp is an AI coding assistant that can read, write, and modify code files.  Use this for implementation tasks: writing new functions, fixing bugs, refactoring code, adding features.  Requires Amp CLI to be installed (check with amp_check first).")
+  ((description "string"
+                "Description of the coding task to delegate to Amp. Be specific about what code to write or modify."
+                :required-p t)
+   (repo-path "string"
+              "Absolute path to the repository to work in. Amp will run with this as the working directory.")
+   (files "string"
+          "Comma-separated list of file paths to focus on (relative to repo_path).")
+   (context "string"
+            "Additional context for the task (e.g., coding standards, constraints, existing patterns).")
+   (timeout-seconds "integer"
+                    "Maximum time in seconds to wait for Amp to complete. Default: 300 (5 minutes)."
+                    :default 300))
+  (let ((file-list (when files
+                     (mapcar (lambda (f)
+                               (string-trim '(#\Space) f))
+                             (cl-ppcre:split "," files)))))
+    (let ((result (crichton/skills:amp-code-task
+                   description
+                   :repo-path repo-path
+                   :files file-list
+                   :context context
+                   :timeout-seconds timeout-seconds)))
+      (with-output-to-string (s)
+        (crichton/skills:amp-report result :stream s)))))
 
-(defun register-amp-test-tool ()
-  (multiple-value-bind (props required)
-      (make-properties
-       '("test_command" "string"
-         "The shell command to run tests (e.g., 'make test', 'pytest', 'cargo test')."
-         :required-p t)
-       '("repo_path" "string"
-         "Absolute path to the repository. Tests run with this as the working directory.")
-       '("fix_failures" "boolean"
-         "If true, invoke Amp to fix test failures automatically. Default: false.")
-       '("max_iterations" "integer"
-         "Maximum test/fix cycles when fix_failures is true. Default: 3.")
-       '("timeout_seconds" "integer"
-         "Maximum time in seconds per Amp fix invocation. Default: 300."))
-    (register-tool
-     "amp_test"
-     "Run a test suite and optionally use the Amp CLI agent to fix failures. First runs the test command directly. If tests fail and fix_failures is true, Amp is invoked with the failure context to attempt repairs, iterating up to max_iterations. Requires Amp CLI for fix mode (check with amp_check)."
-     (make-json-schema :type "object" :properties props :required required)
-     (lambda (input)
-       (let ((test-command (hget input "test_command"))
-             (repo-path (hget input "repo_path"))
-             (fix-failures (hget input "fix_failures"))
-             (max-iterations (hget input "max_iterations" 3))
-             (timeout (hget input "timeout_seconds" 300)))
-         (let ((result (crichton/skills:amp-test-task
-                        test-command
-                        :repo-path repo-path
-                        :fix-failures fix-failures
-                        :max-iterations max-iterations
-                        :timeout-seconds timeout)))
-           (with-output-to-string (s)
-             (crichton/skills:amp-report result :stream s))))))))
+(define-tool amp-test
+    (:description "Run a test suite and optionally use the Amp CLI agent to fix failures.  First runs the test command directly.  If tests fail and fix_failures is true, Amp is invoked with the failure context to attempt repairs, iterating up to max_iterations.  Requires Amp CLI for fix mode (check with amp_check).")
+  ((test-command "string"
+                 "The shell command to run tests (e.g., 'make test', 'pytest', 'cargo test')."
+                 :required-p t)
+   (repo-path "string"
+              "Absolute path to the repository. Tests run with this as the working directory.")
+   (fix-failures "boolean"
+                 "If true, invoke Amp to fix test failures automatically. Default: false.")
+   (max-iterations "integer"
+                   "Maximum test/fix cycles when fix_failures is true. Default: 3."
+                   :default 3)
+   (timeout-seconds "integer"
+                    "Maximum time in seconds per Amp fix invocation. Default: 300."
+                    :default 300))
+  (let ((result (crichton/skills:amp-test-task
+                 test-command
+                 :repo-path repo-path
+                 :fix-failures fix-failures
+                 :max-iterations max-iterations
+                 :timeout-seconds timeout-seconds)))
+    (with-output-to-string (s)
+      (crichton/skills:amp-report result :stream s))))
 
 ;;; --- Skills tool ---
 
-(defun register-skills-tool ()
-  (multiple-value-bind (props required)
-      (make-properties
-       '("action" "string"
-         "The skills action to perform."
-         :enum ("list" "info" "invoke" "refresh")
-         :required-p t)
-       '("name" "string"
+(define-tool skills
+    (:description "Manage external WASM skills.  Actions: 'list' (show all discovered skills), 'info' (get details for a specific skill), 'invoke' (run a skill with optional params), 'refresh' (re-scan skills directory).  Skills are discovered from ~/.crichton/skills/ and can be scheduled using the scheduler tool.  Use 'params' to pass structured input to skills that expect JSON data (e.g., rss-filter).")
+  ((action "string"
+           "The skills action to perform."
+           :enum ("list" "info" "invoke" "refresh")
+           :required-p t)
+   (name "string"
          "Skill name. Required for info and invoke.")
-       '("entry_point" "string"
-         "Function entry point to call. Optional; defaults to the manifest's declared entry point.")
-       '("params" "object"
-         "JSON parameters to pass to the skill. When provided, the JSON ABI is used automatically. Required for pure-function skills like rss-filter."))
-    (register-tool
-     "skills"
-     "Manage external WASM skills. Actions: 'list' (show all discovered skills), 'info' (get details for a specific skill), 'invoke' (run a skill with optional params), 'refresh' (re-scan skills directory). Skills are discovered from ~/.crichton/skills/ and can be scheduled using the scheduler tool. Use 'params' to pass structured input to skills that expect JSON data (e.g., rss-filter)."
-     (make-json-schema :type "object" :properties props :required required)
-     (lambda (input)
-       (block handler
-         (let ((action (hget input "action" "list")))
-           (cond
-             ((string-equal action "list")
-              (crichton/skills:discover-skills)  ; refresh before listing
-              (with-output-to-string (s)
-                (crichton/skills:skill-report :stream s)))
-             ((string-equal action "info")
-              (let* ((name (hget input "name"))
-                     (info (crichton/skills:skill-info name)))
-                (unless name
-                  (return-from handler "Error: 'name' is required for info action."))
-                (if info
-                    (format nil "~S" info)
-                    (format nil "Skill '~A' not found." name))))
-             ((string-equal action "invoke")
-              (let ((name (hget input "name"))
-                    (entry-point (hget input "entry_point"))
-                    (params (hget input "params")))
-                (unless name
-                  (return-from handler "Error: 'name' is required for invoke action."))
-                (handler-case
-                    (let ((result (crichton/skills:invoke-skill name
-                                   :entry-point entry-point
-                                   :params params)))
-                      (format nil "Skill '~A' returned: ~A" name result))
-                  (error (c)
-                    (format nil "Error invoking skill '~A': ~A" name c)))))
-             ((string-equal action "refresh")
-              (let ((count (crichton/skills:discover-skills)))
-                (format nil "Discovered ~D skill~:P." count)))
-             (t
-              (format nil "Unknown skills action: ~A" action)))))))))
+   (entry-point "string"
+                "Function entry point to call. Optional; defaults to the manifest's declared entry point.")
+   (params "object"
+           "JSON parameters to pass to the skill. When provided, the JSON ABI is used automatically. Required for pure-function skills like rss-filter."))
+  (cond
+    ((string-equal action "list")
+     (crichton/skills:discover-skills)            ; refresh before listing
+     (with-output-to-string (s)
+       (crichton/skills:skill-report :stream s)))
+    ((string-equal action "info")
+     (unless name
+       (return-from handler "Error: 'name' is required for info action."))
+     (let ((info (crichton/skills:skill-info name)))
+       (if info
+           (format nil "~S" info)
+           (format nil "Skill '~A' not found." name))))
+    ((string-equal action "invoke")
+     (unless name
+       (return-from handler "Error: 'name' is required for invoke action."))
+     (handler-case
+         (let ((result (crichton/skills:invoke-skill name
+                         :entry-point entry-point
+                         :params params)))
+           (format nil "Skill '~A' returned: ~A" name result))
+       (error (c)
+         (format nil "Error invoking skill '~A': ~A" name c))))
+    ((string-equal action "refresh")
+     (let ((count (crichton/skills:discover-skills)))
+       (format nil "Discovered ~D skill~:P." count)))
+    (t
+     (format nil "Unknown skills action: ~A" action))))
 
 ;;; --- Registration ---
 
