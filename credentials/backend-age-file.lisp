@@ -31,46 +31,6 @@
   (merge-pathnames (make-pathname :name name :type "age")
                    (store-directory store)))
 
-;;; --- Serialization ---
-
-(defun plist-to-json-bytes (plist)
-  "Serialize a credential plist to JSON bytes.
-   Keys are converted from keywords to lowercase strings."
-  (let ((ht (make-hash-table :test #'equal)))
-    (loop for (k v) on plist by #'cddr
-          do (setf (gethash (string-downcase (symbol-name k)) ht) v))
-    (sb-ext:string-to-octets
-     (let ((*print-pretty* nil))
-       (with-output-to-string (s)
-         (shasht:write-json ht s)))
-     :external-format :utf-8)))
-
-(defun safe-intern-keyword (key)
-  "Intern KEY as a keyword after validating length and character set.
-   Rejects keys that could exhaust the keyword package via untrusted JSON."
-  (let ((ukey (string-upcase key)))
-    (when (or (> (length ukey) 64)
-              (zerop (length ukey))
-              (not (every (lambda (c)
-                            (or (alpha-char-p c) (digit-char-p c)
-                                (char= c #\-) (char= c #\_)))
-                          ukey)))
-      (error "Invalid JSON key for keyword interning: ~S" key))
-    (intern ukey :keyword)))
-
-(defun json-bytes-to-plist (bytes)
-  "Deserialize JSON bytes to a credential plist.
-   String keys become uppercase keywords after validation."
-  (let* ((json-string (sb-ext:octets-to-string bytes :external-format :utf-8))
-         (ht (shasht:read-json json-string)))
-    (when (hash-table-p ht)
-      (let (result)
-        (maphash (lambda (k v)
-                   (push v result)
-                   (push (safe-intern-keyword k) result))
-                 ht)
-        result))))
-
 ;;; --- Protocol implementation ---
 
 (defmethod cred-put ((store age-file-store) name plist &key (overwrite nil))
@@ -78,7 +38,7 @@
   (let ((path (cred-file-path store name)))
     (when (and (probe-file path) (not overwrite))
       (error "Credential ~S already exists (use :overwrite t to replace)" name))
-    (crichton/crypto:with-secret-bytes (plaintext (plist-to-json-bytes plist))
+    (crichton/crypto:with-secret-bytes (plaintext (crichton/config:plist-to-json-bytes plist))
       (crichton/crypto:encrypt-to-file plaintext path))
     (log:info "Credential stored: ~A" name)
     name))
@@ -90,7 +50,7 @@
       (error 'credential-not-found :name name))
     (crichton/crypto:with-secret-bytes (plaintext
                                         (crichton/crypto:decrypt-from-file path))
-      (json-bytes-to-plist plaintext))))
+      (crichton/config:json-bytes-to-plist plaintext))))
 
 (defmethod cred-delete ((store age-file-store) name)
   (assert-valid-name name)

@@ -54,39 +54,11 @@
 
 (defun session-to-json-bytes (session-plist)
   "Serialize a session plist to JSON bytes."
-  (let ((ht (make-hash-table :test #'equal)))
-    (loop for (k v) on session-plist by #'cddr
-          do (setf (gethash (string-downcase (symbol-name k)) ht) v))
-    (sb-ext:string-to-octets
-     (let ((*print-pretty* nil))
-       (with-output-to-string (s)
-         (shasht:write-json ht s)))
-     :external-format :utf-8)))
-
-(defun safe-intern-keyword (key)
-  "Intern KEY as a keyword after validating length and character set.
-   Rejects keys that could exhaust the keyword package via untrusted JSON."
-  (let ((ukey (string-upcase key)))
-    (when (or (> (length ukey) 64)
-              (zerop (length ukey))
-              (not (every (lambda (c)
-                            (or (alpha-char-p c) (digit-char-p c)
-                                (char= c #\-) (char= c #\_)))
-                          ukey)))
-      (error "Invalid JSON key for keyword interning: ~S" key))
-    (intern ukey :keyword)))
+  (crichton/config:plist-to-json-bytes session-plist))
 
 (defun json-bytes-to-session (bytes)
   "Deserialize JSON bytes to a session plist."
-  (let* ((json-string (sb-ext:octets-to-string bytes :external-format :utf-8))
-         (ht (shasht:read-json json-string)))
-    (when (hash-table-p ht)
-      (let (result)
-        (maphash (lambda (k v)
-                   (push v result)
-                   (push (safe-intern-keyword k) result))
-                 ht)
-        result))))
+  (crichton/config:json-bytes-to-plist bytes))
 
 ;;; --- Create / Save ---
 
