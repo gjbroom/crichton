@@ -218,9 +218,7 @@
   "Wipe all KV data for SKILL-ID (cache and disk)."
   (bt:with-lock-held (*kv-lock*)
     (remhash skill-id *kv-cache*)
-    (let ((path (kv-file-path skill-id)))
-      (when (probe-file path)
-        (delete-file path)))
+    (crichton/config:delete-file-if-exists (kv-file-path skill-id))
     (log:info "KV store cleared for skill ~A" skill-id)
     t))
 

@@ -55,8 +55,7 @@
 (defmethod cred-delete ((store age-file-store) name)
   (assert-valid-name name)
   (let ((path (cred-file-path store name)))
-    (when (probe-file path)
-      (delete-file path)
+    (when (crichton/config:delete-file-if-exists path)
       (log:info "Credential deleted: ~A" name)
       t)))
 

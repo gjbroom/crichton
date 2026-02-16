@@ -166,8 +166,7 @@ Request fields:
 
 (defun remove-stale-socket (path)
   "Remove a stale socket file if it exists."
-  (when (probe-file path)
-    (delete-file path)))
+  (crichton/config:delete-file-if-exists path))
 
 (defun start-server (socket-path)
   "Bind a unix domain socket at SOCKET-PATH and serve requests.

@@ -148,8 +148,7 @@
   "Start the daemon RPC server on a Unix domain socket."
   (let ((path (or socket-path (daemon-socket-path))))
     (crichton/agent:register-all-tools)
-    (when (probe-file path)
-      (delete-file path))
+    (crichton/config:delete-file-if-exists path)
     (let ((server (make-instance 'sb-bsd-sockets:local-socket
                                  :type :stream)))
       (sb-bsd-sockets:socket-bind server path)
@@ -183,7 +182,5 @@
       (error (c)
         (log:warn "Error closing RPC server socket: ~A" c)))
     (setf *rpc-server-socket* nil))
-  (let ((path (daemon-socket-path)))
-    (when (probe-file path)
-      (delete-file path)))
+  (crichton/config:delete-file-if-exists (daemon-socket-path))
   (log:info "RPC server stopped"))

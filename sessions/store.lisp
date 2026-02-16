@@ -131,10 +131,9 @@
 ;;; --- Delete ---
 
 (defun delete-session (session-id)
-  "Delete a session from disk. Returns T if deleted, NIL if not found."
+  "Delete a session from disk.  Returns T if deleted, NIL if not found."
   (let ((path (session-file-path session-id)))
-    (when (probe-file path)
-      (delete-file path)
+    (when (crichton/config:delete-file-if-exists path)
       (log:info "Session deleted: ~A" session-id)
       t)))
 

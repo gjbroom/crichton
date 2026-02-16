@@ -23,9 +23,7 @@
         (parse-integer (read-line s) :junk-allowed t)))))
 
 (defun remove-pid-file ()
-  (let ((path (pid-file-path)))
-    (when (probe-file path)
-      (delete-file path))))
+  (crichton/config:delete-file-if-exists (pid-file-path)))
 
 (defvar *shutdown-lock* (bt:make-lock "shutdown-lock"))
 (defvar *shutdown-cv* (bt:make-condition-variable :name "shutdown-cv"))

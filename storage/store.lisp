@@ -197,9 +197,7 @@
   (bt:with-lock-held (*storage-lock*)
     (remhash namespace *storage-cache*)
     (remhash namespace *dirty-namespaces*)
-    (let ((path (storage-file-path namespace)))
-      (when (probe-file path)
-        (delete-file path)))
+    (crichton/config:delete-file-if-exists (storage-file-path namespace))
     (log:info "Storage cleared for namespace ~A" namespace)
     t))
 
