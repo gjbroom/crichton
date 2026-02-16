@@ -1,0 +1,632 @@
+#+TITLE: Crichton TUI Client — Design Document
+#+AUTHOR: Gordon J. Broom
+#+DATE: 2026-02-16
+#+STARTUP: content
+
+* Motivation
+
+The current =crichton-client= uses cl-readline over a synchronous
+request/response NDJSON protocol.  This has three fundamental limitations:
+
+1. *No colour* — readline strips ANSI escape sequences; Crichton's responses
+   arrive as flat text.
+2. *No terminal control* — no cursor movement, no layout, no panels.  The
+   output is a dumb scroll.
+3. *No push notifications* — the client can only display output in response to
+   user input.  The daemon has no way to notify the user of scheduled-task
+   results, battery alerts, RSS items, or Discord messages unless the user
+   happens to send a chat message.
+
+A TUI client resolves all three while preserving the microkernel architecture:
+the TUI binary is still a thin process that speaks NDJSON over the daemon
+socket.
+
+* Design Goals
+
+- Full ANSI colour (256-colour and true-colour foreground/background)
+- Adaptive layout that reflows on terminal resize (=SIGWINCH=)
+- Asynchronous notification display (daemon pushes events to client)
+- Persistent input area separate from scrolling output
+- Markdown-ish rendering of LLM responses (bold, italic, code blocks, lists)
+- Sixel graphics display in terminals that support it
+- Zero daemon-side changes required for basic functionality
+- Minimal dependencies (no ncurses; pure ANSI escape sequences)
+
+* Library Choice: cl-tuition
+
+** Why cl-tuition
+
+| Criterion             | cl-tuition                     | croatoan / cl-charms          |
+|-----------------------+--------------------------------+-------------------------------|
+| Architecture          | TEA (Elm) with CLOS            | imperative ncurses wrapper    |
+| ncurses dependency    | None — pure ANSI               | Requires libncurses           |
+| Colour support        | 256 + truecolour, adaptive     | ncurses colour pairs          |
+| Layout primitives     | =join-vertical=, =join-horizontal=, =place=, borders | Manual positioning |
+| Mouse support         | Yes (press, release, drag, scroll) | Via ncurses                |
+| Async commands        | Built-in (=tui:tick-cmd=, custom) | Manual thread management   |
+| Widgets               | Spinner, progress, list, table, text-input | Minimal built-in  |
+| Markdown rendering    | Built-in (Glamour-inspired)    | None                          |
+| Licensing             | MIT                            | MIT                           |
+| Maturity              | Active (2025–2026), 129 stars  | Stale                         |
+| SBCL compatible       | Yes (bordeaux-threads)         | Yes                           |
+
+cl-tuition is the clear winner.  It is modelled on Go's Bubble Tea (the
+library that powers the Go TUIs Gord admired), but in Common Lisp with
+CLOS.  No ncurses dependency means no CFFI complexity and trivially
+reproducible builds via =save-lisp-and-die=.
+
+** Dependencies added to =crichton-tui.asd=
+
+- =cl-tuition= — TUI framework
+- =shasht= — JSON (already used by =crichton-client=)
+- =bordeaux-threads= — threading (transitive via cl-tuition)
+
+No =cl-readline= dependency.
+
+* Architecture
+
+** System boundary
+
+#+begin_src ditaa :file tui-system-boundary.png
++-----------------------------------------------------------+
+|                    Terminal Emulator                       |
+|                                                           |
+|  +-----------------------------------------------------+ |
+|  |               TUI Client Process                     | |
+|  |                                                      | |
+|  |  +------------------------------------------------+  | |
+|  |  |          cl-tuition Program Loop                |  | |
+|  |  |                                                |  | |
+|  |  |  Model (CLOS)  <---- Messages ---+             |  | |
+|  |  |    |                             |             |  | |
+|  |  |    +-- chat history              |             |  | |
+|  |  |    +-- input buffer       update-message       |  | |
+|  |  |    +-- scroll position           |             |  | |
+|  |  |    +-- status line               |             |  | |
+|  |  |    +-- notification queue        |             |  | |
+|  |  |    +-- sixel cache               |             |  | |
+|  |  |    |                             |             |  | |
+|  |  |    v                             |             |  | |
+|  |  |  view --- render ---> terminal   |             |  | |
+|  |  +------------------------------------------------+  | |
+|  |                                                      | |
+|  |  +------------------------+                          | |
+|  |  |  Daemon I/O Thread     |                          | |
+|  |  |  (bordeaux-threads)    |                          | |
+|  |  |                        |                          | |
+|  |  |  Reads NDJSON lines    +--> daemon-response-msg   | |
+|  |  |  from socket           |    (injected into        | |
+|  |  |                        |     tuition msg loop)    | |
+|  |  +-----------+------------+                          | |
+|  |              | Unix socket                           | |
+|  +--------------+---------------------------------------+ |
+|                 |                                         |
++-----------------+-----------------------------------------+
+                  |
+    +-------------+--------------+
+    | ~/.crichton/daemon.sock    |
+    | (NDJSON RPC)               |
+    +-------------+--------------+
+                  |
+    +-------------+--------------+
+    |    Crichton Daemon         |
+    +----------------------------+
+#+end_src
+
+The TUI client is a separate ASDF system (=crichton-tui=) and a separate
+=save-lisp-and-die= binary, just like =crichton-client= today.
+
+** Threading model
+
+Two threads:
+
+1. *Main thread* — runs the cl-tuition program loop (terminal I/O,
+   rendering, input decoding).
+2. *Daemon I/O thread* — maintains a persistent connection to
+   =daemon.sock=, reads NDJSON lines, and injects messages into the
+   tuition program loop via =tui:send=.
+
+The daemon I/O thread never touches terminal state directly.
+
+* ASDF System Definition
+
+#+begin_src lisp
+(asdf:defsystem #:crichton-tui
+  :description "TUI chat client for the Crichton daemon"
+  :author "Gord Broom <gjbroom@thebrooms.ca>"
+  :license "MIT"
+  :version "0.1.0"
+  :depends-on (#:shasht
+               #:cl-tuition
+               #:bordeaux-threads)
+  :serial t
+  :components ((:module "tui"
+                :components ((:file "package")
+                             (:file "protocol")
+                             (:file "model")
+                             (:file "messages")
+                             (:file "render")
+                             (:file "sixel")
+                             (:file "client")))))
+#+end_src
+
+* Source Files
+
+** =tui/package.lisp= — Package definition
+
+Exports: =main=, =tui-repl=
+
+** =tui/protocol.lisp= — Daemon wire protocol
+
+Reuses the same NDJSON-over-Unix-socket protocol as the current client.
+Provides:
+
+- =connect-daemon= — opens Unix socket, returns stream
+- =write-message= / =read-message= — NDJSON encode/decode
+- =send-request= — fire-and-forget (response arrives asynchronously on
+  the reader thread)
+
+This is essentially the same code as =client/client.lisp= minus readline,
+refactored for async I/O.
+
+** =tui/model.lisp= — Application state (CLOS)
+
+#+begin_src lisp
+(defclass tui-model ()
+  ((messages       :initarg :messages       :initform nil
+                   :accessor model-messages
+                   :documentation "List of chat-entry objects (user + assistant).")
+   (input-text     :initarg :input-text     :initform ""
+                   :accessor model-input-text
+                   :documentation "Current text in the input widget.")
+   (scroll-offset  :initarg :scroll-offset  :initform 0
+                   :accessor model-scroll-offset
+                   :documentation "Lines scrolled back in chat history.")
+   (status         :initarg :status         :initform :idle
+                   :accessor model-status
+                   :documentation ":idle | :waiting | :streaming | :error")
+   (status-text    :initarg :status-text    :initform ""
+                   :accessor model-status-text
+                   :documentation "Text for the status line.")
+   (notifications  :initarg :notifications  :initform nil
+                   :accessor model-notifications
+                   :documentation "Queue of unacknowledged daemon notifications.")
+   (session-id     :initarg :session-id     :initform nil
+                   :accessor model-session-id
+                   :documentation "Current chat session ID.")
+   (width          :initarg :width          :initform 80
+                   :accessor model-width)
+   (height         :initarg :height         :initform 24
+                   :accessor model-height)
+   (pending-ids    :initarg :pending-ids    :initform nil
+                   :accessor model-pending-ids
+                   :documentation "Correlation IDs awaiting responses.")
+   (spinner        :initarg :spinner        :initform nil
+                   :accessor model-spinner
+                   :documentation "Active spinner component while waiting.")))
+
+(defclass chat-entry ()
+  ((role    :initarg :role    :accessor entry-role
+            :documentation ":user | :assistant | :error | :notification")
+   (text    :initarg :text    :accessor entry-text)
+   (time    :initarg :time    :accessor entry-time
+            :documentation "Universal-time of the entry.")
+   (sixels  :initarg :sixels  :initform nil
+            :accessor entry-sixels
+            :documentation "List of sixel-image objects embedded in this entry.")))
+#+end_src
+
+** =tui/messages.lisp= — Custom message types
+
+#+begin_src lisp
+;;; Messages injected by the daemon I/O thread
+
+(tui:defmessage daemon-response-msg
+  ((id        :initarg :id        :accessor msg-response-id)
+   (text      :initarg :text      :accessor msg-response-text)
+   (session   :initarg :session   :accessor msg-response-session)
+   (error-p   :initarg :error-p   :initform nil :accessor msg-response-error-p)))
+
+(tui:defmessage daemon-notification-msg
+  ((kind      :initarg :kind      :accessor msg-notif-kind)
+   (text      :initarg :text      :accessor msg-notif-text)
+   (source    :initarg :source    :accessor msg-notif-source)))
+
+(tui:defmessage daemon-disconnected-msg ())
+
+(tui:defmessage send-chat-msg
+  ((text :initarg :text :accessor msg-chat-text)))
+#+end_src
+
+** =tui/render.lisp= — View function and styling
+
+The view function produces the complete terminal frame on every render cycle.
+Layout is computed from =model-width= and =model-height= (updated on
+=tui:window-size-msg=).
+
+*** Screen layout
+
+#+begin_src ditaa :file tui-screen-layout.png
++------------------------------------------------------+
+| Crichton TUI              session: a3f8...  | 14:32  |  <-- title bar
++------------------------------------------------------+
+|                                                      |
+|  You (14:30):                                        |  <-- chat
+|  What's the weather like?                            |      history
+|                                                      |      (scrollable)
+|  Crichton (14:30):                                   |
+|  Currently in Victoria it is 8C with light rain.     |
+|  Sunrise was at 07:23, sunset at 17:14.              |
+|                                                      |
+|  +------------------------------------+              |  <-- notification
+|  | Battery at 15% -- plug in!         |              |      toast (overlay)
+|  +------------------------------------+              |
+|                                                      |
++------------------------------------------------------+
+| Thinking...                                          |  <-- status bar
++------------------------------------------------------+
+| > What's the weather like?                           |  <-- input area
++------------------------------------------------------+
+#+end_src
+
+*** Colour theme
+
+| Element             | Foreground         | Background        |
+|---------------------+--------------------+-------------------|
+| Title bar           | bright-white       | #1a1a2e (deep navy) |
+| User message label  | bright-cyan        | default           |
+| User message text   | white              | default           |
+| Assistant label     | bright-green       | default           |
+| Assistant text      | white              | default           |
+| Code blocks         | bright-yellow      | #2d2d2d (dark grey) |
+| Error messages      | bright-red         | default           |
+| Notification toast  | black              | bright-yellow     |
+| Status bar          | bright-white       | #333333           |
+| Input prompt =>     | bright-cyan        | default           |
+| Input text          | white              | default           |
+| Borders             | #555555            | default           |
+
+These are defined as =tui:make-style= objects so the theme is centralized
+and easily swapped.
+
+*** Adaptive layout
+
+The view function computes regions as follows:
+
+- *Title bar*: 1 line, full width
+- *Input area*: 1–3 lines (grows with wrapped input text), anchored to bottom
+- *Status bar*: 1 line, above input
+- *Chat area*: remaining height, scrollable
+
+On resize (=tui:window-size-msg=), width and height update in the model,
+and the next =view= call reflows everything.  Long assistant responses are
+word-wrapped to =model-width - 4= (2 chars padding each side).
+
+*** LLM response rendering
+
+Assistant text is rendered with lightweight Markdown-to-ANSI conversion:
+
+- =**bold**= → =tui:bold=
+- =*italic*= → =tui:italic=
+- =`inline code`= → bright-yellow on dark background
+- Fenced code blocks (=```=) → bordered panel with syntax-appropriate colour
+- Bullet lists → indented with styled bullets
+- Numbered lists → indented with styled numbers
+
+** =tui/sixel.lisp= — Sixel graphics support
+
+*** Approach
+
+Sixel is a DEC terminal protocol for inline raster graphics.  It is
+supported by: xterm (=+sixel=), foot, mlterm, WezTerm, Contour, and
+others (see https://www.arewesixelyet.com/).
+
+The TUI client does not generate sixel data itself.  Instead:
+
+1. The daemon's LLM response or skill output may include an image
+   reference (a file path or base64-encoded image data) in a
+   structured content block.
+2. The TUI client converts the image to sixel format by shelling out to
+   =img2sixel= (from libsixel) if available.
+3. The sixel data is cached and emitted at the appropriate position
+   during rendering.
+
+*** Detection
+
+#+begin_src lisp
+(defun sixel-supported-p ()
+  "Query the terminal for sixel support via DA1 (Device Attributes).
+   Returns T if the terminal reports sixel capability."
+  ;; Send DA1: ESC [ c
+  ;; Parse response for ";4;" (sixel graphics attribute)
+  ;; Fallback: check TERM env var for known sixel-capable terminals
+  ...)
+
+(defun img2sixel-available-p ()
+  "Return T if img2sixel is on PATH."
+  (zerop (nth-value 2 (uiop:run-program
+                        '("which" "img2sixel")
+                        :ignore-error-status t))))
+#+end_src
+
+*** Integration
+
+Sixel data is emitted as raw escape sequences between rendered text
+lines.  cl-tuition's pure-string rendering means we can embed sixel
+escape sequences directly in the view output — the terminal will
+interpret them.
+
+The =view= function checks =entry-sixels= on each =chat-entry= and,
+if the terminal supports sixel, injects the cached sixel data at the
+appropriate scroll position.  On non-sixel terminals, a fallback
+=[Image: filename]= placeholder is shown.
+
+** =tui/client.lisp= — Main program, I/O thread, entry point
+
+*** Program setup
+
+#+begin_src lisp
+(defun make-tui-program ()
+  (tui:make-program
+   (make-instance 'tui-model)
+   :mouse t
+   :alt-screen t))
+#+end_src
+
+*** Daemon I/O thread
+
+A background thread reads from the daemon socket and injects messages:
+
+#+begin_src lisp
+(defun start-daemon-reader (stream program)
+  "Spawn a thread that reads NDJSON from STREAM and sends
+   messages into the tuition PROGRAM."
+  (bt:make-thread
+   (lambda ()
+     (handler-case
+         (loop for msg = (read-message stream)
+               while msg
+               do (let ((result (gethash "result" msg)))
+                    (tui:send program
+                              (make-instance 'daemon-response-msg
+                                             :id (gethash "id" msg)
+                                             :text (gethash "text" result)
+                                             :session (gethash "session_id" result)
+                                             :error-p (not (gethash "ok" msg))))))
+       (error ()
+         (tui:send program (make-instance 'daemon-disconnected-msg)))))
+   :name "daemon-reader"))
+#+end_src
+
+*** Sending chat
+
+When the user presses Enter, =update-message= on =tui:key-msg= checks for
+the Enter key, creates a =send-chat-msg=, and returns a command that
+performs the socket write on a separate thread (so the TUI loop never
+blocks on I/O):
+
+#+begin_src lisp
+(defmethod tui:update-message ((model tui-model) (msg tui:key-msg))
+  (let ((key (tui:key-msg-key msg)))
+    (cond
+      ((eq key :enter)
+       (let ((text (model-input-text model)))
+         (unless (zerop (length (string-trim '(#\Space) text)))
+           (push (make-instance 'chat-entry
+                                :role :user
+                                :text text
+                                :time (get-universal-time))
+                 (model-messages model))
+           (setf (model-input-text model) ""
+                 (model-status model) :waiting
+                 (model-scroll-offset model) 0)
+           (values model (send-chat-cmd text)))))
+      ;; ... other key handling: scrollback, Ctrl-C, etc.
+      )))
+#+end_src
+
+*** Entry point
+
+#+begin_src lisp
+(defun main ()
+  (let ((args (rest sb-ext:*posix-argv*)))
+    (handler-case
+        (if args
+            ;; One-shot mode: send args as chat, print response, exit
+            (one-shot-chat (format nil "~{~A~^ ~}" args))
+            ;; Interactive TUI mode
+            (tui-repl))
+      (error (c)
+        (format *error-output* "~A~%" c)
+        (sb-ext:exit :code 1)))))
+#+end_src
+
+* RPC Protocol Extensions (Daemon Side)
+
+Basic TUI operation requires *zero daemon changes* — the existing
+request/response protocol works as-is, with the reader thread waiting
+for responses asynchronously instead of synchronously.
+
+However, to unlock push notifications, the RPC protocol needs a small
+extension.  This is a *Phase 2* enhancement.
+
+** Phase 2: Server-initiated notifications
+
+Add a =subscribe= RPC operation:
+
+#+begin_src javascript
+// Client → Daemon
+{"id": 42, "op": "subscribe", "events": ["notification", "status"]}
+
+// Daemon → Client (unprompted, no correlation ID)
+{"op": "notify", "kind": "battery", "text": "Battery at 15%", "source": "battery-monitor"}
+{"op": "notify", "kind": "rss", "text": "New item in HN feed: ...", "source": "rss-monitor"}
+{"op": "notify", "kind": "scheduler", "text": "Task 'backup' completed", "source": "scheduler"}
+#+end_src
+
+The daemon reader thread already loops on =read-message=.  It would
+dispatch notification messages as =daemon-notification-msg= instances
+instead of =daemon-response-msg=.
+
+This requires:
+- A new =subscribe= op handler in =daemon/rpc-server.lisp=
+- Per-connection notification delivery in =handle-rpc-connection=
+- A notification registry that skills/monitors can post to
+
+** Phase 3: Streaming responses
+
+The LLM protocol already defines =stream-message= (currently
+unimplemented for Anthropic).  Once implemented daemon-side, the RPC
+protocol can stream response chunks:
+
+#+begin_src javascript
+// Daemon → Client (multiple lines for one request)
+{"id": 42, "op": "chat_delta", "text": "Currently"}
+{"id": 42, "op": "chat_delta", "text": " in Victoria"}
+{"id": 42, "op": "chat_done", "result": {"text": "...", "session_id": "..."}}
+#+end_src
+
+The TUI would render partial text as it arrives, giving the user immediate
+feedback.  This is a natural extension of the notification mechanism.
+
+* Key Bindings
+
+| Key             | Action                                      |
+|-----------------+---------------------------------------------|
+| Enter           | Send current input as chat message           |
+| Ctrl-C          | Quit (with confirmation if waiting)          |
+| Ctrl-D          | Quit (EOF)                                   |
+| Up / Down       | Scroll chat history                          |
+| Page Up / Down  | Scroll chat history (page at a time)         |
+| Home / End      | Jump to top / bottom of chat history         |
+| Ctrl-L          | Force redraw                                 |
+| Ctrl-U          | Clear input line                             |
+| Ctrl-W          | Delete word backward                         |
+| Esc             | Dismiss notification toast                   |
+| Left / Right    | Move cursor in input                         |
+| Backspace / Del | Delete character                             |
+
+The =tui:text-input= component handles most input editing automatically.
+
+* Client Commands
+
+Prefixed with =:= (colon), handled locally without sending to the daemon:
+
+| Command        | Action                                         |
+|----------------+------------------------------------------------|
+| =:quit= / =:q=  | Exit the TUI                                 |
+| =:clear=       | Clear chat history display                     |
+| =:scroll N=    | Scroll to position N                           |
+| =:session=     | Show current session ID                        |
+| =:new=         | Start a new session (clear session ID)         |
+| =:status=      | Show daemon status (sends =status= RPC)       |
+| =:theme dark/light= | Switch colour theme                      |
+| =:sixel on/off= | Toggle sixel rendering                        |
+| =:notifications= | Show notification history                   |
+
+* Build & Install
+
+#+begin_src bash
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/home/gjbroom/devel/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton-tui)' \
+  --eval "(sb-ext:save-lisp-and-die #p\"/home/gjbroom/devel/crichton/crichton-tui\" \
+            :toplevel #'crichton-tui:main :executable t :compression t)"
+#+end_src
+
+Symlink: =~/bin/crichton-tui → /home/gjbroom/devel/crichton/crichton-tui=
+
+* Implementation Phases
+
+** Phase 1: Core TUI (MVP)
+
+- =crichton-tui.asd= system definition
+- Model, messages, view, basic key handling
+- Daemon connection (reuse existing sync protocol, async reader thread)
+- Send chat / receive response / render with colours
+- Adaptive layout (=SIGWINCH= / =tui:window-size-msg=)
+- Markdown-to-ANSI rendering of assistant responses
+- Input line with cursor editing (=tui:text-input= component)
+- Scroll through chat history
+- =:quit=, =:clear=, =:new= local commands
+- History persistence (save/load chat entries to file)
+- =save-lisp-and-die= binary build
+
+** Phase 2: Push Notifications
+
+- =subscribe= RPC op (daemon side)
+- Notification delivery from battery monitor, RSS, scheduler
+- Toast overlay rendering in TUI
+- Notification queue and dismissal
+- Notification history (=:notifications= command)
+
+** Phase 3: Streaming & Sixel
+
+- Implement =stream-message= for Anthropic provider
+- =chat_delta= / =chat_done= RPC ops
+- Real-time streaming display in TUI (character-by-character)
+- Thinking spinner during tool use
+- Sixel detection and =img2sixel= integration
+- Image rendering in chat history
+- =:sixel on/off= toggle
+
+** Phase 4: Polish
+
+- Light/dark theme switching
+- Mouse support (click to scroll, select text)
+- Tab completion for =:= commands
+- Session management (list, switch, resume old sessions)
+- Config file support (=~/.crichton/tui.toml=) for theme, keybindings
+- Accessibility: screen-reader compatible output mode
+
+* Compatibility
+
+** Terminal emulators tested/targeted
+
+| Terminal    | Colour   | Sixel  | Mouse | Notes                    |
+|-------------+----------+--------+-------+--------------------------|
+| foot        | Truecolour | Yes  | Yes   | Primary dev terminal     |
+| xterm       | Truecolour | +sixel | Yes | Needs compile flag       |
+| WezTerm     | Truecolour | Yes  | Yes   |                          |
+| kitty       | Truecolour | No*  | Yes   | Uses own graphics proto  |
+| Alacritty   | Truecolour | No   | Yes   | No inline graphics       |
+| GNOME Term  | Truecolour | No   | Yes   |                          |
+| tmux        | 256-colour | No   | Yes   | Strips sixel passthrough |
+
+=*= kitty uses its own image protocol; sixel fallback shows placeholder text.
+
+** Minimum terminal requirements
+
+- 80×24 minimum (graceful degradation at smaller sizes)
+- ANSI escape sequence support (virtually all modern terminals)
+- UTF-8 encoding
+
+* Relationship to Existing Client
+
+The readline client (=crichton-client=) remains available for simple
+scripting and one-shot queries.  The TUI client is a separate binary
+for interactive use.  Both coexist; the user chooses which to run.
+
+Eventually the TUI client may become the default interactive interface,
+but the readline client will not be removed — it is useful for
+=crichton-client "what time is it?"= style shell scripting.
+
+* Open Questions
+
+1. *Scrollback buffer limit* — how many chat entries to keep in memory
+   before paging to disk?  Suggest 1000 entries, with older entries
+   evicted to an on-disk file.
+
+2. *Multi-line input* — should Shift+Enter insert a newline in the
+   input area?  cl-tuition's text-input widget may need extension for
+   this.  Alternative: detect terminal Shift+Enter support via
+   =CSI 27;2;13~= (kitty keyboard protocol).
+
+3. *Image format support* — should we support only sixel, or also
+   kitty's graphics protocol for broader compatibility?  Suggest
+   sixel-first with kitty protocol as a Phase 4 stretch goal.
+
+4. *Session persistence* — the TUI could save/restore the visual chat
+   history locally (separate from daemon session storage) for instant
+   re-display on reconnect.
