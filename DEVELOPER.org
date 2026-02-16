@@ -570,6 +570,57 @@ linker.  Returns a list of functype pointers for cleanup.  Used internally by
 Get an export by name, marshal i32 arguments, call, and return the i32 result.
 Used by =run-wasm-with-host-fns= and =run-wasm-bytes-with-host-fns=.
 
+** Shared Utilities (~config/util.lisp~)
+
+Cross-cutting utilities available to all packages via =crichton/config=.
+Loaded early in the ASDF system so every module can depend on them.
+
+*** =iso8601-now ()=
+
+Returns current UTC time as an ISO 8601 string.  Canonical version — replaces
+4 prior duplicates in logging, sessions, storage, and kv-store.
+
+*** =safe-intern-keyword (key)=
+
+Intern a JSON string key as a keyword with length and character validation.
+Prevents keyword package exhaustion from untrusted JSON input.
+
+*** =plist-to-json-bytes (plist)= / =json-bytes-to-plist (bytes)=
+
+Round-trip plist ↔ JSON byte serialization.  Keys convert between keywords
+and lowercase strings.  Used by credential and session stores.
+
+*** =delete-file-if-exists (path)=
+
+Delete PATH if it exists.  Returns T if deleted, NIL otherwise.  Replaces the
+=(when (probe-file path) (delete-file path))= pattern across ~11 call sites.
+
+*** =string-case (keyform &body clauses)=
+
+Like =CASE= but dispatches on =STRING-EQUAL=.  Supports single strings, lists
+of strings, and =OTHERWISE= / =T= default clauses.
+
+#+begin_src lisp
+(crichton/config:string-case op
+  ("ping" (handle-ping))
+  ("chat" (handle-chat request))
+  (("stop" "shutdown") (handle-stop))
+  (otherwise (make-error-response "unknown op")))
+#+end_src
+
+** Lifecycle Macro (~daemon/lifecycle.lisp~)
+
+*** =guarded (description &body body)=
+
+Execute BODY, logging a warning with DESCRIPTION if an error occurs.  Used
+throughout =start-daemon= and =stop-daemon= to isolate non-fatal startup/shutdown
+failures without aborting the daemon.
+
+#+begin_src lisp
+(guarded "Session purge at startup failed"
+  (crichton/sessions:purge-expired-sessions))
+#+end_src
+
 * API Documentation
 
 ** Storage API (~storage/store.lisp~)
