@@ -27,9 +27,16 @@ For development details, see the git commit history and BEADS issue tracker.
 
 ** Added
 
+- Skill parameter passing: =invoke-skill= now accepts =:params= and =:abi= keywords (cricht-u1x Phase 1)
+  - JSON ABI auto-selected when params provided or manifest declares =abi = "json"=
+  - Agent =skills= tool =invoke= action passes =params= field through to WASM skills
+  - Backwards compatible: zero-arg skills continue to work unchanged
+
 ** Changed
 
 ** Fixed
+
+- rss-filter WASM skill panic: missing =#[link(wasm_import_module = "env")]= on Rust extern block caused =log()= host function to resolve to an abort stub instead of a proper WASM import (cricht-as0)
 
 * v0.2 "Polish & Channels" (2026-02-13)
 
