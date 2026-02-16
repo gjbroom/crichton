@@ -253,9 +253,22 @@
 
 ;;; --- Public interface (programmatic) ---
 
+(defun feed-item-to-plist (item &optional feed-name)
+  "Convert a feed-item to the canonical plist representation.
+   Field names match the rss-filter WASM skill's RssItem JSON schema:
+     :id, :title, :description, :link, :published, :feed-name"
+  (list :id (feed-item-guid item)
+        :title (feed-item-title item)
+        :description (feed-item-description item)
+        :link (feed-item-link item)
+        :published (feed-item-pub-date item)
+        :feed-name (or feed-name "")))
+
 (defun rss-fetch (url &key (max-items 50))
   "Fetch a feed and return items as a list of plists.
-   Suitable for programmatic use by other daemon components."
+   Suitable for programmatic use by other daemon components.
+   Item plists use the canonical RSS item schema: :id, :title,
+   :description, :link, :published, :feed-name."
   (multiple-value-bind (items title format) (fetch-feed url)
     (let ((items (subseq items 0 (min max-items (length items)))))
       (list :url url
@@ -263,16 +276,13 @@
             :format format
             :count (length items)
             :items (mapcar (lambda (item)
-                             (list :title (feed-item-title item)
-                                   :link (feed-item-link item)
-                                   :guid (feed-item-guid item)
-                                   :pub-date (feed-item-pub-date item)
-                                   :description (feed-item-description item)))
+                             (feed-item-to-plist item title))
                            items)))))
 
 (defun rss-check (url &key (max-items 50))
   "Check a feed for new items (not previously seen).
-   On first check, all items are 'new'. Returns a plist."
+   On first check, all items are 'new'. Returns a plist.
+   Item plists use the canonical RSS item schema."
   (multiple-value-bind (items title) (fetch-feed url)
     (let* ((limited (subseq items 0 (min max-items (length items))))
            (new-items (filter-new-items url limited)))
@@ -282,10 +292,7 @@
             :new-count (length new-items)
             :total-count (length limited)
             :new-items (mapcar (lambda (item)
-                                 (list :title (feed-item-title item)
-                                       :link (feed-item-link item)
-                                       :guid (feed-item-guid item)
-                                       :pub-date (feed-item-pub-date item)))
+                                 (feed-item-to-plist item title))
                                new-items)))))
 
 ;;; --- Public interface (formatted) ---
