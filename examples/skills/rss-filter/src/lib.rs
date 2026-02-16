@@ -57,6 +57,7 @@ fn panic(_info: &PanicInfo) -> ! {
     core::arch::wasm32::unreachable()
 }
 
+#[link(wasm_import_module = "env")]
 extern "C" {
     fn log(level: i32, ptr: *const u8, len: usize);
 }

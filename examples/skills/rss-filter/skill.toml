@@ -22,5 +22,9 @@ max_cpu_seconds = 5
 [provides]
 functions = ["filter_items"]
 
+[provides.function.filter_items]
+abi = "json"
+description = "Filter RSS items by keywords"
+
 [metadata]
 wasm_file = "rss_filter.wasm"
