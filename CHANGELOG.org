@@ -27,10 +27,17 @@ For development details, see the git commit history and BEADS issue tracker.
 
 ** Added
 
-- Skill parameter passing: =invoke-skill= now accepts =:params= and =:abi= keywords (cricht-u1x Phase 1)
+- Skill parameter passing: =invoke-skill= now accepts =:params= and =:abi= keywords (cricht-u1x)
   - JSON ABI auto-selected when params provided or manifest declares =abi = "json"=
   - Agent =skills= tool =invoke= action passes =params= field through to WASM skills
   - Backwards compatible: zero-arg skills continue to work unchanged
+- Manifest function metadata: =manifest-function-info=, =manifest-function-input-type=, =manifest-function-output-type=, =manifest-function-description= accessors for =[provides.function.*]= sections
+- Skill pipeline executor: chain multiple skill invocations with cross-step references
+  - =execute-pipeline= runs ordered steps (WASM skills and/or built-in functions)
+  - Reference resolution via ={"ref": "step_id.key.subkey"}= objects in params
+  - Built-in pipeline functions: =rss_fetch=, =rss_check=, =weather=
+  - =pipeline-error= condition carries step-id and skill context
+- Skills agent tool =pipeline= action: compose and run multi-step pipelines from the LLM
 
 ** Changed
 

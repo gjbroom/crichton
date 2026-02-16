@@ -966,6 +966,94 @@ Unload a skill from memory.
 ;; => T
 #+end_src
 
+** Skill Pipeline Executor (~skills/pipeline.lisp~)
+
+Chain multiple skill invocations into a linear pipeline where later steps
+can reference earlier results.
+
+*** Core Functions
+
+**** =execute-pipeline (steps)=
+
+Execute an ordered list of steps.  Each step is a hash-table (from JSON) or
+plist with:
+
+| Key           | Type   | Description                                  |
+|---------------+--------+----------------------------------------------|
+| =id=          | string | Unique step identifier (required)            |
+| =kind=        | string | ="wasm"=, ="builtin"=, or ="auto"= (default) |
+| =skill=       | string | Skill name (for WASM steps)                  |
+| =entry_point= | string | WASM export or builtin name                  |
+| =params=      | object | Input parameters (may contain refs)          |
+| =builtin=     | string | Built-in function name (for builtin steps)   |
+
+Returns a hash-table of step-id → result.
+
+#+begin_src lisp
+;; Two-step pipeline: fetch RSS, then filter with WASM skill
+(execute-pipeline
+  (list
+    ;; Step 1: fetch RSS feed (built-in)
+    (alexandria:plist-hash-table
+      '("id" "fetch" "builtin" "rss_fetch"
+        "params" #.(alexandria:plist-hash-table
+                     '("url" "https://example.com/rss") :test 'equal))
+      :test 'equal)
+    ;; Step 2: filter items (WASM) — references step 1 output
+    (alexandria:plist-hash-table
+      '("id" "filter" "skill" "rss-filter"
+        "entry_point" "filter_items"
+        "params" #.(alexandria:plist-hash-table
+                     '("items" #.(alexandria:plist-hash-table
+                                   '("ref" "fetch.items") :test 'equal)
+                       "keywords" #("AI" "LLM")
+                       "match_mode" "any") :test 'equal))
+      :test 'equal)))
+;; => #<hash-table "fetch" => ..., "filter" => ...>
+#+end_src
+
+*** Reference Resolution
+
+References use JSON objects with a ="ref"= key containing a dotted path:
+
+#+begin_src json
+{"ref": "step_id.key.subkey"}
+#+end_src
+
+Path segments navigate into:
+- Hash-tables (string keys)
+- Plists (keyword keys, with underscore-to-hyphen conversion)
+- Vectors/lists (numeric index, e.g. ="items.0.title"=)
+
+*** Built-in Pipeline Functions
+
+Register built-in Lisp functions as pipeline steps:
+
+#+begin_src lisp
+(register-pipeline-builtin "my_func"
+  (lambda (params)
+    (do-something (gethash "input" params))))
+#+end_src
+
+Default builtins (registered via =register-default-pipeline-builtins=):
+
+| Name         | Params                              | Description        |
+|--------------+-------------------------------------+--------------------|
+| =rss_fetch=  | =url= (string), =max_items= (int)  | Fetch RSS feed     |
+| =rss_check=  | =url= (string), =max_items= (int)  | Check for new items|
+| =weather=    | =city= (string)                     | Weather conditions |
+
+*** Error Handling
+
+=pipeline-error= condition carries =step-id= and =step-skill= slots:
+
+#+begin_src lisp
+(handler-case (execute-pipeline steps)
+  (pipeline-error (c)
+    (format t "Failed at step ~A: ~A"
+            (pipeline-error-step-id c) c)))
+#+end_src
+
 ** Agent Tools API (~agent/tools.lisp~)
 
 Register and manage tools available to the LLM agent.
@@ -1179,8 +1267,8 @@ assumed (legacy behaviour).
   ="json"=, =invoke-skill= automatically uses the JSON-through-memory calling
   convention even if =:params= is not supplied (an empty ={​}= is passed).
 - =description= (string): Human-readable description of the function
-- =input_type= (string): Semantic type tag for pipeline wiring (future)
-- =output_type= (string): Semantic type tag for pipeline wiring (future)
+- =input_type= (string): Semantic type tag for pipeline wiring (metadata only, not enforced)
+- =output_type= (string): Semantic type tag for pipeline wiring (metadata only, not enforced)
 
 Example:
 
