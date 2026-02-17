@@ -18,5 +18,6 @@
                              (:file "model")
                              (:file "messages")
                              (:file "theme")
+                             (:file "sixel")
                              (:file "render")
                              (:file "client")))))

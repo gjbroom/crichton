@@ -30,6 +30,20 @@
 
 (tui:defmessage daemon-disconnected-msg ())
 
+;;; --- Streaming chat delta (incremental text) ---
+
+(tui:defmessage daemon-chat-delta-msg
+  ((id    :initarg :id    :accessor msg-delta-id)
+   (text  :initarg :text  :accessor msg-delta-text)))
+
+;;; --- Streaming chat done (final) ---
+
+(tui:defmessage daemon-chat-done-msg
+  ((id      :initarg :id      :accessor msg-done-id)
+   (text    :initarg :text    :accessor msg-done-text)
+   (session :initarg :session :accessor msg-done-session)
+   (error-p :initarg :error-p :initform nil :accessor msg-done-error-p)))
+
 ;;; --- User sends a chat message ---
 
 (tui:defmessage send-chat-msg

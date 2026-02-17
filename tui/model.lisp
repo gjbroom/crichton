@@ -76,4 +76,20 @@
                          :accessor model-notification-history)
    (confirm-quit       :initarg :confirm-quit
                        :initform nil
-                       :accessor model-confirm-quit)))
+                       :accessor model-confirm-quit)
+   (streaming-entry    :initarg :streaming-entry
+                       :initform nil
+                       :accessor model-streaming-entry
+                       :documentation "The chat-entry currently being streamed into, or NIL.")
+   (handled-stream-ids :initarg :handled-stream-ids
+                       :initform nil
+                       :accessor model-handled-stream-ids
+                       :documentation "Request IDs already handled by streaming (to skip duplicate responses).")
+   (sixel-enabled      :initarg :sixel-enabled
+                       :initform nil
+                       :accessor model-sixel-enabled
+                       :documentation "Whether sixel rendering is enabled (:on :off :auto).")
+   (sixel-cache        :initarg :sixel-cache
+                       :initform (make-hash-table :test #'equal)
+                       :accessor model-sixel-cache
+                       :documentation "Cache of path → sixel string.")))

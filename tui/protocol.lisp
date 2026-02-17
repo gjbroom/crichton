@@ -77,13 +77,15 @@
 
 ;;; --- Message construction ---
 
-(defun make-chat-request (text &optional session-id)
+(defun make-chat-request (text &key session-id stream)
   (let ((ht (make-hash-table :test #'equal)))
     (setf (gethash "id" ht) (next-id)
           (gethash "op" ht) "chat"
           (gethash "text" ht) text)
     (when session-id
       (setf (gethash "session_id" ht) session-id))
+    (when stream
+      (setf (gethash "stream" ht) t))
     ht))
 
 (defun make-status-request ()
@@ -103,7 +105,7 @@
 (defun send-chat-sync (text &optional session-id)
   "Send a chat request synchronously. Returns (values response-text session-id).
 For one-shot CLI mode only; TUI mode uses async I/O."
-  (let ((request (make-chat-request text session-id)))
+  (let ((request (make-chat-request text :session-id session-id)))
     (write-message *client-stream* request)
     (let ((response (read-message *client-stream*)))
       (unless response

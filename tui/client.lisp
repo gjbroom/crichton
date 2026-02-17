@@ -23,6 +23,19 @@ messages into the tuition PROGRAM via tui:send."
                                                 :kind (gethash "kind" msg)
                                                 :text (gethash "text" msg)
                                                 :source (gethash "source" msg))))
+                      ((equal op "chat_delta")
+                       (tui:send program
+                                 (make-instance 'daemon-chat-delta-msg
+                                                :id (gethash "id" msg)
+                                                :text (gethash "text" msg))))
+                      ((equal op "chat_done")
+                       (tui:send program
+                                 (make-instance 'daemon-chat-done-msg
+                                                :id (gethash "id" msg)
+                                                :text (gethash "text" msg)
+                                                :session (gethash "session_id" msg)
+                                                :error-p (let ((err (gethash "error" msg)))
+                                                           (and err t)))))
                       (t
                        (let ((result (gethash "result" msg)))
                          (when result
@@ -41,7 +54,7 @@ messages into the tuition PROGRAM via tui:send."
 (defun send-chat-cmd (stream text session-id)
   "Return a command that writes a chat request to STREAM."
   (lambda ()
-    (let ((request (make-chat-request text session-id)))
+    (let ((request (make-chat-request text :session-id session-id :stream t)))
       (write-message stream request))
     nil))
 
@@ -120,6 +133,35 @@ messages into the tuition PROGRAM via tui:send."
            (setf (model-status-text model) "No notifications yet"))
        (values model nil t))
 
+      ((or (string-equal cmd-text "sixel on")
+           (string-equal cmd-text "sixel off"))
+       (let ((on-p (string-equal cmd-text "sixel on")))
+         (setf (model-sixel-enabled model) (if on-p :on :off))
+         (setf (model-status-text model)
+               (if on-p "Sixel rendering enabled" "Sixel rendering disabled")))
+       (values model nil t))
+
+      ((and (>= (length cmd-text) 4)
+            (string-equal (subseq cmd-text 0 4) "img "))
+       (let* ((path (string-trim '(#\Space #\Tab) (subseq cmd-text 4))))
+         (cond
+           ((not (probe-file path))
+            (setf (model-status-text model)
+                  (format nil "File not found: ~A" path)))
+           ((not (eq (model-sixel-enabled model) :on))
+            (setf (model-status-text model)
+                  "Sixel not enabled (use :sixel on)"))
+           (t
+            (setf (model-messages model)
+                  (nconc (model-messages model)
+                         (list (make-instance 'chat-entry
+                                              :role :notification
+                                              :text (format nil "[Image: ~A]" path)
+                                              :time (get-universal-time)))))
+            (render-chat-history model)
+            (tui.viewport:viewport-goto-bottom (model-viewport model)))))
+       (values model nil t))
+
       (t
        (setf (model-status-text model)
              (format nil "Unknown command: :~A" cmd-text))
@@ -152,6 +194,13 @@ messages into the tuition PROGRAM via tui:send."
                                               :role :user
                                               :text text
                                               :time (get-universal-time)))))
+            (let ((placeholder (make-instance 'chat-entry
+                                               :role :assistant
+                                               :text ""
+                                               :time (get-universal-time))))
+              (setf (model-messages model)
+                    (nconc (model-messages model) (list placeholder)))
+              (setf (model-streaming-entry model) placeholder))
             (tui.textinput:textinput-reset (model-input model))
             (setf (model-status model) :waiting
                   (model-status-text model) "Thinking...")
@@ -227,16 +276,57 @@ messages into the tuition PROGRAM via tui:send."
          (setf (model-input model) new-input)
          (values model cmd))))))
 
+;;; --- Update: daemon-chat-delta-msg ---
+
+(defmethod tui:update-message ((model tui-model) (msg daemon-chat-delta-msg))
+  (let ((entry (model-streaming-entry model)))
+    (when entry
+      (setf (entry-text entry)
+            (concatenate 'string (entry-text entry) (msg-delta-text msg)))
+      (setf (entry-rendered entry) nil)
+      (setf (model-status-text model) "Streaming...")
+      (render-chat-history model)
+      (tui.viewport:viewport-goto-bottom (model-viewport model))))
+  (values model nil))
+
+;;; --- Update: daemon-chat-done-msg ---
+
+(defmethod tui:update-message ((model tui-model) (msg daemon-chat-done-msg))
+  (let ((entry (model-streaming-entry model)))
+    (when entry
+      (when (msg-done-text msg)
+        (setf (entry-text entry) (msg-done-text msg)))
+      (when (msg-done-error-p msg)
+        (setf (entry-role entry) :error))
+      (setf (entry-rendered entry) nil)))
+  (when (msg-done-session msg)
+    (setf (model-session-id model) (msg-done-session msg)))
+  (when (msg-done-id msg)
+    (push (msg-done-id msg) (model-handled-stream-ids model)))
+  (setf (model-streaming-entry model) nil
+        (model-status model) :idle
+        (model-spinner model) nil
+        (model-status-text model) "Ready")
+  (render-chat-history model)
+  (tui.viewport:viewport-goto-bottom (model-viewport model))
+  (values model nil))
+
 ;;; --- Update: daemon-response-msg ---
 
 (defmethod tui:update-message ((model tui-model) (msg daemon-response-msg))
+  ;; Skip if this response was already handled by streaming
+  (let ((id (msg-response-id msg)))
+    (when (member id (model-handled-stream-ids model))
+      (setf (model-handled-stream-ids model)
+            (remove id (model-handled-stream-ids model)))
+      (return-from tui:update-message (values model nil))))
   (let ((role (if (msg-response-error-p msg) :error :assistant)))
     (setf (model-messages model)
           (nconc (model-messages model)
                  (list (make-instance 'chat-entry
-                                      :role role
-                                      :text (msg-response-text msg)
-                                      :time (get-universal-time)))))
+                                       :role role
+                                       :text (msg-response-text msg)
+                                       :time (get-universal-time)))))
     (when (msg-response-session msg)
       (setf (model-session-id model) (msg-response-session msg)))
     (setf (model-status model) :idle
