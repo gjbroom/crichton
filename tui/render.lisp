@@ -110,11 +110,40 @@
 (defun render-input-area (model)
   (tui.textinput:textinput-view (model-input model)))
 
+;;; --- Notification toast ---
+
+(defun render-notification-toast (model)
+  "Render active notifications as a toast overlay."
+  (let ((notifs (model-notifications model)))
+    (when notifs
+      (let* ((width (min 60 (- (model-width model) 4)))
+             (lines (mapcar (lambda (n)
+                              (let ((prefix (format nil "[~A] "
+                                                    (string-upcase (or (notif-kind n) "info")))))
+                                (tui:wrap-text (format nil "~A~A" prefix (notif-text n))
+                                               (max 1 (- width 2)))))
+                            (reverse notifs)))
+             (body (format nil "~{~A~^~%~}" lines)))
+        (style *style-notification*
+               (tui:place width
+                          (+ 2 (count #\Newline body))
+                          tui:+center+
+                          tui:+top+
+                          body))))))
+
 ;;; --- Top-level view ---
 
 (defmethod tui:view ((model tui-model))
-  (tui:join-vertical tui:+left+
-                     (render-title-bar model)
-                     (tui.viewport:viewport-view (model-viewport model))
-                     (render-status-bar model)
-                     (render-input-area model)))
+  (if (and (model-show-notifications model)
+           (model-notifications model))
+      (tui:join-vertical tui:+left+
+                         (render-title-bar model)
+                         (render-notification-toast model)
+                         (tui.viewport:viewport-view (model-viewport model))
+                         (render-status-bar model)
+                         (render-input-area model))
+      (tui:join-vertical tui:+left+
+                         (render-title-bar model)
+                         (tui.viewport:viewport-view (model-viewport model))
+                         (render-status-bar model)
+                         (render-input-area model))))

@@ -15,14 +15,23 @@ messages into the tuition PROGRAM via tui:send."
      (handler-case
          (loop for msg = (read-message stream)
                while msg
-               do (let ((result (gethash "result" msg)))
-                    (when result
-                      (tui:send program
-                                (make-instance 'daemon-response-msg
-                                               :id (gethash "id" msg)
-                                               :text (gethash "text" result)
-                                               :session (gethash "session_id" result)
-                                               :error-p (not (gethash "ok" msg)))))))
+               do (let ((op (gethash "op" msg)))
+                    (cond
+                      ((equal op "notify")
+                       (tui:send program
+                                 (make-instance 'daemon-notification-msg
+                                                :kind (gethash "kind" msg)
+                                                :text (gethash "text" msg)
+                                                :source (gethash "source" msg))))
+                      (t
+                       (let ((result (gethash "result" msg)))
+                         (when result
+                           (tui:send program
+                                     (make-instance 'daemon-response-msg
+                                                    :id (gethash "id" msg)
+                                                    :text (gethash "text" result)
+                                                    :session (gethash "session_id" result)
+                                                    :error-p (not (gethash "ok" msg))))))))))
        (error ()
          (tui:send program (make-instance 'daemon-disconnected-msg)))))
    :name "daemon-reader"))
@@ -52,6 +61,7 @@ messages into the tuition PROGRAM via tui:send."
     (let ((program tui:*current-program*))
       (lambda ()
         (start-daemon-reader stream program)
+        (write-message stream (make-subscribe-request))
         nil))))
 
 ;;; --- Local command handling ---
@@ -87,6 +97,27 @@ messages into the tuition PROGRAM via tui:send."
        (when (model-daemon-stream model)
          (write-message (model-daemon-stream model) (make-status-request)))
        (setf (model-status-text model) "Status requested")
+       (values model nil t))
+
+      ((string-equal cmd-text "notifications")
+       (if (model-notification-history model)
+           (let ((history-text
+                   (with-output-to-string (s)
+                     (dolist (n (model-notification-history model))
+                       (format s "~A [~A/~A] ~A~%"
+                               (format-time (notif-time n))
+                               (or (notif-source n) "?")
+                               (or (notif-kind n) "?")
+                               (notif-text n))))))
+             (setf (model-messages model)
+                   (nconc (model-messages model)
+                          (list (make-instance 'chat-entry
+                                               :role :notification
+                                               :text history-text
+                                               :time (get-universal-time)))))
+             (render-chat-history model)
+             (tui.viewport:viewport-goto-bottom (model-viewport model)))
+           (setf (model-status-text model) "No notifications yet"))
        (values model nil t))
 
       (t
@@ -214,6 +245,33 @@ messages into the tuition PROGRAM via tui:send."
     (render-chat-history model)
     (tui.viewport:viewport-goto-bottom (model-viewport model))
     (values model nil)))
+
+;;; --- Update: daemon-notification-msg ---
+
+(defmethod tui:update-message ((model tui-model) (msg daemon-notification-msg))
+  (let ((entry (make-instance 'notification-entry
+                               :kind (msg-notif-kind msg)
+                               :text (msg-notif-text msg)
+                               :source (msg-notif-source msg)
+                               :time (get-universal-time))))
+    (push entry (model-notification-history model))
+    (when (> (length (model-notification-history model)) 100)
+      (setf (model-notification-history model)
+            (subseq (model-notification-history model) 0 100)))
+    (push entry (model-notifications model))
+    (setf (model-show-notifications model) t)
+    (values model (tui:tick 10 (lambda ()
+                                 (make-instance 'dismiss-notification-msg
+                                                :entry entry))))))
+
+;;; --- Update: dismiss-notification-msg ---
+
+(defmethod tui:update-message ((model tui-model) (msg dismiss-notification-msg))
+  (setf (model-notifications model)
+        (remove (msg-dismiss-entry msg) (model-notifications model)))
+  (when (null (model-notifications model))
+    (setf (model-show-notifications model) nil))
+  (values model nil))
 
 ;;; --- Update: daemon-disconnected-msg ---
 

@@ -92,6 +92,12 @@
           (gethash "op" ht) "status")
     ht))
 
+(defun make-subscribe-request ()
+  (let ((ht (make-hash-table :test #'equal)))
+    (setf (gethash "id" ht) (next-id)
+          (gethash "op" ht) "subscribe")
+    ht))
+
 ;;; --- Synchronous helper (one-shot CLI mode) ---
 
 (defun send-chat-sync (text &optional session-id)

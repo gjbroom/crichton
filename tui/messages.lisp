@@ -21,6 +21,11 @@
    (text      :initarg :text      :accessor msg-notif-text)
    (source    :initarg :source    :accessor msg-notif-source)))
 
+;;; --- Dismiss notification toast ---
+
+(tui:defmessage dismiss-notification-msg
+  ((entry :initarg :entry :accessor msg-dismiss-entry)))
+
 ;;; --- Daemon connection lost ---
 
 (tui:defmessage daemon-disconnected-msg ())

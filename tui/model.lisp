@@ -20,6 +20,14 @@
              :initform nil
              :accessor entry-rendered)))
 
+;;; --- Notification history entry ---
+
+(defclass notification-entry ()
+  ((kind   :initarg :kind   :accessor notif-kind)
+   (text   :initarg :text   :accessor notif-text)
+   (source :initarg :source :accessor notif-source)
+   (time   :initarg :time   :accessor notif-time)))
+
 ;;; --- Top-level TUI model ---
 
 (defclass tui-model ()
@@ -63,6 +71,9 @@
    (notifications      :initarg :notifications
                        :initform nil
                        :accessor model-notifications)
+   (notification-history :initarg :notification-history
+                         :initform nil
+                         :accessor model-notification-history)
    (confirm-quit       :initarg :confirm-quit
                        :initform nil
                        :accessor model-confirm-quit)))
