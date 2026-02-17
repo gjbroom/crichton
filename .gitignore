@@ -2,8 +2,9 @@
 *.fasl
 *.lx64fsl
 
-# save-lisp-and-die binary
+# save-lisp-and-die binaries
 crichton-client
+crichton-tui
 
 # Quicklisp local state
 quicklisp/

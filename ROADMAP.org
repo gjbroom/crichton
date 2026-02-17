@@ -172,9 +172,10 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
     - [X] One-shot mode and entry point (cricht-qhb)
     - [ ] End-to-end integration test (cricht-6ag)
 
-*** TODO [#B] TUI Client — Phase 2: Push Notifications
-    - [ ] Daemon subscribe RPC op and notification registry (cricht-531)
-    - [ ] Notification toast overlay and queue (cricht-72b)
+*** DONE [#B] TUI Client — Phase 2: Push Notifications
+    CLOSED: [2026-02-17 Tue]
+    - [X] Daemon subscribe RPC op and notification registry (cricht-531)
+    - [X] Notification toast overlay and queue (cricht-72b)
 
 *** TODO [#B] TUI Client — Phase 3: Streaming & Sixel
     - [ ] Anthropic streaming and chat_delta RPC (cricht-p19)
