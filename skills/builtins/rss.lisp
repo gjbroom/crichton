@@ -383,7 +383,11 @@
                           (when (plusp (getf result :new-count))
                             (log:info "RSS ~A: ~D new item~:P" name (getf result :new-count))
                             (dolist (item (getf result :new-items))
-                              (log:info "  ~A: ~A" name (getf item :title)))))
+                              (log:info "  ~A: ~A" name (getf item :title)))
+                            (crichton/daemon:notification-post
+                             "rss"
+                             (format nil "~D new item~:P in ~A" (getf result :new-count) name)
+                             name)))
                       (error (c)
                         (log:warn "RSS monitor ~A failed: ~A" name c))))
                   :replace replace)

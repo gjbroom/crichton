@@ -60,7 +60,10 @@
            #:*shutdown-cv*
            #:start-rpc-server
            #:stop-rpc-server
-           #:daemon-socket-path))
+           #:daemon-socket-path
+           #:add-subscriber
+           #:remove-subscriber
+           #:notification-post))
 
 (defpackage #:crichton/cli
   (:use #:cl)

@@ -75,6 +75,7 @@ signing. Informed by a security audit of OpenClaw."
                               (:file "registry")))
                 (:module "daemon"
                 :components ((:file "lifecycle")
+                             (:file "notifications")
                              (:file "swank")
                              (:file "runner-client")))
                (:module "agent"

@@ -9,6 +9,8 @@
 (defvar *rpc-server-socket* nil "The listening Unix domain socket.")
 (defvar *rpc-server-thread* nil "The accept loop thread.")
 (defvar *rpc-running* nil "T while the RPC accept loop is active.")
+(defvar *current-rpc-stream* nil "Stream of the currently-handled RPC connection.")
+(defvar *current-rpc-stream-lock* nil "Write lock for the currently-handled RPC connection.")
 (defvar *chat-sessions* (make-hash-table :test #'equal)
   "In-memory message lists keyed by session-id.")
 (defvar *chat-session-locks* (make-hash-table :test #'equal)
@@ -101,6 +103,11 @@
           ("status"
            (crichton/rpc:make-ok-response id (daemon-status)))
 
+          ("subscribe"
+           (when (and *current-rpc-stream* *current-rpc-stream-lock*)
+             (add-subscriber *current-rpc-stream* *current-rpc-stream-lock*))
+           (crichton/rpc:make-ok-response id t))
+
           ("stop"
            (bt:make-thread (lambda () (stop-daemon))
                            :name "rpc-stop-daemon")
@@ -119,26 +126,31 @@
 
 (defun handle-rpc-connection (socket)
   "Service a single RPC client connection until EOF or error."
-  (let ((stream (sb-bsd-sockets:socket-make-stream
-                 socket :input t :output t
-                 :element-type 'character
-                 :buffering :line
-                 :external-format :utf-8)))
+  (let* ((stream (sb-bsd-sockets:socket-make-stream
+                  socket :input t :output t
+                  :element-type 'character
+                  :buffering :line
+                  :external-format :utf-8))
+         (stream-lock (bt:make-lock "rpc-stream-write")))
     (unwind-protect
-         (loop
-           (let ((msg (handler-case
-                          (crichton/rpc:read-message stream)
-                        (error (c)
-                          (log:error "RPC protocol error: ~A" c)
-                          (return)))))
-             (when (null msg)
-               (return))
-             (let ((response (rpc-dispatch msg)))
-               (handler-case
-                   (crichton/rpc:write-message stream response)
-                 (error (c)
-                   (log:error "RPC write error: ~A" c)
-                   (return))))))
+         (let ((*current-rpc-stream* stream)
+               (*current-rpc-stream-lock* stream-lock))
+           (loop
+             (let ((msg (handler-case
+                            (crichton/rpc:read-message stream)
+                          (error (c)
+                            (log:error "RPC protocol error: ~A" c)
+                            (return)))))
+               (when (null msg)
+                 (return))
+               (let ((response (rpc-dispatch msg)))
+                 (handler-case
+                     (bt:with-lock-held (stream-lock)
+                       (crichton/rpc:write-message stream response))
+                   (error (c)
+                     (log:error "RPC write error: ~A" c)
+                     (return)))))))
+      (remove-subscriber stream)
       (close stream)
       (sb-bsd-sockets:socket-close socket))))
 

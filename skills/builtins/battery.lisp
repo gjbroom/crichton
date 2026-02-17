@@ -272,7 +272,8 @@
       (let ((check (battery-check-thresholds)))
         (when (getf check :alert-needed)
           (let ((msg (battery-alert-message check)))
-            (log:warn "~A" msg))))
+            (log:warn "~A" msg)
+            (crichton/daemon:notification-post "battery" msg "battery-monitor"))))
     (error (c)
       (log:error "Battery monitor callback failed: ~A" c))))
 
