@@ -152,9 +152,32 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
     - [X] Integration with scheduler tool for periodic skill execution
     - [X] Cache management for loaded WASM bytecode
 
-** TODO v0.3 "Skills & Integrations" [0/7]
+** TODO v0.3 "TUI Client & Skills" [0/10]
 
-   Expanding skill library and third-party integrations.
+   TUI client for interactive use, plus expanding skill library.
+
+*** TODO [#A] TUI Client — Phase 1: Core (MVP)
+    See [[file:TUI-CLIENT-DESIGN.org][TUI-CLIENT-DESIGN.org]] for full design.
+    - [ ] Project scaffold and cl-tuition integration (cricht-5bg)
+    - [ ] Wire protocol: async NDJSON I/O (cricht-gu8)
+    - [ ] Model and message types (cricht-0ix)
+    - [ ] Daemon I/O reader thread (cricht-7po)
+    - [ ] Colour theme and style definitions (cricht-317)
+    - [ ] View function and adaptive layout (cricht-k63)
+    - [ ] Markdown-to-ANSI rendering (cricht-o5s)
+    - [ ] Input handling and chat send (cricht-knm)
+    - [ ] Response handling and spinner (cricht-y2d)
+    - [ ] Local commands: :quit, :clear, :new, :session, :status (cricht-hew)
+    - [ ] One-shot mode and entry point (cricht-qhb)
+    - [ ] End-to-end integration test (cricht-6ag)
+
+*** TODO [#B] TUI Client — Phase 2: Push Notifications
+    - [ ] Daemon subscribe RPC op and notification registry (cricht-531)
+    - [ ] Notification toast overlay and queue (cricht-72b)
+
+*** TODO [#B] TUI Client — Phase 3: Streaming & Sixel
+    - [ ] Anthropic streaming and chat_delta RPC (cricht-p19)
+    - [ ] Sixel graphics support (cricht-pmg)
 
 *** TODO [#B] RSS Filter Skill (WASM)
     - [X] Rust WASM crate scaffolding (cricht-53c)
