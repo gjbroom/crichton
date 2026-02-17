@@ -48,6 +48,21 @@ For development details, see the git commit history and BEADS issue tracker.
   - Built-in pipeline functions: =rss_fetch=, =rss_check=, =weather=
   - =pipeline-error= condition carries step-id and skill context
 - Skills agent tool =pipeline= action: compose and run multi-step pipelines from the LLM
+- *TUI streaming responses* (Phase 3): LLM responses now stream to the TUI in real-time as the model generates them (cricht-p19)
+  - Anthropic =stream-message= implementation: SSE event parsing with =stream: true= API flag
+  - Streaming agent loop: =run-agent/stream= streams text deltas via callback on every LLM call
+  - =chat_delta= / =chat_done= RPC push messages: daemon pushes incremental text to connected TUI clients
+  - Streaming request opt-in: TUI sends ={stream: true}= in chat requests; non-streaming clients unaffected
+  - Real-time text rendering: assistant responses appear character-by-character with live viewport updates
+  - Status bar shows "Streaming..." during active response delivery
+  - Duplicate response suppression: streaming IDs tracked to prevent double-display from legacy response path
+  - Graceful fallback: if streaming unsupported, falls back to non-streaming =send-message= automatically
+- *Sixel graphics support* (Phase 3): infrastructure for terminal image rendering (cricht-pmg)
+  - Sixel terminal detection heuristic (foot, xterm, mlterm, wezterm, yaft)
+  - =img2sixel= integration with result caching
+  - Markdown image reference extraction (=![alt](path)=)
+  - =:sixel on/off= toggle command
+  - =:img path= command to display images in chat (placeholder mode; full sixel rendering in Phase 4)
 
 ** Changed
 
