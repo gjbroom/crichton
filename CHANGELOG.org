@@ -68,6 +68,9 @@ For development details, see the git commit history and BEADS issue tracker.
 
 ** Fixed
 
+- *TUI streaming with tool use*: Multi-tool queries (e.g. "show a system dashboard") failed with Anthropic 400 errors because streaming SSE parser placed the text content block after tool_use blocks. Anthropic requires text before tool_use in assistant messages. Fixed content block ordering to match SSE stream order.
+- *TUI stuck on "Streaming..."*: When the daemon encountered errors during streaming chat (rate limits, API errors, etc.), the TUI was never notified and remained stuck in "Streaming..." state indefinitely. Now pushes =chat_done= with error flag on all error paths.
+- *Anthropic error messages lost*: Streaming API errors returned an opaque stream object instead of the actual error message. Now properly extracts the HTTP response body from dexador's error condition.
 - rss-filter JSON parsing failures: plist params (from Lisp code and pipeline builtins) were serialized as JSON arrays instead of objects, causing WASM skills to fail with "failed to parse input JSON". Added =normalize-for-json= to recursively convert plists to hash-tables before serialization.
 - rss-filter WASM skill panic: missing =#[link(wasm_import_module = "env")]= on Rust extern block caused =log()= host function to resolve to an abort stub instead of a proper WASM import (cricht-as0)
 
