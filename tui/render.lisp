@@ -26,11 +26,15 @@
                             (subseq session 0 (min 8 (length session)))
                             time-str)
                     time-str))
-         (padding (max 0 (- width (length title) (length right))))
+         (visible-right (tui:visible-length right))
+         (padding (max 0 (- width (length title) visible-right)))
          (line (format nil "~A~A~A" title
                        (make-string padding :initial-element #\Space)
                        right)))
-    (style *style-title-bar* (tui:truncate-text line width))))
+    (style *style-title-bar*
+           (if (> (tui:visible-length line) width)
+               (tui:truncate-text line width)
+               line))))
 
 ;;; --- Chat entry rendering ---
 
