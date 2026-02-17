@@ -55,16 +55,16 @@ TOOLS defaults to all registered tools.
 MESSAGES is the conversation history (extended destructively via NCONC).
 MAX-ITERATIONS prevents runaway tool loops."
   (let* ((provider (or provider (crichton/llm:ensure-llm-provider)))
-         (system   (or system *default-system-prompt*))
-         (tools    (or tools (all-tool-defs)))
-         (msgs     (if messages
-                       (progn
-                         (when user-input
-                           (nconc msgs (list (list :role :user :content user-input))))
-                         messages)
-                       (when user-input
-                         (list (list :role :user :content user-input))))))
-    (log:info "Agent start: ~A" (truncate-for-log user-input))
+        (system   (or system *default-system-prompt*))
+        (tools    (or tools (all-tool-defs)))
+        (msgs     (if messages
+                      (progn
+                        (when user-input
+                          (nconc messages (list (list :role :user :content user-input))))
+                        messages)
+                      (when user-input
+                        (list (list :role :user :content user-input))))))
+   (log:info "Agent start: ~A" (truncate-for-log user-input))
     (dotimes (i max-iterations
               (progn
                 (log:warn "Agent hit max iterations (~D)" max-iterations)
@@ -99,7 +99,7 @@ Returns (values response-text all-messages last-response), same as run-agent."
          (msgs     (if messages
                        (progn
                          (when user-input
-                           (nconc msgs (list (list :role :user :content user-input))))
+                           (nconc messages (list (list :role :user :content user-input))))
                          messages)
                        (when user-input
                          (list (list :role :user :content user-input))))))
