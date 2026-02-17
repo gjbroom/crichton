@@ -330,6 +330,19 @@
                 :want-stream t
                 :force-binary t
                 :read-timeout 120)
+            (dex:http-request-failed (c)
+              (let* ((body (dex:response-body c))
+                     (body-str (cond
+                                 ((stringp body) body)
+                                 ((streamp body)
+                                  (let ((octets (flexi-streams:with-output-to-sequence (out)
+                                                  (loop for byte = (read-byte body nil nil)
+                                                        while byte do (write-byte byte out)))))
+                                    (ignore-errors (close body))
+                                    (flexi-streams:octets-to-string octets :external-format :utf-8)))
+                                 (t (format nil "~A" body)))))
+                (classify-anthropic-error
+                 (dex:response-status c) body-str provider)))
             (error (c)
               (error 'llm-error :provider provider
                                 :message (format nil "HTTP request failed: ~A" c))))
@@ -426,9 +439,12 @@
                                          (block (gethash idx tool-blocks)))
                                     (setf (getf block :input) input)
                                     (push block content-blocks)))
-                                 ;; Text block
+                                 ;; Text block: push now to maintain correct ordering
                                  ((string= current-block-type "text")
-                                  nil))))
+                                  (let ((text-so-far (get-output-stream-string text-accum)))
+                                    (when (plusp (length text-so-far))
+                                      (push (list :type :text :text text-so-far)
+                                            content-blocks)))))))
 
                             ;; message_delta: stop reason + output tokens
                             ((string= event-type "message_delta")
