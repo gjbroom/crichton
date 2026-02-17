@@ -17,13 +17,21 @@
 - *Git commits*: Commit changes to git as you go. Every meaningful change gets a commit. The user expects this and will call you out for forgetting. Do NOT add "Co-Authored-By" lines to commit messages.
 - *Binary rebuild*: Rebuild the client binary via =save-lisp-and-die= at suitable stopping points — after finishing a feature implementation or fixing a bug. The daemon starts fresh via systemd (no binary needed).
   - *Client binary* (symlinked from =~/bin/crichton-client=):
-    #+begin_src bash
-    sbcl --noinform --non-interactive \
-      --eval '(require :asdf)' \
-      --eval '(push #p"/home/gjbroom/devel/crichton/" asdf:*central-registry*)' \
-      --eval '(asdf:load-system :crichton-client)' \
-      --eval "(sb-ext:save-lisp-and-die #p\"/home/gjbroom/devel/crichton/crichton-client\" :toplevel #'crichton-client:main :executable t :compression t)"
-    #+end_src
+   #+begin_src bash
+   sbcl --noinform --non-interactive \
+     --eval '(require :asdf)' \
+     --eval '(push #p"/home/gjbroom/devel/crichton/" asdf:*central-registry*)' \
+     --eval '(asdf:load-system :crichton-client)' \
+     --eval "(sb-ext:save-lisp-and-die #p\"/home/gjbroom/devel/crichton/crichton-client\" :toplevel #'crichton-client:main :executable t :compression t)"
+   #+end_src
+  - *TUI binary* (symlinked from =~/bin/crichton-tui=):
+   #+begin_src bash
+   sbcl --noinform --non-interactive \
+     --eval '(require :asdf)' \
+     --eval '(push #p"/home/gjbroom/devel/crichton/" asdf:*central-registry*)' \
+     --eval '(asdf:load-system :crichton-tui)' \
+     --eval "(sb-ext:save-lisp-and-die #p\"/home/gjbroom/devel/crichton/crichton-tui\" :toplevel #'crichton-tui:main :executable t :compression t)"
+   #+end_src
 
 * Parallel Development with Git Worktrees
 

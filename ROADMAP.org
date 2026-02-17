@@ -156,19 +156,20 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
 
    TUI client for interactive use, plus expanding skill library.
 
-*** TODO [#A] TUI Client — Phase 1: Core (MVP)
+*** DONE [#A] TUI Client — Phase 1: Core (MVP)
+    CLOSED: [2026-02-17 Tue]
     See [[file:TUI-CLIENT-DESIGN.org][TUI-CLIENT-DESIGN.org]] for full design.
-    - [ ] Project scaffold and cl-tuition integration (cricht-5bg)
-    - [ ] Wire protocol: async NDJSON I/O (cricht-gu8)
-    - [ ] Model and message types (cricht-0ix)
-    - [ ] Daemon I/O reader thread (cricht-7po)
-    - [ ] Colour theme and style definitions (cricht-317)
-    - [ ] View function and adaptive layout (cricht-k63)
-    - [ ] Markdown-to-ANSI rendering (cricht-o5s)
-    - [ ] Input handling and chat send (cricht-knm)
-    - [ ] Response handling and spinner (cricht-y2d)
-    - [ ] Local commands: :quit, :clear, :new, :session, :status (cricht-hew)
-    - [ ] One-shot mode and entry point (cricht-qhb)
+    - [X] Project scaffold and cl-tuition integration (cricht-5bg)
+    - [X] Wire protocol: async NDJSON I/O (cricht-gu8)
+    - [X] Model and message types (cricht-0ix)
+    - [X] Daemon I/O reader thread (cricht-7po)
+    - [X] Colour theme and style definitions (cricht-317)
+    - [X] View function and adaptive layout (cricht-k63)
+    - [X] Markdown-to-ANSI rendering (cricht-o5s)
+    - [X] Input handling and chat send (cricht-knm)
+    - [X] Response handling and spinner (cricht-y2d)
+    - [X] Local commands: :quit, :clear, :new, :session, :status (cricht-hew)
+    - [X] One-shot mode and entry point (cricht-qhb)
     - [ ] End-to-end integration test (cricht-6ag)
 
 *** TODO [#B] TUI Client — Phase 2: Push Notifications

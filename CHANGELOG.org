@@ -27,6 +27,7 @@ For development details, see the git commit history and BEADS issue tracker.
 
 ** Added
 
+- *TUI client* (Phase 1 MVP): new =crichton-tui= binary for interactive terminal use with full ANSI colour, adaptive layout, scrollable chat history with viewport, markdown rendering of LLM responses, input editing with cursor support, spinner during thinking, and local commands (=:quit=, =:clear=, =:new=, =:session=, =:status=). Uses cl-tuition (TEA/Elm architecture), no ncurses dependency. One-shot CLI mode also supported. (cricht-5bg, cricht-gu8, cricht-0ix, cricht-7po, cricht-317, cricht-k63, cricht-o5s, cricht-knm, cricht-y2d, cricht-hew, cricht-qhb)
 - Skill parameter passing: =invoke-skill= now accepts =:params= and =:abi= keywords (cricht-u1x)
   - JSON ABI auto-selected when params provided or manifest declares =abi = "json"=
   - Agent =skills= tool =invoke= action passes =params= field through to WASM skills
