@@ -27,10 +27,6 @@ When reporting tool results, summarize the key information clearly."
   (let ((s (or text "")))
     (subseq s 0 (min limit (length s)))))
 
-(defun nconc-msg (msgs role content)
-  "Destructively append a message with ROLE and CONTENT to MSGS."
-  (nconc msgs (list (list :role role :content content))))
-
 (defun execute-tool-calls (content)
   "Dispatch all tool-use blocks in CONTENT, return tool-result blocks."
   (let ((tool-uses (crichton/llm:blocks-tool-uses content)))
@@ -61,9 +57,13 @@ MAX-ITERATIONS prevents runaway tool loops."
   (let* ((provider (or provider (crichton/llm:ensure-llm-provider)))
          (system   (or system *default-system-prompt*))
          (tools    (or tools (all-tool-defs)))
-         (msgs     (or messages (list))))
-    (when user-input
-      (nconc-msg msgs :user user-input))
+         (msgs     (if messages
+                       (progn
+                         (when user-input
+                           (nconc msgs (list (list :role :user :content user-input))))
+                         messages)
+                       (when user-input
+                         (list (list :role :user :content user-input))))))
     (log:info "Agent start: ~A" (truncate-for-log user-input))
     (dotimes (i max-iterations
               (progn
@@ -78,14 +78,13 @@ MAX-ITERATIONS prevents runaway tool loops."
                            :temperature temperature :tools tools))
              (content     (getf response :content))
              (stop-reason (getf response :stop-reason)))
-        (nconc-msg msgs :assistant content)
+        (setf msgs (nconc msgs (list (list :role :assistant :content content))))
         (log:info "Stop reason: ~A" stop-reason)
         (unless (eq stop-reason :tool-use)
           (let ((text (crichton/llm:response-text response)))
             (log:info "Agent done: ~A" (truncate-for-log text))
             (return (values text msgs response))))
-        (let ((tool-results (execute-tool-calls content)))
-          (nconc-msg msgs :user tool-results))))))
+        (setf msgs (nconc msgs (list (list :role :user :content (execute-tool-calls content)))))))))
 
 (defun run-agent/stream (user-input on-delta &key provider system tools messages
                                                       (max-iterations *default-max-iterations*)
@@ -97,9 +96,13 @@ Returns (values response-text all-messages last-response), same as run-agent."
   (let* ((provider (or provider (crichton/llm:ensure-llm-provider)))
          (system   (or system *default-system-prompt*))
          (tools    (or tools (all-tool-defs)))
-         (msgs     (or messages (list))))
-    (when user-input
-      (nconc-msg msgs :user user-input))
+         (msgs     (if messages
+                       (progn
+                         (when user-input
+                           (nconc msgs (list (list :role :user :content user-input))))
+                         messages)
+                       (when user-input
+                         (list (list :role :user :content user-input))))))
     (log:info "Agent/stream start: ~A" (truncate-for-log user-input))
     (dotimes (i max-iterations
               (progn
@@ -124,14 +127,13 @@ Returns (values response-text all-messages last-response), same as run-agent."
                             :temperature temperature :tools tools))))
              (content     (getf response :content))
              (stop-reason (getf response :stop-reason)))
-        (nconc-msg msgs :assistant content)
+        (setf msgs (nconc msgs (list (list :role :assistant :content content))))
         (log:info "Stop reason: ~A" stop-reason)
         (unless (eq stop-reason :tool-use)
           (let ((text (crichton/llm:response-text response)))
             (log:info "Agent/stream done: ~A" (truncate-for-log text))
             (return (values text msgs response))))
-        (let ((tool-results (execute-tool-calls content)))
-          (nconc-msg msgs :user tool-results))))))
+        (setf msgs (nconc msgs (list (list :role :user :content (execute-tool-calls content)))))))))
 
 ;;; --- Convenience wrappers ---
 
