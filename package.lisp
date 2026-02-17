@@ -298,6 +298,7 @@
 (defpackage #:crichton/agent
   (:use #:cl)
   (:export #:run-agent
+           #:run-agent/stream
            #:ask
            #:chat-session
            #:register-all-tools

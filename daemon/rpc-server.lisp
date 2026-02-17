@@ -31,24 +31,48 @@
         (setf (gethash session-id *chat-session-locks*)
               (bt:make-lock (format nil "chat-session-~A" session-id))))))
 
+;;; --- Push helper ---
+
+(defun rpc-push (stream lock msg)
+  "Push a message to a specific client connection."
+  (handler-case
+      (bt:with-lock-held (lock)
+        (crichton/rpc:write-message stream msg))
+    (error (c)
+      (log:warn "RPC push failed: ~A" c))))
+
 ;;; --- Chat handler ---
 
-(defun handle-chat-request (id msg)
-  "Handle a 'chat' request: run the agent loop with session tracking."
+(defun handle-streaming-chat-request (id msg stream lock)
+  "Handle a streaming 'chat' request. Pushes chat_delta/chat_done messages."
   (let ((text (crichton/rpc:msg-get msg "text"))
         (session-id (crichton/rpc:msg-get msg "session_id")))
     (unless text
-      (return-from handle-chat-request
+      (return-from handle-streaming-chat-request
         (crichton/rpc:make-error-response id "bad_request" "Missing required field: text")))
     (let* ((session-id (or session-id
                            (getf (crichton/sessions:create-session) :id)))
-           (lock (get-session-lock session-id)))
-      (bt:with-lock-held (lock)
+           (session-lock (get-session-lock session-id)))
+      (bt:with-lock-held (session-lock)
         (let ((msgs (gethash session-id *chat-sessions*)))
           (handler-case
               (multiple-value-bind (response-text all-messages)
-                  (crichton/agent:run-agent text :messages msgs)
+                  (crichton/agent:run-agent/stream
+                   text
+                   (lambda (delta)
+                     (let ((delta-msg (make-hash-table :test #'equal)))
+                       (setf (gethash "op" delta-msg) "chat_delta"
+                             (gethash "id" delta-msg) id
+                             (gethash "text" delta-msg) delta)
+                       (rpc-push stream lock delta-msg)))
+                   :messages msgs)
                 (setf (gethash session-id *chat-sessions*) all-messages)
+                (let ((done-msg (make-hash-table :test #'equal)))
+                  (setf (gethash "op" done-msg) "chat_done"
+                        (gethash "id" done-msg) id
+                        (gethash "text" done-msg) response-text
+                        (gethash "session_id" done-msg) session-id)
+                  (rpc-push stream lock done-msg))
                 (let ((result (make-hash-table :test #'equal)))
                   (setf (gethash "text" result) response-text
                         (gethash "session_id" result) session-id)
@@ -85,6 +109,62 @@
               (crichton/rpc:make-error-response
                id "agent_error"
                (format nil "An unexpected error occurred: ~A" c)))))))))
+
+(defun handle-chat-request (id msg)
+  "Handle a 'chat' request: run the agent loop with session tracking."
+  (let ((stream-p (crichton/rpc:msg-get msg "stream")))
+    (if (and stream-p *current-rpc-stream* *current-rpc-stream-lock*)
+        (handle-streaming-chat-request id msg *current-rpc-stream* *current-rpc-stream-lock*)
+        (let ((text (crichton/rpc:msg-get msg "text"))
+              (session-id (crichton/rpc:msg-get msg "session_id")))
+          (unless text
+            (return-from handle-chat-request
+              (crichton/rpc:make-error-response id "bad_request" "Missing required field: text")))
+          (let* ((session-id (or session-id
+                                 (getf (crichton/sessions:create-session) :id)))
+                 (lock (get-session-lock session-id)))
+            (bt:with-lock-held (lock)
+              (let ((msgs (gethash session-id *chat-sessions*)))
+                (handler-case
+                    (multiple-value-bind (response-text all-messages)
+                        (crichton/agent:run-agent text :messages msgs)
+                      (setf (gethash session-id *chat-sessions*) all-messages)
+                      (let ((result (make-hash-table :test #'equal)))
+                        (setf (gethash "text" result) response-text
+                              (gethash "session_id" result) session-id)
+                        (crichton/rpc:make-ok-response id result)))
+                  (crichton/llm:llm-rate-limit-error (c)
+                    (log:warn "Rate limited by ~A: ~A"
+                              (crichton/llm:provider-id (crichton/llm:llm-error-provider c))
+                              (crichton/llm:llm-error-message c))
+                    (crichton/rpc:make-error-response
+                     id "rate_limited"
+                     "I'm being rate limited by the API right now. Please try again in a minute or two."))
+                  (crichton/llm:llm-auth-error (c)
+                    (log:error "Authentication failed for ~A: ~A"
+                               (crichton/llm:provider-id (crichton/llm:llm-error-provider c))
+                               (crichton/llm:llm-error-message c))
+                    (crichton/rpc:make-error-response
+                     id "auth_error"
+                     "My API credentials appear to be invalid. Please check the configuration."))
+                  (crichton/llm:llm-api-error (c)
+                    (log:error "LLM API error (~A) HTTP ~D: ~A"
+                               (crichton/llm:provider-id (crichton/llm:llm-error-provider c))
+                               (crichton/llm:llm-api-error-status c)
+                               (crichton/llm:llm-error-message c))
+                    (crichton/rpc:make-error-response
+                     id "llm_error"
+                     "I encountered an error communicating with my AI provider. Check the logs for details."))
+                  (crichton/llm:llm-error (c)
+                    (log:error "LLM error: ~A" (crichton/llm:llm-error-message c))
+                    (crichton/rpc:make-error-response
+                     id "llm_error"
+                     "I encountered an error communicating with my AI provider. Check the logs for details."))
+                  (error (c)
+                    (log:error "Agent error: ~A" c)
+                    (crichton/rpc:make-error-response
+                     id "agent_error"
+                     (format nil "An unexpected error occurred: ~A" c)))))))))))
 
 ;;; --- Request dispatch ---
 
