@@ -328,6 +328,7 @@
                 :headers (anthropic-headers (anthropic-api-key provider))
                 :content json-body
                 :want-stream t
+                :force-binary t
                 :read-timeout 120)
             (error (c)
               (error 'llm-error :provider provider
