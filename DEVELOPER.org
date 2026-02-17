@@ -1,6 +1,6 @@
 #+TITLE: Crichton Developer Documentation
 #+AUTHOR: Gordon J. Broom
-#+DATE: 2026-02-13
+#+DATE: 2026-02-17
 #+HEADER: :headers '("\\usepackage{tikz}")
 #+HEADER: :headers '("\\usetikzlibrary{positioning, arrows.meta, calc}")
 #+STARTUP: overview
@@ -50,13 +50,17 @@ Crichton uses a microkernel architecture with strong process isolation: \\
 \node at (7,10.75) {\textbf{User Space}};
 
 % Client
-\node[box] (client) at (2.5,7.5) {Client\\(crichton-\\client)};
+\node[box] (client) at (2.5,9) {Client\\(crichton-\\client)};
+
+% TUI
+\node[box] (tui) at (2.5,6) {TUI Client\\(crichton-tui)};
 
 % Daemon
 \node[box] (daemon) at (9,7.5) {Daemon\\(crichton)};
 
 % Bidirectional arrow between client and daemon
-\draw[doublearrow] (client.east) -- node[above, font=\footnotesize] {NDJSON/socket} (daemon.west);
+\draw[doublearrow] (client.east) -- node[above, font=\footnotesize] {NDJSON/socket} (client.east -| daemon.west) -- (daemon.west |- client.east);
+\draw[doublearrow] (tui.east) -- node[below, font=\footnotesize] {NDJSON/socket + push} (tui.east -| daemon.west) -- (daemon.west |- tui.east);
 
 % Arrow from daemon to runner
 \node[box] (runner) at (9,4) {Runner\\Process\\(separate)};
@@ -116,6 +120,25 @@ is standard CL practice.
 - *No dependencies on*: cl+ssl, wasmtime, heavy libraries
 - *Protocol*: NDJSON over =daemon.sock=
 
+*** TUI Client (~crichton-tui~ binary)
+- *Purpose*: Interactive terminal UI with colour, layout, streaming, and push notifications
+- *Architecture*: TEA (The Elm Architecture) via cl-tuition
+- *Dependencies*: tuition (cl-tuition), shasht, bordeaux-threads
+- *No dependencies on*: cl+ssl, wasmtime, ncurses
+- *Protocol*: NDJSON over =daemon.sock= (same as crichton-client, with =subscribe= and =stream= extensions)
+- *Lifecycle*: Standalone binary via =save-lisp-and-die=; also supports one-shot CLI mode
+- *Features*:
+  - Full ANSI colour (256-colour and truecolour)
+  - Adaptive layout with terminal resize handling (=SIGWINCH=)
+  - Markdown-to-ANSI rendering of LLM responses
+  - Real-time streaming of LLM responses (=chat_delta= / =chat_done= push messages)
+  - Push notification toasts from daemon (battery, RSS, scheduler alerts)
+  - Scrollable chat viewport with page up/down, home/end
+  - Input editing with cursor support (=tui:text-input= component)
+  - Spinner animation during LLM thinking
+  - Sixel graphics infrastructure (detection, =img2sixel= integration)
+  - Local commands: =:quit=, =:clear=, =:new=, =:session=, =:status=, =:notifications=, =:sixel on/off=, =:img=
+
 *** Runner Process
 - *Purpose*: Isolated WASM execution environment
 - *Spawned by*: Daemon on-demand
@@ -160,12 +183,18 @@ independently.
 - *Background threads*: Scheduler, channel managers (Discord, etc.)
 - *Synchronization*: Bordeaux-threads locks for shared state
 
+*** TUI Client
+- *Main thread*: cl-tuition program loop (terminal I/O, rendering, input decoding)
+- *Daemon I/O thread*: Persistent connection to =daemon.sock=; reads NDJSON lines and injects messages via =tui:send=
+- *Commands*: Zero-arg lambdas run on cl-tuition's thread pool (e.g., socket writes for chat requests)
+- *Invariant*: The daemon I/O thread never touches terminal state directly
+
 *** Runner
 - *Main thread*: RPC accept loop
 - *Worker thread*: Per-invocation handler
 - *WASM execution*: Synchronous, blocking
 
-** Data Flow: Chat Request
+** Data Flow: Chat Request (Non-Streaming)
 
 1. User sends message via client \rightarrow daemon socket
 2. Daemon receives NDJSON request, extracts text and session_id
@@ -180,6 +209,29 @@ independently.
 11. Daemon saves session history
 12. Daemon returns response to client
 13. Client displays to user
+
+** Data Flow: Chat Request (Streaming)
+
+When the client sends ={"stream": true}= in the chat request, the daemon streams
+the LLM response incrementally:
+
+1. TUI sends ={op: "chat", text: "...", stream: true}= \rightarrow daemon socket
+2. Daemon receives request, sets up session (same as non-streaming)
+3. Daemon calls =run-agent/stream= with an =on-delta= callback
+4. Agent loop iterates:
+   a. Calls =stream-message= on the LLM provider (Anthropic SSE)
+   b. If LLM responds with tool use: execute tools, loop again (no deltas pushed)
+   c. If LLM responds with text: SSE =text_delta= events fire the =on-delta= callback
+5. For each text delta: daemon pushes ={op: "chat_delta", id: N, text: "..."}= to client
+6. On completion: daemon pushes ={op: "chat_done", id: N, text: "...", session_id: "..."}=
+7. Daemon also returns a standard OK response (backward compatibility)
+8. TUI renders deltas incrementally into a placeholder chat entry
+9. TUI ignores the duplicate OK response via =handled-stream-ids= tracking
+
+*Key properties*:
+- Streaming uses the same per-connection =(stream . lock)= pattern as push notifications
+- Tool-use iterations are invisible to the client --- only the final text response streams
+- Graceful fallback: if the provider does not support streaming, =run-agent/stream= falls back to =send-message= automatically
 
 * Wire Formats & Protocols
 
@@ -274,14 +326,16 @@ Send a message to the agent.
   "id": 2,
   "op": "chat",
   "text": "What's the weather like?",
-  "session_id": "sess_abc123"
+  "session_id": "sess_abc123",
+  "stream": true
 }
 #+end_src
 
 - =text=: User message (required)
 - =session_id=: Session identifier (optional, auto-generated if omitted)
+- =stream=: Enable streaming response (optional, default false)
 
-*Response*:
+*Response* (non-streaming, or final response after streaming):
 #+begin_src json
 {
   "id": 2,
@@ -292,6 +346,62 @@ Send a message to the agent.
   }
 }
 #+end_src
+
+*Streaming push messages* (when =stream= is true):
+
+The daemon pushes incremental text deltas to the client connection before
+sending the final response.  These are unsolicited messages (no =ok= field):
+
+#+begin_src json
+{"op": "chat_delta", "id": 2, "text": "The current"}
+{"op": "chat_delta", "id": 2, "text": " weather is"}
+{"op": "chat_delta", "id": 2, "text": " sunny."}
+{"op": "chat_done", "id": 2, "text": "The current weather is sunny.", "session_id": "sess_abc123"}
+#+end_src
+
+- =chat_delta=: Incremental text fragment (id matches the original request)
+- =chat_done=: Final complete text with session ID; signals streaming completion
+
+Implementation: =daemon/rpc-server.lisp= =handle-streaming-chat-request=, uses
+=run-agent/stream= from =agent/loop.lisp=.
+
+*** =subscribe=
+
+Register the current connection for push notifications.
+
+*Request*:
+#+begin_src json
+{
+  "id": 5,
+  "op": "subscribe"
+}
+#+end_src
+
+*Response*:
+#+begin_src json
+{
+  "id": 5,
+  "ok": true,
+  "result": true
+}
+#+end_src
+
+After subscribing, the daemon will push unsolicited notification messages to
+the connection whenever skills or monitors generate events:
+
+#+begin_src json
+{"op": "notify", "kind": "battery", "text": "Battery at 15%", "source": "battery-monitor"}
+{"op": "notify", "kind": "rss", "text": "New item: ...", "source": "rss-monitor"}
+{"op": "notify", "kind": "scheduler", "text": "Task completed", "source": "scheduler"}
+#+end_src
+
+- =kind=: Notification category (string)
+- =text=: Human-readable message (string)
+- =source=: Originating skill or monitor (string)
+
+Implementation: =daemon/notifications.lisp= manages a subscriber registry of
+=(stream . lock)= pairs.  =notification-post= iterates subscribers and writes
+with per-stream locks held.  Dead subscribers are automatically removed.
 
 *** =status=
 
@@ -2441,25 +2551,40 @@ Enforcement: =runner/skill-context.lisp=, =check-http-allowlist=
 
 Based on =crichton.asd=:
 
-| Module               | Purpose                                    |
-|----------------------+--------------------------------------------|
-| =package=            | Package definitions and exports            |
-| =config/=            | Configuration loading (TOML)               |
-| =logging/=           | JSON structured logging                    |
-| =storage/=           | Persistent KV store                        |
-| =rpc/=               | NDJSON protocol                            |
-| =wasm/=              | WASM engine (wasmtime FFI)                 |
-| =skills/=            | Skill registry, manifest, signing          |
-| =skills/builtins/=   | Built-in skills (weather, RSS, etc.)       |
-| =crypto/=            | Age encryption, secure memory              |
-| =credentials/=       | Credential storage and mediation           |
-| =sessions/=          | Session storage and retention              |
-| =llm/=               | LLM provider abstraction (Anthropic)       |
-| =daemon/=            | Daemon lifecycle, RPC server, Swank        |
-| =agent/=             | Agent loop, tool registration              |
-| =channels/=          | Channel adapters (Discord, Mastodon)       |
-| =cli/=               | Client CLI (crichton-client)               |
-| =runner/=            | WASM runner process                        |
+| Module               | Purpose                                     |
+|----------------------+---------------------------------------------|
+| =package=            | Package definitions and exports             |
+| =config/=            | Configuration loading (TOML)                |
+| =logging/=           | JSON structured logging                     |
+| =storage/=           | Persistent KV store                         |
+| =rpc/=               | NDJSON protocol                             |
+| =wasm/=              | WASM engine (wasmtime FFI)                  |
+| =skills/=            | Skill registry, manifest, signing           |
+| =skills/builtins/=   | Built-in skills (weather, RSS, etc.)        |
+| =crypto/=            | Age encryption, secure memory               |
+| =credentials/=       | Credential storage and mediation            |
+| =sessions/=          | Session storage and retention               |
+| =llm/=               | LLM provider abstraction (Anthropic)        |
+| =daemon/=            | Daemon lifecycle, RPC server, notifications |
+| =agent/=             | Agent loop, tool registration               |
+| =channels/=          | Channel adapters (Discord, Mastodon)        |
+| =cli/=               | Client CLI (crichton-client)                |
+| =runner/=            | WASM runner process                         |
+
+*** TUI Client (=crichton-tui.asd=)
+
+Separate ASDF system and binary for the interactive TUI:
+
+| Module               | Purpose                                     |
+|----------------------+---------------------------------------------|
+| =tui/package=        | Package definition (=crichton-tui=)         |
+| =tui/protocol=       | NDJSON wire protocol (async I/O)            |
+| =tui/model=          | Application state (CLOS classes)            |
+| =tui/messages=       | Custom TUI message types (TEA events)       |
+| =tui/theme=          | Colour and style definitions                |
+| =tui/sixel=          | Sixel graphics detection and conversion     |
+| =tui/render=         | View function and layout composition        |
+| =tui/client=         | TEA update loop, daemon reader, entry point |
 
 * Appendix: Common Tasks
 
@@ -2512,14 +2637,30 @@ Based on =crichton.asd=:
 3. Implement protocol methods:
    #+begin_src lisp
    (defmethod send-message ((provider my-provider) messages
-                           &key model max-tokens)
+                            &key system max-tokens temperature
+                                 tools tool-choice)
      ;; HTTP request to provider API
-     ;; Return (values response-text tool-calls)
+     ;; Return plist: (:content blocks :stop-reason :end-turn
+     ;;               :usage (:input-tokens N :output-tokens N)
+     ;;               :id "..." :model "...")
      ...)
 
-   (defmethod supports-tool-use-p ((provider my-provider))
-     t)  ; or nil
+   ;; Optional: streaming support (for real-time TUI display)
+   (defmethod stream-message ((provider my-provider) messages on-event
+                              &key system max-tokens temperature
+                                   tools tool-choice)
+     ;; HTTP request with streaming (e.g., SSE)
+     ;; Call (funcall on-event '(:type :delta :text "..."))
+     ;;   for each text chunk
+     ;; Call (funcall on-event '(:type :done :stop-reason ...))
+     ;;   on completion
+     ;; Return same plist as send-message
+     ...)
    #+end_src
+
+   If =stream-message= is not implemented, the default method signals
+   =llm-feature-not-supported= and =run-agent/stream= falls back to
+   =send-message= automatically.
 
 4. Register provider:
    #+begin_src lisp
