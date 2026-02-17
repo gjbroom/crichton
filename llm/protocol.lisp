@@ -185,3 +185,19 @@
       (error (c)
         (log:warn "Failed to record LLM usage: ~A" c)))
     result))
+
+(defmethod stream-message :around ((provider llm-provider) messages on-event
+                                   &key &allow-other-keys)
+  (declare (ignore messages on-event))
+  (let ((result (call-next-method)))
+    (handler-case
+        (let* ((usage (getf result :usage))
+               (model (or (getf result :model)
+                          (provider-model provider)
+                          "unknown"))
+               (input-tokens (or (getf usage :input-tokens) 0))
+               (output-tokens (or (getf usage :output-tokens) 0)))
+          (crichton/skills:record-usage "llm" model input-tokens output-tokens))
+      (error (c)
+        (log:warn "Failed to record LLM streaming usage: ~A" c)))
+    result))

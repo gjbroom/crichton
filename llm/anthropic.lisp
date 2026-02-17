@@ -114,7 +114,7 @@
     ht))
 
 (defun build-anthropic-request (messages &key system max-tokens temperature
-                                              model tools tool-choice)
+                                              model tools tool-choice stream)
   "Build the JSON request body as a hash-table for the Anthropic Messages API."
   (let ((body (make-hash-table :test #'equal)))
     (setf (gethash "model" body) model)
@@ -129,6 +129,8 @@
             (coerce (mapcar #'tool-def-to-anthropic tools) 'vector)))
     (when tool-choice
       (setf (gethash "tool_choice" body) (tool-choice-to-anthropic tool-choice)))
+    (when stream
+      (setf (gethash "stream" body) t))
     body))
 
 (defun anthropic-headers (api-key)
@@ -240,3 +242,233 @@
                     (getf (getf result :usage) :output-tokens)
                     (getf result :stop-reason))
           result)))))
+
+;;; --- SSE parsing ---
+
+(defun read-sse-line (stream)
+  "Read a single line from STREAM, stripping trailing CR if present.
+   Returns the line string or NIL at EOF."
+  (let ((line (read-line stream nil nil)))
+    (when line
+      (let ((len (length line)))
+        (if (and (plusp len) (char= (char line (1- len)) #\Return))
+            (subseq line 0 (1- len))
+            line)))))
+
+(defun parse-sse-events (stream on-sse-event)
+  "Read SSE events from STREAM and call ON-SSE-EVENT for each complete event.
+   ON-SSE-EVENT receives two arguments: event-type (string) and data (string).
+   SSE format: lines prefixed with 'event:', 'data:', or ':' (comments).
+   Empty lines dispatch the accumulated event."
+  (let ((event-type nil)
+        (data-parts nil))
+    (loop for line = (read-sse-line stream)
+          while line
+          do (cond
+               ;; Empty line → dispatch event
+               ((string= line "")
+                (when data-parts
+                  (let ((data (format nil "~{~A~^~%~}" (nreverse data-parts))))
+                    (funcall on-sse-event (or event-type "message") data)))
+                (setf event-type nil
+                      data-parts nil))
+               ;; Comment line (including : ping)
+               ((char= (char line 0) #\:)
+                nil)
+               ;; event: type
+               ((and (>= (length line) 7)
+                     (string= line "event: " :end1 7))
+                (setf event-type (subseq line 7)))
+               ;; data: payload
+               ((and (>= (length line) 6)
+                     (string= line "data: " :end1 6))
+                (push (subseq line 6) data-parts))
+               ;; data without space after colon (edge case per SSE spec)
+               ((and (>= (length line) 5)
+                     (string= line "data:" :end1 5))
+                (push (subseq line 5) data-parts))))))
+
+;;; --- stream-message implementation ---
+
+(defun parse-stop-reason (reason-str)
+  "Convert an Anthropic stop_reason string to a keyword."
+  (cond
+    ((null reason-str) :unknown)
+    ((string= reason-str "end_turn") :end-turn)
+    ((string= reason-str "max_tokens") :max-tokens)
+    ((string= reason-str "tool_use") :tool-use)
+    ((string= reason-str "stop_sequence") :stop-sequence)
+    (t :unknown)))
+
+(defmethod stream-message ((provider anthropic-provider) messages on-event
+                           &key system max-tokens temperature tools tool-choice)
+  (let* ((normalized (normalize-messages messages))
+         (extracted-system nil)
+         (final-messages normalized))
+    (multiple-value-bind (sys rest) (extract-system-message normalized)
+      (setf extracted-system (or system sys))
+      (setf final-messages rest))
+    (let* ((body (build-anthropic-request
+                  final-messages
+                  :system extracted-system
+                  :max-tokens max-tokens
+                  :temperature temperature
+                  :model (provider-model provider)
+                  :tools tools
+                  :tool-choice tool-choice
+                  :stream t))
+           (json-body (shasht:write-json body nil))
+           (url (format nil "~A/v1/messages" (anthropic-api-base provider))))
+      (log:info "Anthropic streaming request: model=~A max_tokens=~A"
+                (provider-model provider)
+                (or max-tokens *anthropic-default-max-tokens*))
+      (multiple-value-bind (response-stream status)
+          (handler-case
+              (dex:post url
+                :headers (anthropic-headers (anthropic-api-key provider))
+                :content json-body
+                :want-stream t
+                :read-timeout 120)
+            (error (c)
+              (error 'llm-error :provider provider
+                                :message (format nil "HTTP request failed: ~A" c))))
+        (unless (= status 200)
+          (let ((body-str (let ((buf (make-string-output-stream)))
+                            (loop for line = (read-line response-stream nil nil)
+                                  while line do (write-line line buf))
+                            (close response-stream)
+                            (get-output-stream-string buf))))
+            (classify-anthropic-error status body-str provider)))
+        (let ((text-accum (make-string-output-stream))
+              (content-blocks nil)
+              (msg-id nil)
+              (msg-model nil)
+              (stop-reason nil)
+              (input-tokens 0)
+              (output-tokens 0)
+              ;; Tool use accumulation
+              (tool-blocks (make-hash-table))  ; index → plist
+              (tool-json-parts (make-hash-table)) ; index → list of strings
+              (current-block-type nil))
+          (unwind-protect
+               (let ((char-stream
+                       (flexi-streams:make-flexi-stream
+                        response-stream :external-format :utf-8)))
+                 (parse-sse-events
+                  char-stream
+                  (lambda (event-type data)
+                    (handler-case
+                        (let ((json (shasht:read-json data)))
+                          (cond
+                            ;; message_start: extract id, model, usage
+                            ((string= event-type "message_start")
+                             (let ((msg (gethash "message" json)))
+                               (when msg
+                                 (setf msg-id (gethash "id" msg))
+                                 (setf msg-model (gethash "model" msg))
+                                 (let ((usage (gethash "usage" msg)))
+                                   (when usage
+                                     (setf input-tokens
+                                           (or (gethash "input_tokens" usage) 0)))))))
+
+                            ;; content_block_start: track block type
+                            ((string= event-type "content_block_start")
+                             (let* ((index (gethash "index" json))
+                                    (cb (gethash "content_block" json))
+                                    (btype (when cb (gethash "type" cb))))
+                               (setf current-block-type btype)
+                               (when (and cb (string= btype "tool_use"))
+                                 (setf (gethash index tool-blocks)
+                                       (list :type :tool-use
+                                             :id (gethash "id" cb)
+                                             :name (gethash "name" cb)
+                                             :input nil))
+                                 (setf (gethash index tool-json-parts) nil))))
+
+                            ;; content_block_delta: text or tool input
+                            ((string= event-type "content_block_delta")
+                             (let* ((delta (gethash "delta" json))
+                                    (dtype (when delta (gethash "type" delta))))
+                               (cond
+                                 ((and delta (string= dtype "text_delta"))
+                                  (let ((text (gethash "text" delta)))
+                                    (when text
+                                      (write-string text text-accum)
+                                      (funcall on-event
+                                               (list :type :delta :text text)))))
+                                 ((and delta (string= dtype "input_json_delta"))
+                                  (let ((partial (gethash "partial_json" delta))
+                                        (idx (gethash "index" json)))
+                                    (when partial
+                                      (push partial
+                                            (gethash idx tool-json-parts))))))))
+
+                            ;; content_block_stop: finalize blocks
+                            ((string= event-type "content_block_stop")
+                             (let ((idx (gethash "index" json)))
+                               (cond
+                                 ;; Tool use block: parse accumulated JSON
+                                 ((gethash idx tool-blocks)
+                                  (let* ((parts (nreverse
+                                                 (gethash idx tool-json-parts)))
+                                         (full-json
+                                           (format nil "~{~A~}" parts))
+                                         (input
+                                           (if (plusp (length full-json))
+                                               (handler-case
+                                                   (shasht:read-json full-json)
+                                                 (error ()
+                                                   (make-hash-table
+                                                    :test #'equal)))
+                                               (make-hash-table
+                                                :test #'equal)))
+                                         (block (gethash idx tool-blocks)))
+                                    (setf (getf block :input) input)
+                                    (push block content-blocks)))
+                                 ;; Text block
+                                 ((string= current-block-type "text")
+                                  nil))))
+
+                            ;; message_delta: stop reason + output tokens
+                            ((string= event-type "message_delta")
+                             (let ((delta (gethash "delta" json))
+                                   (usage (gethash "usage" json)))
+                               (when delta
+                                 (setf stop-reason
+                                       (parse-stop-reason
+                                        (gethash "stop_reason" delta))))
+                               (when usage
+                                 (setf output-tokens
+                                       (or (gethash "output_tokens" usage)
+                                           0)))))
+
+                            ;; message_stop: emit done event
+                            ((string= event-type "message_stop")
+                             (funcall on-event
+                                      (list :type :done
+                                            :stop-reason stop-reason
+                                            :usage (list :input-tokens
+                                                         input-tokens
+                                                         :output-tokens
+                                                         output-tokens)
+                                            :id msg-id
+                                            :model msg-model)))))
+                      (error (c)
+                        (log:warn "Error processing SSE event ~A: ~A"
+                                  event-type c))))))
+            (close response-stream))
+          ;; Build the final text block if we accumulated any text
+          (let ((full-text (get-output-stream-string text-accum)))
+            (when (plusp (length full-text))
+              (push (list :type :text :text full-text) content-blocks)))
+          ;; Return blocks in order (they were pushed in reverse)
+          (setf content-blocks (nreverse content-blocks))
+          (let ((result (list :content content-blocks
+                              :stop-reason (or stop-reason :end-turn)
+                              :usage (list :input-tokens input-tokens
+                                           :output-tokens output-tokens)
+                              :id msg-id
+                              :model msg-model)))
+            (log:info "Anthropic streaming response: tokens=~A+~A stop=~A"
+                      input-tokens output-tokens (or stop-reason :end-turn))
+            result))))))
