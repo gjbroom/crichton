@@ -20,85 +20,84 @@ When reporting tool results, summarize the key information clearly."
 (defparameter *default-max-tokens* 4096
   "Default max tokens for agent LLM calls.")
 
+;;; --- Helpers ---
+
+(defun truncate-for-log (text &optional (limit 200))
+  "Return at most LIMIT characters of TEXT for log output."
+  (let ((s (or text "")))
+    (subseq s 0 (min limit (length s)))))
+
+(defun nconc-msg (msgs role content)
+  "Destructively append a message with ROLE and CONTENT to MSGS."
+  (nconc msgs (list (list :role role :content content))))
+
+(defun execute-tool-calls (content)
+  "Dispatch all tool-use blocks in CONTENT, return tool-result blocks."
+  (let ((tool-uses (crichton/llm:blocks-tool-uses content)))
+    (log:info "Tool calls: ~{~A~^, ~}"
+              (mapcar (lambda (tu) (getf tu :name)) tool-uses))
+    (mapcar (lambda (tu)
+              (let* ((name   (getf tu :name))
+                     (result (dispatch-tool name (getf tu :input))))
+                (log:debug "Tool ~A result: ~A..." name
+                           (truncate-for-log result))
+                (crichton/llm:make-tool-result-block (getf tu :id) result)))
+            tool-uses)))
+
 ;;; --- Agent loop ---
 
-(defun run-agent (user-input &key (provider nil)
-                                  (system nil)
-                                  (tools nil)
-                                  (messages nil)
+(defun run-agent (user-input &key provider system tools messages
                                   (max-iterations *default-max-iterations*)
                                   (max-tokens *default-max-tokens*)
-                                  (temperature nil)
-                                  (verbose nil))
-                                  "Run the agent loop on USER-INPUT.
-                                  Returns (values response-text all-messages last-response).
+                                  temperature)
+  "Run the agent loop on USER-INPUT.
+Returns (values response-text all-messages last-response).
 
-                                  PROVIDER defaults to the configured LLM provider.
-                                  SYSTEM defaults to *default-system-prompt*.
-                                  TOOLS defaults to all registered tools.
-                                  MESSAGES is the conversation history (mutated by appending).
-                                  MAX-ITERATIONS prevents runaway tool loops."
-                                  (declare (ignore verbose))
+PROVIDER defaults to the configured LLM provider.
+SYSTEM defaults to *default-system-prompt*.
+TOOLS defaults to all registered tools.
+MESSAGES is the conversation history (extended destructively via NCONC).
+MAX-ITERATIONS prevents runaway tool loops."
   (let* ((provider (or provider (crichton/llm:ensure-llm-provider)))
-         (system-prompt (or system *default-system-prompt*))
-         (tool-defs (or tools (all-tool-defs)))
-         (msgs (or messages
-                   (list (list :role :user :content user-input)))))
-    (when (and user-input (not messages))
-      nil)
-    (when (and user-input messages)
-      (nconc msgs (list (list :role :user :content user-input))))
-    (log:info "Agent start: ~A" (subseq user-input 0 (min 200 (length (or user-input "")))))
-    (loop for iteration from 1 to max-iterations
-          do (log:info "Agent iteration ~D/~D" iteration max-iterations)
-             (let ((response
-                     (crichton/llm:send-message
-                      provider msgs
-                      :system system-prompt
-                      :max-tokens max-tokens
-                      :temperature temperature
-                      :tools tool-defs)))
-                (let ((content (getf response :content))
-                      (stop-reason (getf response :stop-reason)))
-                  (nconc msgs (list (list :role :assistant :content content)))
-                  (log:info "Stop reason: ~A" stop-reason)
-                  (unless (eq stop-reason :tool-use)
-                    (let ((text (crichton/llm:response-text response)))
-                      (log:info "Agent done: ~A" (subseq text 0 (min 200 (length (or text "")))))
-                      (return-from run-agent
-                        (values text msgs response))))
-                  (let ((tool-uses (crichton/llm:blocks-tool-uses content)))
-                    (log:info "Tool calls: ~{~A~^, ~}"
-                              (mapcar (lambda (tu) (getf tu :name)) tool-uses))
-                    (let ((result-blocks
-                            (mapcar (lambda (tu)
-                                      (let* ((name (getf tu :name))
-                                             (input (getf tu :input))
-                                             (id (getf tu :id))
-                                             (result (dispatch-tool name input)))
-                                        (log:debug "Tool ~A result: ~A..."
-                                                   name (subseq result 0
-                                                                (min 200 (length result))))
-                                        (crichton/llm:make-tool-result-block id result)))
-                                    tool-uses)))
-                      (nconc msgs (list (list :role :user
-                                             :content result-blocks))))))))
-    (log:warn "Agent hit max iterations (~D)" max-iterations)
-    (values (format nil "[Agent stopped after ~D iterations]" max-iterations)
-            msgs
-            nil)))
+         (system   (or system *default-system-prompt*))
+         (tools    (or tools (all-tool-defs)))
+         (msgs     (or messages (list))))
+    (when user-input
+      (nconc-msg msgs :user user-input))
+    (log:info "Agent start: ~A" (truncate-for-log user-input))
+    (dotimes (i max-iterations
+              (progn
+                (log:warn "Agent hit max iterations (~D)" max-iterations)
+                (values (format nil "[Agent stopped after ~D iterations]"
+                                max-iterations)
+                        msgs nil)))
+      (log:info "Agent iteration ~D/~D" (1+ i) max-iterations)
+      (let* ((response    (crichton/llm:send-message
+                           provider msgs
+                           :system system :max-tokens max-tokens
+                           :temperature temperature :tools tools))
+             (content     (getf response :content))
+             (stop-reason (getf response :stop-reason)))
+        (nconc-msg msgs :assistant content)
+        (log:info "Stop reason: ~A" stop-reason)
+        (unless (eq stop-reason :tool-use)
+          (let ((text (crichton/llm:response-text response)))
+            (log:info "Agent done: ~A" (truncate-for-log text))
+            (return (values text msgs response))))
+        (let ((tool-results (execute-tool-calls content)))
+          (nconc-msg msgs :user tool-results))))))
 
 ;;; --- Convenience wrappers ---
 
-(defun ask (text &key (system nil) (verbose nil))
+(defun ask (text &key system)
   "One-shot agent interaction. Returns the response text.
    The simplest way to use Crichton from the REPL:
      (crichton/agent:ask \"What's the weather like?\")
      (crichton/agent:ask \"How's the system doing?\")"
   (register-all-tools)
-  (run-agent text :system system :verbose verbose))
+  (run-agent text :system system))
 
-(defun chat-session (&key (system nil) (verbose nil))
+(defun chat-session (&key system)
   "Start an interactive chat session in the current REPL.
    Type your messages, get responses with tool use.
    Type :quit or :exit to stop."
@@ -125,7 +124,6 @@ When reporting tool results, summarize the key information clearly."
             (let ((response-text
                     (run-agent nil :provider provider
                                    :system system-prompt
-                                   :messages msgs
-                                   :verbose verbose)))
+                                   :messages msgs)))
               (format t "~&~A~%~%" response-text))))))))
 
