@@ -38,7 +38,7 @@ messages into the tuition PROGRAM via tui:send."
                                                            (and err t)))))
                       (t
                        (let ((result (gethash "result" msg)))
-                         (when result
+                         (when (hash-table-p result)
                            (tui:send program
                                      (make-instance 'daemon-response-msg
                                                     :id (gethash "id" msg)
