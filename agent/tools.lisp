@@ -63,7 +63,7 @@
 
 ;;; --- Helper: hash-table key access with default ---
 
-(defun hget (ht key &optional default)
+(defun %hget (ht key &optional default)
   "Get KEY from hash-table HT, returning DEFAULT if missing."
   (if (and ht (hash-table-p ht))
       (multiple-value-bind (val found) (gethash key ht)
@@ -134,7 +134,7 @@ supplied, the tool name string (hyphens become underscores).
 
 PARAMS is a list of parameter specs:
   (var-name type-string description &key required-p enum default)
-Each VAR-NAME is bound via HGET in the handler body.
+Each VAR-NAME is bound via %HGET in the handler body.
 
 BODY is wrapped in (BLOCK HANDLER ...) so RETURN-FROM HANDLER is available.
 Leading DECLARE forms in BODY are placed before the BLOCK."
@@ -163,8 +163,8 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
                     (declare (ignore type desc required-p enum))
                     (let ((name-str (%symbol-to-underscored var)))
                       (if default
-                          `(,var (hget input ,name-str ,default))
-                          `(,var (hget input ,name-str))))))))
+                          `(,var (%hget input ,name-str ,default))
+                          `(,var (%hget input ,name-str))))))))
       (multiple-value-bind (declarations real-body)
           (%extract-declarations body)
         (if params
@@ -218,6 +218,52 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
      :stream s
      :mounts '("/" "/home"))))
 
+;;; --- Scheduler tool helpers ---
+
+(defun %scheduler-schedule-every (action-name interval-seconds task-name)
+  "Handle the schedule_every scheduler action."
+  (unless action-name
+    (return-from %scheduler-schedule-every
+      "Error: 'action_name' is required. Use action 'actions' to list available."))
+  (unless interval-seconds
+    (return-from %scheduler-schedule-every "Error: 'interval_seconds' is required."))
+  (let ((act (crichton/skills:get-schedulable-action action-name)))
+    (unless act
+      (return-from %scheduler-schedule-every
+        (format nil "Error: unknown action '~A'. Use action 'actions' to list available." action-name)))
+    (crichton/skills:schedule-every task-name interval-seconds (getf act :fn)
+                                    :replace t :action-name action-name)
+    (format nil "Scheduled '~A' every ~Ds as task '~A'." action-name interval-seconds task-name)))
+
+(defun %scheduler-schedule-daily (action-name hour minute task-name)
+  "Handle the schedule_daily scheduler action."
+  (unless action-name
+    (return-from %scheduler-schedule-daily "Error: 'action_name' is required."))
+  (unless hour
+    (return-from %scheduler-schedule-daily "Error: 'hour' is required for schedule_daily."))
+  (let ((act (crichton/skills:get-schedulable-action action-name))
+        (min (or minute 0)))
+    (unless act
+      (return-from %scheduler-schedule-daily
+        (format nil "Error: unknown action '~A'." action-name)))
+    (crichton/skills:schedule-daily task-name hour min (getf act :fn)
+                                    :replace t :action-name action-name)
+    (format nil "Scheduled '~A' daily at ~2,'0D:~2,'0D as task '~A'." action-name hour min task-name)))
+
+(defun %scheduler-schedule-once (action-name delay-seconds task-name)
+  "Handle the schedule_once scheduler action."
+  (unless action-name
+    (return-from %scheduler-schedule-once "Error: 'action_name' is required."))
+  (unless delay-seconds
+    (return-from %scheduler-schedule-once "Error: 'delay_seconds' is required."))
+  (let ((act (crichton/skills:get-schedulable-action action-name)))
+    (unless act
+      (return-from %scheduler-schedule-once
+        (format nil "Error: unknown action '~A'." action-name)))
+    (crichton/skills:schedule-at task-name (+ (get-universal-time) delay-seconds) (getf act :fn)
+                                 :replace t :action-name action-name)
+    (format nil "Scheduled '~A' to run once in ~Ds as task '~A'." action-name delay-seconds task-name)))
+
 ;;; --- Scheduler tool ---
 
 (define-tool scheduler
@@ -254,39 +300,11 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
                  (format s "  ~A - ~A~%" (getf a :name) (getf a :description))))
              "No schedulable actions registered.")))
       ((string-equal action "schedule_every")
-       (unless action-name
-         (return-from handler "Error: 'action_name' is required. Use action 'actions' to list available."))
-       (unless interval-seconds
-         (return-from handler "Error: 'interval_seconds' is required."))
-       (let ((act (crichton/skills:get-schedulable-action action-name)))
-         (unless act
-           (return-from handler (format nil "Error: unknown action '~A'. Use action 'actions' to list available." action-name)))
-         (crichton/skills:schedule-every task-name interval-seconds (getf act :fn)
-                                         :replace t :action-name action-name)
-         (format nil "Scheduled '~A' every ~Ds as task '~A'." action-name interval-seconds task-name)))
+       (%scheduler-schedule-every action-name interval-seconds task-name))
       ((string-equal action "schedule_daily")
-       (unless action-name
-         (return-from handler "Error: 'action_name' is required."))
-       (unless hour
-         (return-from handler "Error: 'hour' is required for schedule_daily."))
-       (let ((act (crichton/skills:get-schedulable-action action-name))
-             (min (or minute 0)))
-         (unless act
-           (return-from handler (format nil "Error: unknown action '~A'." action-name)))
-         (crichton/skills:schedule-daily task-name hour min (getf act :fn)
-                                         :replace t :action-name action-name)
-         (format nil "Scheduled '~A' daily at ~2,'0D:~2,'0D as task '~A'." action-name hour min task-name)))
+       (%scheduler-schedule-daily action-name hour minute task-name))
       ((string-equal action "schedule_once")
-       (unless action-name
-         (return-from handler "Error: 'action_name' is required."))
-       (unless delay-seconds
-         (return-from handler "Error: 'delay_seconds' is required."))
-       (let ((act (crichton/skills:get-schedulable-action action-name)))
-         (unless act
-           (return-from handler (format nil "Error: unknown action '~A'." action-name)))
-         (crichton/skills:schedule-at task-name (+ (get-universal-time) delay-seconds) (getf act :fn)
-                                      :replace t :action-name action-name)
-         (format nil "Scheduled '~A' to run once in ~Ds as task '~A'." action-name delay-seconds task-name)))
+       (%scheduler-schedule-once action-name delay-seconds task-name))
       ((string-equal action "cancel")
        (unless name
          (return-from handler "Error: 'name' is required for cancel."))
@@ -420,7 +438,7 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
 
 ;;; --- Daemon log inspector tool ---
 
-(defun format-log-entries (entries)
+(defun %format-log-entries (entries)
   "Format a list of log entry hash-tables as human-readable text."
   (with-output-to-string (s)
     (if (null entries)
@@ -452,15 +470,15 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
      (with-output-to-string (s)
        (crichton/skills:log-report :stream s :count count)))
     ((string-equal action "recent")
-     (format-log-entries
+     (%format-log-entries
       (crichton/skills:read-log-tail :count count)))
-    ((string-equal action "errors")
-     (format-log-entries
+     ((string-equal action "errors")
+      (%format-log-entries
       (crichton/skills:search-log :level "ERROR" :count count)))
-    ((string-equal action "search")
-     (if (and (null pattern) (null level))
-         "Error: 'pattern' and/or 'level' required for search action."
-         (format-log-entries
+     ((string-equal action "search")
+      (if (and (null pattern) (null level))
+          "Error: 'pattern' and/or 'level' required for search action."
+          (%format-log-entries
           (crichton/skills:search-log :pattern pattern
                                       :level level
                                       :count count))))
@@ -527,6 +545,29 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
     (with-output-to-string (s)
       (crichton/skills:amp-report result :stream s))))
 
+;;; --- Skills tool helpers ---
+
+(defun %skills-run-pipeline (steps)
+  "Execute a multi-step skill pipeline from the STEPS array.
+   Returns a formatted result string."
+  (unless steps
+    (return-from %skills-run-pipeline
+      "Error: 'steps' array is required for pipeline action."))
+  (handler-case
+      (let* ((step-list (coerce steps 'list))
+             (results (crichton/skills:execute-pipeline step-list))
+             (step-count (hash-table-count results)))
+        (with-output-to-string (s)
+          (format s "Pipeline completed (~D step~:P):~%" step-count)
+          (maphash (lambda (id result)
+                     (format s "  ~A: ~S~%" id result))
+                   results)))
+    (crichton/skills:pipeline-error (c)
+      (format nil "Pipeline failed at step '~A': ~A"
+              (crichton/skills:pipeline-error-step-id c) c))
+    (error (c)
+      (format nil "Pipeline error: ~A" c))))
+
 ;;; --- Skills tool ---
 
 (define-tool skills
@@ -566,22 +607,7 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
        (error (c)
          (format nil "Error invoking skill '~A': ~A" name c))))
     ((string-equal action "pipeline")
-     (unless steps
-       (return-from handler "Error: 'steps' array is required for pipeline action."))
-     (handler-case
-         (let* ((step-list (coerce steps 'list))
-                (results (crichton/skills:execute-pipeline step-list))
-                (step-count (hash-table-count results)))
-           (with-output-to-string (s)
-             (format s "Pipeline completed (~D step~:P):~%" step-count)
-             (maphash (lambda (id result)
-                        (format s "  ~A: ~S~%" id result))
-                      results)))
-       (crichton/skills:pipeline-error (c)
-         (format nil "Pipeline failed at step '~A': ~A"
-                 (crichton/skills:pipeline-error-step-id c) c))
-       (error (c)
-         (format nil "Pipeline error: ~A" c))))
+     (%skills-run-pipeline steps))
     ((string-equal action "refresh")
      (let ((count (crichton/skills:discover-skills)))
        (format nil "Discovered ~D skill~:P." count)))

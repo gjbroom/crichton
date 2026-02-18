@@ -40,6 +40,42 @@ When reporting tool results, summarize the key information clearly."
                 (crichton/llm:make-tool-result-block (getf tu :id) result)))
             tool-uses)))
 
+(defun %initialize-messages (user-input messages)
+  "Build the initial message list for an agent loop invocation.
+   Destructively appends USER-INPUT to MESSAGES when both are provided."
+  (if messages
+      (progn
+        (when user-input
+          (nconc messages (list (list :role :user :content user-input))))
+        messages)
+      (when user-input
+        (list (list :role :user :content user-input)))))
+
+(defun %run-agent-loop (msgs send-fn label max-iterations)
+  "Core agent loop: call SEND-FN to get an LLM response, dispatch tool calls,
+   and iterate until the LLM returns text or MAX-ITERATIONS is reached.
+   SEND-FN is (lambda (msgs) → response-plist).
+   LABEL is a string for log messages (e.g. \"Agent\" or \"Agent/stream\").
+   Returns (values response-text all-messages last-response)."
+  (dotimes (i max-iterations
+            (progn
+              (log:warn "~A hit max iterations (~D)" label max-iterations)
+              (values (format nil "[Agent stopped after ~D iterations]"
+                              max-iterations)
+                      msgs nil)))
+    (log:info "~A iteration ~D/~D" label (1+ i) max-iterations)
+    (let* ((response    (funcall send-fn msgs))
+           (content     (getf response :content))
+           (stop-reason (getf response :stop-reason)))
+      (setf msgs (nconc msgs (list (list :role :assistant :content content))))
+      (log:info "Stop reason: ~A" stop-reason)
+      (unless (eq stop-reason :tool-use)
+        (let ((text (crichton/llm:response-text response)))
+          (log:info "~A done: ~A" label (truncate-for-log text))
+          (return (values text msgs response))))
+      (setf msgs (nconc msgs (list (list :role :user
+                                         :content (execute-tool-calls content))))))))
+
 ;;; --- Agent loop ---
 
 (defun run-agent (user-input &key provider system tools messages
@@ -54,37 +90,18 @@ SYSTEM defaults to *default-system-prompt*.
 TOOLS defaults to all registered tools.
 MESSAGES is the conversation history (extended destructively via NCONC).
 MAX-ITERATIONS prevents runaway tool loops."
-  (let* ((provider (or provider (crichton/llm:ensure-llm-provider)))
+  (let ((provider (or provider (crichton/llm:ensure-llm-provider)))
         (system   (or system *default-system-prompt*))
         (tools    (or tools (all-tool-defs)))
-        (msgs     (if messages
-                      (progn
-                        (when user-input
-                          (nconc messages (list (list :role :user :content user-input))))
-                        messages)
-                      (when user-input
-                        (list (list :role :user :content user-input))))))
-   (log:info "Agent start: ~A" (truncate-for-log user-input))
-    (dotimes (i max-iterations
-              (progn
-                (log:warn "Agent hit max iterations (~D)" max-iterations)
-                (values (format nil "[Agent stopped after ~D iterations]"
-                                max-iterations)
-                        msgs nil)))
-      (log:info "Agent iteration ~D/~D" (1+ i) max-iterations)
-      (let* ((response    (crichton/llm:send-message
-                           provider msgs
-                           :system system :max-tokens max-tokens
-                           :temperature temperature :tools tools))
-             (content     (getf response :content))
-             (stop-reason (getf response :stop-reason)))
-        (setf msgs (nconc msgs (list (list :role :assistant :content content))))
-        (log:info "Stop reason: ~A" stop-reason)
-        (unless (eq stop-reason :tool-use)
-          (let ((text (crichton/llm:response-text response)))
-            (log:info "Agent done: ~A" (truncate-for-log text))
-            (return (values text msgs response))))
-        (setf msgs (nconc msgs (list (list :role :user :content (execute-tool-calls content)))))))))
+        (msgs     (%initialize-messages user-input messages)))
+    (log:info "Agent start: ~A" (truncate-for-log user-input))
+    (%run-agent-loop
+     msgs
+     (lambda (msgs)
+       (crichton/llm:send-message provider msgs
+                                  :system system :max-tokens max-tokens
+                                  :temperature temperature :tools tools))
+     "Agent" max-iterations)))
 
 (defun run-agent/stream (user-input on-delta &key provider system tools messages
                                                       (max-iterations *default-max-iterations*)
@@ -93,47 +110,29 @@ MAX-ITERATIONS prevents runaway tool loops."
   "Run the agent loop on USER-INPUT, streaming the final response.
 ON-DELTA is called with each text delta string during the final streaming response.
 Returns (values response-text all-messages last-response), same as run-agent."
-  (let* ((provider (or provider (crichton/llm:ensure-llm-provider)))
-         (system   (or system *default-system-prompt*))
-         (tools    (or tools (all-tool-defs)))
-         (msgs     (if messages
-                       (progn
-                         (when user-input
-                           (nconc messages (list (list :role :user :content user-input))))
-                         messages)
-                       (when user-input
-                         (list (list :role :user :content user-input))))))
+  (let ((provider (or provider (crichton/llm:ensure-llm-provider)))
+        (system   (or system *default-system-prompt*))
+        (tools    (or tools (all-tool-defs)))
+        (msgs     (%initialize-messages user-input messages)))
     (log:info "Agent/stream start: ~A" (truncate-for-log user-input))
-    (dotimes (i max-iterations
-              (progn
-                (log:warn "Agent/stream hit max iterations (~D)" max-iterations)
-                (values (format nil "[Agent stopped after ~D iterations]"
-                                max-iterations)
-                        msgs nil)))
-      (log:info "Agent/stream iteration ~D/~D" (1+ i) max-iterations)
-      (let* ((response (handler-case
-                           (crichton/llm:stream-message
-                            provider msgs
-                            (lambda (event)
-                              (when (eq :delta (getf event :type))
-                                (funcall on-delta (getf event :text))))
-                            :system system :max-tokens max-tokens
-                            :temperature temperature :tools tools)
-                         (crichton/llm:llm-feature-not-supported ()
-                           (log:warn "Streaming not supported, falling back to send-message")
-                           (crichton/llm:send-message
-                            provider msgs
-                            :system system :max-tokens max-tokens
-                            :temperature temperature :tools tools))))
-             (content     (getf response :content))
-             (stop-reason (getf response :stop-reason)))
-        (setf msgs (nconc msgs (list (list :role :assistant :content content))))
-        (log:info "Stop reason: ~A" stop-reason)
-        (unless (eq stop-reason :tool-use)
-          (let ((text (crichton/llm:response-text response)))
-            (log:info "Agent/stream done: ~A" (truncate-for-log text))
-            (return (values text msgs response))))
-        (setf msgs (nconc msgs (list (list :role :user :content (execute-tool-calls content)))))))))
+    (%run-agent-loop
+     msgs
+     (lambda (msgs)
+       (handler-case
+           (crichton/llm:stream-message
+            provider msgs
+            (lambda (event)
+              (when (eq :delta (getf event :type))
+                (funcall on-delta (getf event :text))))
+            :system system :max-tokens max-tokens
+            :temperature temperature :tools tools)
+         (crichton/llm:llm-feature-not-supported ()
+           (log:warn "Streaming not supported, falling back to send-message")
+           (crichton/llm:send-message
+            provider msgs
+            :system system :max-tokens max-tokens
+            :temperature temperature :tools tools))))
+     "Agent/stream" max-iterations)))
 
 ;;; --- Convenience wrappers ---
 
