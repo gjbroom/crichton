@@ -172,6 +172,39 @@ each message into PROGRAM."
              (format nil "Unknown command: :~A" cmd-text))
        (values model nil t)))))
 
+;;; --- Enter-key chat submission ---
+
+(defun handle-send-chat (model text)
+  "Append user and placeholder assistant entries, start spinner, and return
+a batched command that sends the chat request to the daemon."
+  (setf (model-messages model)
+        (nconc (model-messages model)
+               (list (make-instance 'chat-entry
+                                    :role :user
+                                    :text text
+                                    :time (get-universal-time)))))
+  (let ((placeholder (make-instance 'chat-entry
+                                     :role :assistant
+                                     :text ""
+                                     :time (get-universal-time))))
+    (setf (model-messages model)
+          (nconc (model-messages model) (list placeholder)))
+    (setf (model-streaming-entry model) placeholder))
+  (tui.textinput:textinput-reset (model-input model))
+  (setf (model-status model) :waiting
+        (model-status-text model) "Thinking...")
+  (let ((spinner (tui.spinner:make-spinner
+                  :frames tui.spinner:*spinner-dot*
+                  :fps 0.1)))
+    (setf (model-spinner model) spinner)
+    (render-chat-history model)
+    (tui.viewport:viewport-goto-bottom (model-viewport model))
+    (values model (tui:batch
+                   (send-chat-cmd (model-daemon-stream model)
+                                  text
+                                  (model-session-id model))
+                   (tui.spinner:spinner-init spinner)))))
+
 ;;; --- Update: key-msg ---
 
 (defmethod tui:update-message ((model tui-model) (msg tui:key-msg))
@@ -184,44 +217,18 @@ each message into PROGRAM."
          (cond
            ((zerop (length text))
             (values model nil))
-           ;; Local command
            ((char= (char text 0) #\:)
             (tui.textinput:textinput-reset (model-input model))
             (handle-local-command model text))
-           ;; Waiting — ignore
            ((eq (model-status model) :waiting)
             (values model nil))
-           ;; Send chat
            (t
-            (setf (model-messages model)
-                  (nconc (model-messages model)
-                         (list (make-instance 'chat-entry
-                                              :role :user
-                                              :text text
-                                              :time (get-universal-time)))))
-            (let ((placeholder (make-instance 'chat-entry
-                                               :role :assistant
-                                               :text ""
-                                               :time (get-universal-time))))
-              (setf (model-messages model)
-                    (nconc (model-messages model) (list placeholder)))
-              (setf (model-streaming-entry model) placeholder))
-            (tui.textinput:textinput-reset (model-input model))
-            (setf (model-status model) :waiting
-                  (model-status-text model) "Thinking...")
-            (let ((spinner (tui.spinner:make-spinner
-                            :frames tui.spinner:*spinner-dot*
-                            :fps 0.1)))
-              (setf (model-spinner model) spinner)
-              (render-chat-history model)
-              (tui.viewport:viewport-goto-bottom (model-viewport model))
-              (values model (tui:batch
-                             (send-chat-cmd (model-daemon-stream model)
-                                            text
-                                            (model-session-id model))
-                             (tui.spinner:spinner-init spinner))))))))
+            (handle-send-chat model text)))))
 
       ;; Ctrl-C — quit with confirmation
+      ;; The returned lambda runs as a TEA command on a background thread;
+      ;; the sleep gives the user time to press Ctrl-C again before the
+      ;; confirmation resets.
       ((and (tui:key-msg-ctrl msg)
             (characterp key) (char= key #\c))
        (if (model-confirm-quit model)
