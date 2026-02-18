@@ -4,6 +4,28 @@
 ;;;; Wires together model, view, daemon I/O, and TEA update loop.
 
 (in-package #:crichton-tui)
+(defvar *swank-port* nil
+  "Port the Swank server is running on, or NIL if not started.")
+(defun start-swank (&key (port nil) (dont-close t))
+  "Start a Swank server for SLIME/SLY connections.
+   PORT defaults to config value or 4005.
+   Idempotent — returns existing port if already running.
+   Connect from Emacs with M-x slime-connect RET 127.0.0.1 RET 4005"
+  (when *swank-port*
+    (format *error-output* "Swank already running on port ~D~%" *swank-port*)
+    (return-from start-swank *swank-port*))
+  (let ((actual-port (or port 4006)))
+    (handler-case
+        (progn
+          (asdf:load-system :swank)
+          (let ((create-server (find-symbol "CREATE-SERVER" :swank)))
+            (funcall create-server :port actual-port :dont-close dont-close)
+            (setf *swank-port* actual-port)
+            (format *error-output* "Swank server started on port ~D~%" actual-port)
+            actual-port))
+      (error (c)
+        (format *error-output* "Could not start Swank: ~A~%" c)
+        nil))))
 
 ;;; --- Daemon reader thread ---
 
@@ -416,6 +438,7 @@ a batched command that sends the chat request to the daemon."
                   (make-instance 'tui-model)
                   :alt-screen t
                   :mouse nil)))
+    (start-swank)
     (tui:run program)))
 
 (defun one-shot-chat (text)
