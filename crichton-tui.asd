@@ -10,7 +10,8 @@
   :version "0.1.0"
   :depends-on (#:shasht
                #:tuition
-               #:bordeaux-threads)
+               #:bordeaux-threads
+               #:cl-ppcre)
   :serial t
   :components ((:module "tui"
                 :components ((:file "package")

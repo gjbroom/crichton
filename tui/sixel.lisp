@@ -51,31 +51,17 @@ If CACHE is a hash-table, results are cached by PATH."
 
 ;;; --- Extraction from markdown ---
 
+(defparameter *image-ref-re*
+  (cl-ppcre:create-scanner "!\\[([^\\]]*)\\]\\(([^)]+)\\)")
+  "Compiled regex matching markdown image references ![alt](path).")
+
 (defun extract-image-refs (text)
   "Extract markdown image references ![alt](path) from TEXT.
 Returns a list of (start end path alt) tuples."
-  (let ((results nil)
-        (pos 0)
-        (len (length text)))
-    (loop
-      (let ((bang (search "![" text :start2 pos)))
-        (unless bang
-          (return (nreverse results)))
-        (let ((close-bracket (position #\] text :start (+ bang 2))))
-          (cond
-            ((not close-bracket)
-             (setf pos (+ bang 2)))
-            ((or (>= (1+ close-bracket) len)
-                 (not (char= (char text (1+ close-bracket)) #\()))
-             (setf pos (1+ close-bracket)))
-            (t
-             (let ((close-paren (position #\) text :start (+ close-bracket 2))))
-               (cond
-                 ((not close-paren)
-                  (setf pos (+ close-bracket 2)))
-                 (t
-                  (push (list bang (1+ close-paren)
-                              (subseq text (+ close-bracket 2) close-paren)
-                              (subseq text (+ bang 2) close-bracket))
-                        results)
-                  (setf pos (1+ close-paren))))))))))))
+  (let ((results nil))
+    (cl-ppcre:do-scans (start end reg-starts reg-ends *image-ref-re* text
+                        (nreverse results))
+      (push (list start end
+                  (subseq text (aref reg-starts 1) (aref reg-ends 1))
+                  (subseq text (aref reg-starts 0) (aref reg-ends 0)))
+            results))))
