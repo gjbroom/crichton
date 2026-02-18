@@ -123,7 +123,7 @@ is standard CL practice.
 *** TUI Client (~crichton-tui~ binary)
 - *Purpose*: Interactive terminal UI with colour, layout, streaming, and push notifications
 - *Architecture*: TEA (The Elm Architecture) via cl-tuition
-- *Dependencies*: tuition (cl-tuition), shasht, bordeaux-threads
+- *Dependencies*: tuition (cl-tuition), shasht, bordeaux-threads, cl-ppcre
 - *No dependencies on*: cl+ssl, wasmtime, ncurses
 - *Protocol*: NDJSON over =daemon.sock= (same as crichton-client, with =subscribe= and =stream= extensions)
 - *Lifecycle*: Standalone binary via =save-lisp-and-die=; also supports one-shot CLI mode
@@ -2578,13 +2578,13 @@ Separate ASDF system and binary for the interactive TUI:
 | Module               | Purpose                                     |
 |----------------------+---------------------------------------------|
 | =tui/package=        | Package definition (=crichton-tui=)         |
-| =tui/protocol=       | NDJSON wire protocol (async I/O)            |
+| =tui/protocol=       | NDJSON wire protocol, connection, sync helpers |
 | =tui/model=          | Application state (CLOS classes)            |
 | =tui/messages=       | Custom TUI message types (TEA events)       |
 | =tui/theme=          | Colour and style definitions                |
-| =tui/sixel=          | Sixel graphics detection and conversion     |
-| =tui/render=         | View function and layout composition        |
-| =tui/client=         | TEA update loop, daemon reader, entry point |
+| =tui/sixel=          | Sixel detection, conversion, image-ref extraction (cl-ppcre) |
+| =tui/render=         | View function, status bar, layout composition |
+| =tui/client=         | TEA update loop, daemon dispatch, key handling, entry points |
 
 * Appendix: Common Tasks
 
