@@ -37,6 +37,40 @@
        (error (,c)
          (log:warn "~A: ~A" ,description ,c)))))
 
+(defun init-storage ()
+  "Initialize storage subsystems: credentials, sessions, KV cache, data store, meters."
+  (crichton/credentials:ensure-credential-store)
+  (guarded "Session purge at startup failed"
+    (crichton/sessions:purge-expired-sessions))
+  (guarded "KV cache preload at startup failed"
+    (ensure-directories-exist
+     (merge-pathnames "kv/" crichton/config:*agent-home*))
+    (crichton/skills:preload-kv-cache))
+  (guarded "Storage preload at startup failed"
+    (ensure-directories-exist
+     (merge-pathnames "data/" crichton/config:*agent-home*))
+    (crichton/storage:preload-storage))
+  (guarded "Meter restoration at startup failed"
+    (crichton/skills:load-meters)))
+
+(defun init-skills ()
+  "Initialize skill subsystems: scheduler, tasks, discovery, battery monitoring."
+  (crichton/skills:start-scheduler)
+  (guarded "Task restoration at startup failed"
+    (crichton/skills:restore-user-tasks))
+  (guarded "Skill discovery at startup failed"
+    (crichton/skills:discover-skills))
+  (guarded "Battery monitoring startup failed"
+    (let ((interval (or (crichton/config:config-section-get :battery :interval) 300)))
+      (crichton/skills:start-battery-monitoring :interval interval))))
+
+(defun init-network ()
+  "Initialize network subsystems: RPC server, external channels."
+  (guarded "RPC server startup failed"
+    (start-rpc-server))
+  (guarded "Channel startup failed"
+    (crichton/channels:start-channels)))
+
 (defun start-daemon (&key (foreground nil))
   "Start the Crichton daemon.  Idempotent — returns NIL if already running.
    When FOREGROUND is T, blocks until stop-daemon is called (for systemd)."
@@ -49,38 +83,12 @@
   (write-pid-file)
   (setf *running* t)
   (start-swank)
-  (crichton/credentials:ensure-credential-store)
-  (guarded "Session purge at startup failed"
-    (crichton/sessions:purge-expired-sessions))
-  (crichton/skills:start-scheduler)
-  (guarded "Task restoration at startup failed"
-    (crichton/skills:restore-user-tasks))
-  (guarded "Skill discovery at startup failed"
-    (crichton/skills:discover-skills))
-  (guarded "Battery monitoring startup failed"
-    (crichton/skills:start-battery-monitoring))
-  (guarded "KV cache preload at startup failed"
-    (ensure-directories-exist
-     (merge-pathnames "kv/" crichton/config:*agent-home*))
-    (crichton/skills:preload-kv-cache))
-  (guarded "Storage preload at startup failed"
-    (ensure-directories-exist
-     (merge-pathnames "data/" crichton/config:*agent-home*))
-    (crichton/storage:preload-storage))
-  (guarded "Meter restoration at startup failed"
-    (crichton/skills:load-meters))
-  (guarded "RPC server startup failed"
-    (start-rpc-server))
-  (guarded "Channel startup failed"
-    (crichton/channels:start-channels))
-  (guarded "Battery monitoring startup failed"
-    (let ((interval (or (crichton/config:config-section-get :battery :interval) 300)))
-      (crichton/skills:start-battery-monitoring :interval interval)))
+  (init-storage)
+  (init-skills)
+  (init-network)
   (log:info "Crichton daemon started (PID ~D)" (sb-posix:getpid))
   (when foreground
     (install-signal-handlers)
-    ;; Block until stop-daemon is called (foreground mode only, e.g., systemd Type=simple).
-    ;; The daemon must stay running by definition in this mode.
     (bt:with-lock-held (*shutdown-lock*)
       (loop while *running*
             do (bt:condition-wait *shutdown-cv* *shutdown-lock*)))
