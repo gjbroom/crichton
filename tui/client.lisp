@@ -7,44 +7,49 @@
 
 ;;; --- Daemon reader thread ---
 
+(defun dispatch-daemon-message (program msg)
+  "Translate a daemon NDJSON MSG hash-table into a typed TUI message and
+inject it into PROGRAM via tui:send."
+  (let ((op (gethash "op" msg)))
+    (cond
+      ((equal op "notify")
+       (tui:send program
+                 (make-instance 'daemon-notification-msg
+                                :kind (gethash "kind" msg)
+                                :text (gethash "text" msg)
+                                :source (gethash "source" msg))))
+      ((equal op "chat_delta")
+       (tui:send program
+                 (make-instance 'daemon-chat-delta-msg
+                                :id (gethash "id" msg)
+                                :text (gethash "text" msg))))
+      ((equal op "chat_done")
+       (tui:send program
+                 (make-instance 'daemon-chat-done-msg
+                                :id (gethash "id" msg)
+                                :text (gethash "text" msg)
+                                :session (gethash "session_id" msg)
+                                :error-p (let ((err (gethash "error" msg)))
+                                           (and err t)))))
+      (t
+       (let ((result (gethash "result" msg)))
+         (when (hash-table-p result)
+           (tui:send program
+                     (make-instance 'daemon-response-msg
+                                    :id (gethash "id" msg)
+                                    :text (gethash "text" result)
+                                    :session (gethash "session_id" result)
+                                    :error-p (not (gethash "ok" msg))))))))))
+
 (defun start-daemon-reader (stream program)
-  "Spawn a background thread that reads NDJSON from STREAM and injects
-messages into the tuition PROGRAM via tui:send."
+  "Spawn a background thread that reads NDJSON from STREAM and dispatches
+each message into PROGRAM."
   (bt:make-thread
    (lambda ()
      (handler-case
          (loop for msg = (read-message stream)
                while msg
-               do (let ((op (gethash "op" msg)))
-                    (cond
-                      ((equal op "notify")
-                       (tui:send program
-                                 (make-instance 'daemon-notification-msg
-                                                :kind (gethash "kind" msg)
-                                                :text (gethash "text" msg)
-                                                :source (gethash "source" msg))))
-                      ((equal op "chat_delta")
-                       (tui:send program
-                                 (make-instance 'daemon-chat-delta-msg
-                                                :id (gethash "id" msg)
-                                                :text (gethash "text" msg))))
-                      ((equal op "chat_done")
-                       (tui:send program
-                                 (make-instance 'daemon-chat-done-msg
-                                                :id (gethash "id" msg)
-                                                :text (gethash "text" msg)
-                                                :session (gethash "session_id" msg)
-                                                :error-p (let ((err (gethash "error" msg)))
-                                                           (and err t)))))
-                      (t
-                       (let ((result (gethash "result" msg)))
-                         (when (hash-table-p result)
-                           (tui:send program
-                                     (make-instance 'daemon-response-msg
-                                                    :id (gethash "id" msg)
-                                                    :text (gethash "text" result)
-                                                    :session (gethash "session_id" result)
-                                                    :error-p (not (gethash "ok" msg))))))))))
+               do (dispatch-daemon-message program msg))
        (error ()
          (tui:send program (make-instance 'daemon-disconnected-msg)))))
    :name "daemon-reader"))
