@@ -102,12 +102,13 @@
 
 ;;; --- Synchronous helper (one-shot CLI mode) ---
 
-(defun send-chat-sync (text &optional session-id)
-  "Send a chat request synchronously. Returns (values response-text session-id).
+(defun send-chat-sync (stream text &optional session-id)
+  "Send a chat request synchronously on STREAM.
+Returns (values response-text session-id).
 For one-shot CLI mode only; TUI mode uses async I/O."
   (let ((request (make-chat-request text :session-id session-id)))
-    (write-message *client-stream* request)
-    (let ((response (read-message *client-stream*)))
+    (write-message stream request)
+    (let ((response (read-message stream)))
       (unless response
         (error "Connection closed by daemon"))
       (unless (gethash "ok" response)

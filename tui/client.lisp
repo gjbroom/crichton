@@ -419,12 +419,12 @@ a batched command that sends the chat request to the daemon."
     (tui:run program)))
 
 (defun one-shot-chat (text)
-  (connect-daemon)
-  (unwind-protect
-       (multiple-value-bind (response-text)
-           (send-chat-sync text)
-         (format t "~A~%" response-text))
-    (disconnect)))
+  (let ((stream (connect-daemon)))
+    (unwind-protect
+         (multiple-value-bind (response-text)
+             (send-chat-sync stream text)
+           (format t "~A~%" response-text))
+      (disconnect))))
 
 (defun main ()
   (let ((args (rest sb-ext:*posix-argv*)))
