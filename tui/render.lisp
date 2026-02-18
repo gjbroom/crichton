@@ -79,24 +79,25 @@
 
 ;;; --- Status bar ---
 
+(defun format-waiting-status (spinner status-text)
+  "Build the left-side status string for :waiting state from the optional
+SPINNER view string and STATUS-TEXT."
+  (let ((spinner-str (when spinner
+                       (tui.spinner:spinner-view spinner)))
+        (label (if (and status-text (plusp (length status-text)))
+                   status-text
+                   "Thinking...")))
+    (if spinner-str
+        (format nil "~A ~A" spinner-str label)
+        label)))
+
 (defun render-status-bar (model)
   (let* ((width (model-width model))
          (left (ecase (model-status model)
-                 (:waiting
-                  (let ((spinner-str (when (model-spinner model)
-                                       (tui.spinner:spinner-view (model-spinner model)))))
-                    (if (and (model-status-text model)
-                             (plusp (length (model-status-text model))))
-                        (if spinner-str
-                            (format nil "~A ~A" spinner-str (model-status-text model))
-                            (model-status-text model))
-                        (if spinner-str
-                            (format nil "~A Thinking..." spinner-str)
-                            "Thinking..."))))
-                 (:error
-                  (style *style-error* "Error"))
-                 (:idle
-                  "Ready")))
+                 (:waiting (format-waiting-status (model-spinner model)
+                                                  (model-status-text model)))
+                 (:error   (style *style-error* "Error"))
+                 (:idle    "Ready")))
          (right (if (model-confirm-quit model)
                     "Really quit? (y/n)"
                     ""))
@@ -138,16 +139,11 @@
 ;;; --- Top-level view ---
 
 (defmethod tui:view ((model tui-model))
-  (if (and (model-show-notifications model)
-           (model-notifications model))
-      (tui:join-vertical tui:+left+
-                         (render-title-bar model)
-                         (render-notification-toast model)
-                         (tui.viewport:viewport-view (model-viewport model))
-                         (render-status-bar model)
-                         (render-input-area model))
-      (tui:join-vertical tui:+left+
-                         (render-title-bar model)
-                         (tui.viewport:viewport-view (model-viewport model))
-                         (render-status-bar model)
-                         (render-input-area model))))
+  (apply #'tui:join-vertical tui:+left+
+         (append (list (render-title-bar model))
+                 (when (and (model-show-notifications model)
+                            (model-notifications model))
+                   (list (render-notification-toast model)))
+                 (list (tui.viewport:viewport-view (model-viewport model))
+                       (render-status-bar model)
+                       (render-input-area model)))))
