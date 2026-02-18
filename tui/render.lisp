@@ -138,12 +138,25 @@ SPINNER view string and STATUS-TEXT."
 
 ;;; --- Top-level view ---
 
+(defun toast-line-count (toast-string)
+  "Return the number of terminal lines occupied by TOAST-STRING, or 0."
+  (if toast-string
+      (1+ (count #\Newline toast-string))
+      0))
+
 (defmethod tui:view ((model tui-model))
-  (apply #'tui:join-vertical tui:+left+
-         (append (list (render-title-bar model))
-                 (when (and (model-show-notifications model)
-                            (model-notifications model))
-                   (list (render-notification-toast model)))
-                 (list (tui.viewport:viewport-view (model-viewport model))
-                       (render-status-bar model)
-                       (render-input-area model)))))
+  (let* ((toast (when (and (model-show-notifications model)
+                           (model-notifications model))
+                  (render-notification-toast model)))
+         (toast-lines (toast-line-count toast))
+         (chrome-lines (+ 3 toast-lines))  ; title + status + input + toast
+         (vp (model-viewport model))
+         (vp-height (max 1 (- (model-height model) chrome-lines))))
+    ;; Temporarily adjust viewport height to fit remaining space
+    (setf (tui.viewport:viewport-height vp) vp-height)
+    (apply #'tui:join-vertical tui:+left+
+           (append (list (render-title-bar model))
+                   (when toast (list toast))
+                   (list (tui.viewport:viewport-view vp)
+                         (render-status-bar model)
+                         (render-input-area model))))))
