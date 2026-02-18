@@ -373,23 +373,27 @@
 
 ;;; --- Monitoring integration with scheduler ---
 
+(defun rss-monitor-poll (name url)
+  "Poll a single RSS feed, log new items, and post notifications.
+   Called by the scheduler callback registered via RSS-MONITOR-START."
+  (handler-case
+      (let ((result (rss-check url)))
+        (when (plusp (getf result :new-count))
+          (log:info "RSS ~A: ~D new item~:P" name (getf result :new-count))
+          (dolist (item (getf result :new-items))
+            (log:info "  ~A: ~A" name (getf item :title)))
+          (crichton/daemon:notification-post
+           "rss"
+           (format nil "~D new item~:P in ~A" (getf result :new-count) name)
+           name)))
+    (error (c)
+      (log:warn "RSS monitor ~A failed: ~A" name c))))
+
 (defun rss-monitor-start (name url interval-seconds &key (replace t))
   "Start monitoring a feed by scheduling periodic checks.
    NAME is the task name. Results logged via log4cl."
   (schedule-every name interval-seconds
-                  (lambda ()
-                    (handler-case
-                        (let ((result (rss-check url)))
-                          (when (plusp (getf result :new-count))
-                            (log:info "RSS ~A: ~D new item~:P" name (getf result :new-count))
-                            (dolist (item (getf result :new-items))
-                              (log:info "  ~A: ~A" name (getf item :title)))
-                            (crichton/daemon:notification-post
-                             "rss"
-                             (format nil "~D new item~:P in ~A" (getf result :new-count) name)
-                             name)))
-                      (error (c)
-                        (log:warn "RSS monitor ~A failed: ~A" name c))))
+                  (lambda () (rss-monitor-poll name url))
                   :replace replace)
   (log:info "RSS monitor started: ~A → ~A (every ~Ds)" name url interval-seconds)
   name)
