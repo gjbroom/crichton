@@ -86,9 +86,6 @@ signing. Informed by a security audit of OpenClaw."
                 :components ((:file "protocol")
                              (:file "discord")
                              (:file "manager")))
-               (:module "cli"
-                :components ((:file "main")
-                             (:file "remote")))
                (:module "runner"
                 :components ((:file "skill-context")
                              (:file "server")))

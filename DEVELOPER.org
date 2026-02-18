@@ -1982,9 +1982,10 @@ RestartSec=5
 WantedBy=default.target
 #+end_src
 
-** Building the Client
+** Building the Clients
 
-The client is a standalone binary built via save-lisp-and-die.
+The clients are standalone binaries built via save-lisp-and-die.  As the TUI has
+some local state, it runs a SWANK port on 4006.
 
 #+begin_src bash
 sbcl --noinform --non-interactive \
@@ -1992,13 +1993,19 @@ sbcl --noinform --non-interactive \
   --eval '(push #p"/home/gjbroom/devel/crichton/" asdf:*central-registry*)' \
   --eval '(asdf:load-system :crichton-client)' \
   --eval "(sb-ext:save-lisp-and-die #p\"crichton-client\" :toplevel #'crichton-client:main :executable t :compression t)"
+
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/home/gjbroom/devel/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton-tui)' \
+  --eval "(sb-ext:save-lisp-and-die #p\"crichton-tui\" :toplevel #'crichton-tui:main :executable t :compression t)"
 #+end_src
 
 Install:
 #+begin_src bash
 mkdir -p ~/bin
-cp crichton-client ~/bin/
-chmod +x ~/bin/crichton-client
+cp crichton-client crichton-tui ~/bin/
+chmod +x ~/bin/crichton-client ~/bin/crichton-tui
 #+end_src
 
 Ensure =~/bin= is in your PATH:
@@ -2555,40 +2562,48 @@ Enforcement: =runner/skill-context.lisp=, =check-http-allowlist=
 
 Based on =crichton.asd=:
 
-| Module               | Purpose                                     |
-|----------------------+---------------------------------------------|
-| =package=            | Package definitions and exports             |
-| =config/=            | Configuration loading (TOML)                |
-| =logging/=           | JSON structured logging                     |
-| =storage/=           | Persistent KV store                         |
-| =rpc/=               | NDJSON protocol                             |
-| =wasm/=              | WASM engine (wasmtime FFI)                  |
-| =skills/=            | Skill registry, manifest, signing           |
-| =skills/builtins/=   | Built-in skills (weather, RSS, etc.)        |
-| =crypto/=            | Age encryption, secure memory               |
-| =credentials/=       | Credential storage and mediation            |
-| =sessions/=          | Session storage and retention               |
-| =llm/=               | LLM provider abstraction (Anthropic)        |
-| =daemon/=            | Daemon lifecycle, RPC server, notifications |
-| =agent/=             | Agent loop, tool registration               |
-| =channels/=          | Channel adapters (Discord, Mastodon)        |
-| =cli/=               | Client CLI (crichton-client)                |
-| =runner/=            | WASM runner process                         |
+| Module           | Purpose                                     |
+|------------------+---------------------------------------------|
+| =package=          | Package definitions and exports             |
+| =config/=          | Configuration loading (TOML)                |
+| =logging/=         | JSON structured logging                     |
+| =storage/=         | Persistent KV store                         |
+| =rpc/=             | NDJSON protocol                             |
+| =wasm/=            | WASM engine (wasmtime FFI)                  |
+| =skills/=          | Skill registry, manifest, signing           |
+| =skills/builtins/= | Built-in skills (weather, RSS, etc.)        |
+| =crypto/=          | Age encryption, secure memory               |
+| =credentials/=     | Credential storage and mediation            |
+| =sessions/=        | Session storage and retention               |
+| =llm/=             | LLM provider abstraction (Anthropic)        |
+| =daemon/=          | Daemon lifecycle, RPC server, notifications |
+| =agent/=           | Agent loop, tool registration               |
+| =channels/=        | Channel adapters (Discord, Mastodon)        |
+| =runner/=          | WASM runner process                         |
+
+*** CLI Client (crichton-client.asd)
+
+Separate ASDF system and binary for the CLI client:
+
+| Module         | Purpose                              |
+|----------------+--------------------------------------|
+| =client/package= | Package definition (=crichton-client=) |
+| =client/client=  | REPL                                 |
 
 *** TUI Client (=crichton-tui.asd=)
 
 Separate ASDF system and binary for the interactive TUI:
 
-| Module               | Purpose                                     |
-|----------------------+---------------------------------------------|
-| =tui/package=        | Package definition (=crichton-tui=)         |
-| =tui/protocol=       | NDJSON wire protocol, connection, sync helpers |
-| =tui/model=          | Application state (CLOS classes)            |
-| =tui/messages=       | Custom TUI message types (TEA events)       |
-| =tui/theme=          | Colour and style definitions                |
-| =tui/sixel=          | Sixel detection, conversion, image-ref extraction (cl-ppcre) |
-| =tui/render=         | View function, status bar, layout composition |
-| =tui/client=         | TEA update loop, daemon dispatch, key handling, entry points |
+| Module       | Purpose                                                      |
+|--------------+--------------------------------------------------------------|
+| =tui/package=  | Package definition (=crichton-tui=)                            |
+| =tui/protocol= | NDJSON wire protocol, connection, sync helpers               |
+| =tui/model=    | Application state (CLOS classes)                             |
+| =tui/messages= | Custom TUI message types (TEA events)                        |
+| =tui/theme=    | Colour and style definitions                                 |
+| =tui/sixel=    | Sixel detection, conversion, image-ref extraction (cl-ppcre) |
+| =tui/render=   | View function, status bar, layout composition                |
+| =tui/client=   | TEA update loop, daemon dispatch, key handling, entry points |
 
 * Appendix: Common Tasks
 
