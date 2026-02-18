@@ -45,6 +45,31 @@
          id "internal_error"
          (format nil "~A" c))))))
 
+(defun maybe-with-context (manifest fn)
+  "Call FN, optionally wrapping it in a skill context from MANIFEST.
+   When MANIFEST is non-nil, binds *current-skill* for the duration."
+  (if manifest
+      (call-with-skill-context
+       (make-skill-context-from-manifest manifest)
+       fn)
+      (funcall fn)))
+
+(defun invoke-wasm-i32 (wat wasm-b64 export-name args-list nresults)
+  "Run a WASM module using the i32 ABI from either WAT source or base64 bytes."
+  (if wat
+      (crichton/wasm:run-wasm-with-host-fns
+       wat export-name :args args-list :nresults nresults)
+      (crichton/wasm:run-wasm-bytes-with-host-fns
+       (crichton/rpc:base64-to-bytes wasm-b64) export-name
+       :args args-list :nresults nresults)))
+
+(defun invoke-wasm-json (wat wasm-b64 export-name params)
+  "Run a WASM module using the JSON ABI from either WAT source or base64 bytes."
+  (if wat
+      (crichton/wasm:run-wasm-json-call wat export-name params)
+      (crichton/wasm:run-wasm-bytes-json-call
+       (crichton/rpc:base64-to-bytes wasm-b64) export-name params)))
+
 (defun handle-invoke (id msg)
   "Handle an 'invoke' request: load WASM, call export, return result.
     Request fields:
@@ -59,42 +84,17 @@
          (export-name (crichton/rpc:msg-get msg "export"))
          (raw-args (crichton/rpc:msg-get msg "args"))
          (nresults (or (crichton/rpc:msg-get msg "nresults") 1))
-         (manifest (crichton/rpc:msg-get msg "manifest")))
+         (manifest (crichton/rpc:msg-get msg "manifest"))
+         (args-list (when raw-args (coerce raw-args 'list))))
     (unless export-name
       (error "Missing required field: export"))
     (unless (or wat wasm-b64)
       (error "Missing required field: wat or wasm_b64"))
-    (let ((args-list (when raw-args
-                       (coerce raw-args 'list)))
-          (context (when manifest
-                     (make-skill-context-from-manifest manifest))))
-      (let ((result
-              (if context
-                  ;; Run with skill context
-                  (call-with-skill-context context
+    (let ((result (maybe-with-context manifest
                     (lambda ()
-                      (if wat
-                          (crichton/wasm:run-wasm-with-host-fns
-                           wat export-name
-                           :args args-list
-                           :nresults nresults)
-                          (let ((wasm-bytes (crichton/rpc:base64-to-bytes wasm-b64)))
-                            (crichton/wasm:run-wasm-bytes-with-host-fns
-                             wasm-bytes export-name
-                             :args args-list
-                             :nresults nresults)))))
-                  ;; Run without context
-                  (if wat
-                      (crichton/wasm:run-wasm-with-host-fns
-                       wat export-name
-                       :args args-list
-                       :nresults nresults)
-                      (let ((wasm-bytes (crichton/rpc:base64-to-bytes wasm-b64)))
-                        (crichton/wasm:run-wasm-bytes-with-host-fns
-                         wasm-bytes export-name
-                         :args args-list
-                         :nresults nresults))))))
-        (crichton/rpc:make-ok-response id result)))))
+                      (invoke-wasm-i32 wat wasm-b64 export-name
+                                       args-list nresults)))))
+      (crichton/rpc:make-ok-response id result))))
 
 (defun handle-invoke-json (id msg)
   "Handle an 'invoke_json' request using the JSON-through-memory ABI.
@@ -114,25 +114,10 @@ Request fields:
       (error "Missing required field: export"))
     (unless (or wat wasm-b64)
       (error "Missing required field: wat or wasm_b64"))
-    (let ((context (when manifest
-                     (make-skill-context-from-manifest manifest))))
-      (let ((result
-              (if context
-                  (call-with-skill-context context
+    (let ((result (maybe-with-context manifest
                     (lambda ()
-                      (if wat
-                          (crichton/wasm:run-wasm-json-call
-                           wat export-name params)
-                          (let ((wasm-bytes (crichton/rpc:base64-to-bytes wasm-b64)))
-                            (crichton/wasm:run-wasm-bytes-json-call
-                             wasm-bytes export-name params)))))
-                  (if wat
-                      (crichton/wasm:run-wasm-json-call
-                       wat export-name params)
-                      (let ((wasm-bytes (crichton/rpc:base64-to-bytes wasm-b64)))
-                        (crichton/wasm:run-wasm-bytes-json-call
-                         wasm-bytes export-name params))))))
-        (crichton/rpc:make-ok-response id result)))))
+                      (invoke-wasm-json wat wasm-b64 export-name params)))))
+      (crichton/rpc:make-ok-response id result))))
 
 ;;; --- Connection handler ---
 

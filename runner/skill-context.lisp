@@ -37,7 +37,7 @@
       :name (getf skill-info :name)
       :version (getf skill-info :version)
       :signature (getf skill-info :signature)
-      :signed-p nil
+      :signed-p nil  ; Signature verification not yet implemented
       :http-allowlist (getf caps :http-domains)
       :max-memory-mb (or (getf caps :max-memory-mb) 64)
       :max-cpu-seconds (or (getf caps :max-cpu-seconds) 30)
