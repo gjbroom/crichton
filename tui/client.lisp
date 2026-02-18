@@ -438,7 +438,7 @@ a batched command that sends the chat request to the daemon."
                   (make-instance 'tui-model)
                   :alt-screen t
                   :mouse nil)))
-    (start-swank)
+    (start-swank :port 4006)
     (tui:run program)))
 
 (defun one-shot-chat (text)
