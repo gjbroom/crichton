@@ -28,20 +28,20 @@
       (log:warn "Runner already running, killing old process")
       (kill-runner))
     (log:info "Spawning runner via sbcl --eval with socket ~A" sock-path)
-    (setf *runner-socket-path* sock-path
-          *runner-process*
-          (sb-ext:run-program "sbcl"
-                              (list "--noinform" "--non-interactive"
-                                    "--eval" "(require :asdf)"
-                                    "--eval" (format nil "(push #p~S asdf:*central-registry*)"
-                                                    *crichton-source-dir*)
-                                    "--eval" "(asdf:load-system :crichton)"
-                                    "--eval" (format nil "(crichton/runner:main (list \"--socket\" ~S))"
-                                                    sock-path))
-                              :search t
-                              :wait nil
-                              :output *standard-output*
-                              :error *error-output*))
+    (let ((args (list "--noinform" "--non-interactive"
+                      "--eval" "(require :asdf)"
+                      "--eval" (format nil "(push #p~S asdf:*central-registry*)"
+                                       *crichton-source-dir*)
+                      "--eval" "(asdf:load-system :crichton)"
+                      "--eval" (format nil "(crichton/runner:main (list \"--socket\" ~S))"
+                                       sock-path))))
+      (setf *runner-socket-path* sock-path
+            *runner-process*
+            (sb-ext:run-program "sbcl" args
+                                :search t
+                                :wait nil
+                                :output *standard-output*
+                                :error *error-output*)))
     (unless (sb-ext:process-alive-p *runner-process*)
       (error "Runner process failed to start"))
     sock-path))
