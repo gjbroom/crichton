@@ -64,6 +64,34 @@
 
 ;;; --- Discovery ---
 
+(defun register-skill-from-manifest (manifest subdir-path)
+  "Parse a skill manifest plist and register it in *skill-registry*.
+   Returns the skill-entry if successful, NIL if the manifest lacks a name."
+  (let* ((skill-info (getf manifest :skill))
+         (name (getf skill-info :name)))
+    (unless name
+      (return-from register-skill-from-manifest nil))
+    (let* ((version (or (getf skill-info :version) "0.0.0"))
+           (provides-info (getf manifest :provides))
+           (functions (getf provides-info :functions))
+           (entry (make-instance 'skill-entry
+                    :name name
+                    :version version
+                    :description (or (getf skill-info :description) "")
+                    :author (or (getf skill-info :author) "")
+                    :path subdir-path
+                    :manifest manifest
+                    :loaded-p nil
+                    :wasm-bytes nil
+                    :entry-point (if (and functions (consp functions))
+                                     (first functions)
+                                     "main"))))
+      (setf (gethash name *skill-registry*) entry)
+      (register-skill-as-action entry)
+      (log:info "Discovered skill: ~A v~A (~A)"
+                name version (namestring subdir-path))
+      entry)))
+
 (defun discover-skills ()
   "Scan the skills directory for subdirectories containing skill.toml.
    Parse each manifest and populate *skill-registry*.
@@ -73,43 +101,16 @@
     (unless (probe-file skills-dir)
       (log:info "Skills directory does not exist: ~A" (namestring skills-dir))
       (return-from discover-skills 0))
-
     (dolist (subdir-path (uiop:subdirectories skills-dir))
       (let ((manifest-path (merge-pathnames "skill.toml" subdir-path)))
         (when (probe-file manifest-path)
           (handler-case
-              (let* ((manifest (parse-skill-manifest manifest-path))
-                     (skill-info (getf manifest :skill))
-                     (name (getf skill-info :name))
-                     (version (getf skill-info :version))
-                     (description (getf skill-info :description))
-                     (author (getf skill-info :author))
-                     (provides-info (getf manifest :provides))
-                     (functions (getf provides-info :functions))
-                     (entry-point (if (and functions (consp functions))
-                                      (first functions)
-                                      "main")))
-                (when name
-                  (let ((entry (make-instance 'skill-entry
-                                :name name
-                                :version (or version "0.0.0")
-                                :description (or description "")
-                                :author (or author "")
-                                :path subdir-path
-                                :manifest manifest
-                                :loaded-p nil
-                                :wasm-bytes nil
-                                :entry-point entry-point)))
-                    (setf (gethash name *skill-registry*) entry)
-                    (incf count)
-                    ;; Auto-register as schedulable action
-                    (register-skill-as-action entry)
-                    (log:info "Discovered skill: ~A v~A (~A)"
-                              name version (namestring subdir-path)))))
+              (let ((manifest (parse-skill-manifest manifest-path)))
+                (when (register-skill-from-manifest manifest subdir-path)
+                  (incf count)))
             (error (c)
               (log:warn "Failed to load skill manifest ~A: ~A"
                         (namestring manifest-path) c))))))
-
     (log:info "Discovered ~D skill~:P" count)
     count))
 
@@ -211,6 +212,53 @@
 (defvar *max-skill-json-input-bytes* (* 4 1024 1024)
   "Maximum serialized JSON input size in bytes for skill invocation (default 4MB).")
 
+(defun resolve-effective-abi (abi params manifest entry-point)
+  "Resolve the effective ABI (:JSON or :I32) from the caller's ABI spec,
+   the presence of PARAMS, and the manifest's function declaration."
+  (case abi
+    (:json :json)
+    (:i32  :i32)
+    (otherwise
+     (cond
+       (params :json)
+       ((eq :json (manifest-function-abi manifest entry-point)) :json)
+       (t :i32)))))
+
+(defun check-json-input-size (name params)
+  "Serialize PARAMS to JSON and signal an error if it exceeds the size limit.
+   Returns the params (defaulting to an empty hash-table when NIL)."
+  (let* ((params (or params (make-hash-table :test #'equal)))
+         (json-size (length (sb-ext:string-to-octets
+                             (with-output-to-string (s)
+                               (shasht:write-json params s))
+                             :external-format :utf-8))))
+    (when (> json-size *max-skill-json-input-bytes*)
+      (error "Skill ~S JSON input is ~D bytes, exceeding ~D byte limit"
+             name json-size *max-skill-json-input-bytes*))
+    params))
+
+(defun dispatch-skill-call (entry entry-point effective-abi params)
+  "Execute the WASM skill call using the resolved ABI.
+   Returns the skill's result value."
+  (let ((name (skill-entry-name entry)))
+    (ecase effective-abi
+      (:json
+       (let* ((params (check-json-input-size name params))
+              (result (crichton/wasm:run-wasm-bytes-json-call
+                       (skill-entry-wasm-bytes entry)
+                       entry-point
+                       params)))
+         (log:info "Skill ~A returned: ~A" name result)
+         result))
+      (:i32
+       (let ((result (crichton/wasm:run-wasm-bytes-with-host-fns
+                      (skill-entry-wasm-bytes entry)
+                      entry-point
+                      :args nil
+                      :nresults 1)))
+         (log:info "Skill ~A returned: ~A" name result)
+         result)))))
+
 ;;; --- Invocation ---
 
 (defun invoke-skill (name &key entry-point params (abi :auto))
@@ -228,58 +276,20 @@
   (let* ((entry (load-skill name))
          (entry-point (or entry-point (skill-entry-entry-point entry)))
          (manifest (skill-entry-manifest entry))
+         (effective-abi (resolve-effective-abi abi params manifest entry-point))
          (context (crichton/runner:make-skill-context-from-manifest
                    manifest
-                   :secret-resolver #'crichton/credentials:resolve-credential-for-skill))
-         ;; Resolve effective ABI
-         (effective-abi (case abi
-                          (:json :json)
-                          (:i32  :i32)
-                          (otherwise  ; :auto
-                           (cond
-                             (params :json)
-                             ((eq :json (manifest-function-abi manifest entry-point))
-                              :json)
-                             (t :i32))))))
-
-    ;; Guard: params with i32 ABI is an error
+                   :secret-resolver #'crichton/credentials:resolve-credential-for-skill)))
     (when (and params (eq effective-abi :i32))
       (error "Skill ~S entry-point ~S uses i32 ABI but :params were provided. ~
               Declare abi=\"json\" in the manifest or pass :abi :json."
              name entry-point))
-
     (log:info "Invoking skill ~A (entry point: ~A, abi: ~A)"
               name entry-point effective-abi)
-
     (crichton/runner:call-with-skill-context context
       (lambda ()
         (handler-case
-            (ecase effective-abi
-              (:json
-               (let* ((params (or params (make-hash-table :test #'equal)))
-                      ;; Size guard
-                      (json-preview (with-output-to-string (s)
-                                      (shasht:write-json params s)))
-                      (json-size (length (sb-ext:string-to-octets
-                                          json-preview
-                                          :external-format :utf-8))))
-                 (when (> json-size *max-skill-json-input-bytes*)
-                   (error "Skill ~S JSON input is ~D bytes, exceeding ~D byte limit"
-                          name json-size *max-skill-json-input-bytes*))
-                 (let ((result (crichton/wasm:run-wasm-bytes-json-call
-                                (skill-entry-wasm-bytes entry)
-                                entry-point
-                                params)))
-                   (log:info "Skill ~A returned: ~A" name result)
-                   result)))
-              (:i32
-               (let ((result (crichton/wasm:run-wasm-bytes-with-host-fns
-                              (skill-entry-wasm-bytes entry)
-                              entry-point
-                              :args nil
-                              :nresults 1)))
-                 (log:info "Skill ~A returned: ~A" name result)
-                 result)))
+            (dispatch-skill-call entry entry-point effective-abi params)
           (error (c)
             (log:error "Skill ~A failed: ~A" name c)
             (error c)))))))

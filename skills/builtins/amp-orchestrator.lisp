@@ -166,6 +166,44 @@
       (sb-ext:process-close process)
       (list :output stdout :error stderr :exit-code exit-code))))
 
+(defun run-single-test-iteration (test-command repo-path iteration-number)
+  "Run TEST-COMMAND once and return a test-iteration plist.
+   Includes :test-passed, :test-exit-code, :test-output, :test-error,
+   :elapsed-seconds, and stub :fix-attempted/:fix-result fields."
+  (let* ((start (get-internal-real-time))
+         (test-result (run-shell-command test-command :repo-path repo-path))
+         (end (get-internal-real-time))
+         (elapsed (round (/ (- end start)
+                             (float internal-time-units-per-second 1.0d0)))))
+    (list :iteration iteration-number
+          :test-passed (zerop (getf test-result :exit-code))
+          :test-exit-code (getf test-result :exit-code)
+          :test-output (getf test-result :output)
+          :test-error (getf test-result :error)
+          :elapsed-seconds elapsed
+          :fix-attempted nil
+          :fix-result nil)))
+
+(defun attempt-fix (iteration test-command repo-path timeout-seconds)
+  "Invoke Amp to fix a failed test ITERATION. Mutates the iteration plist
+   to record the fix attempt. Returns the fix elapsed seconds."
+  (let* ((fix-prompt
+           (format nil "The following test command failed:~%~%  ~A~%~%~
+                        Exit code: ~D~%~%~
+                        Test output:~%~A~%~%~
+                        Error output:~%~A~%~%~
+                        Please fix the code so the tests pass."
+                   test-command
+                   (getf iteration :test-exit-code)
+                   (getf iteration :test-output)
+                   (getf iteration :test-error)))
+         (fix-result (amp-invoke fix-prompt
+                                :repo-path repo-path
+                                :timeout-seconds timeout-seconds)))
+    (setf (getf iteration :fix-attempted) t
+          (getf iteration :fix-result) (getf fix-result :output))
+    (getf fix-result :elapsed-seconds)))
+
 (defun amp-test-task (test-command &key repo-path fix-failures (max-iterations 3)
                                      (timeout-seconds 300))
   "Run TEST-COMMAND and optionally use Amp to fix failures.
@@ -175,50 +213,24 @@
         (total-elapsed 0)
         (success nil))
     (dotimes (i max-iterations)
-      (let* ((start (get-internal-real-time))
-             (test-result (run-shell-command test-command :repo-path repo-path))
-             (end (get-internal-real-time))
-             (elapsed (round (/ (- end start)
-                                (float internal-time-units-per-second 1.0d0))))
-             (test-exit (getf test-result :exit-code))
-             (test-output (getf test-result :output))
-             (test-error (getf test-result :error))
-             (passed (zerop test-exit)))
-        (incf total-elapsed elapsed)
-        (let ((iteration (list :iteration (1+ i)
-                               :test-passed passed
-                               :test-exit-code test-exit
-                               :test-output test-output
-                               :test-error test-error
-                               :elapsed-seconds elapsed
-                               :fix-attempted nil
-                               :fix-result nil)))
-          (cond
-            (passed
-             (setf success t)
-             (push iteration iterations)
-             (log:info "Tests passed on iteration ~D" (1+ i))
-             (return))
-            ((and fix-failures (< i (1- max-iterations)))
-             (log:info "Tests failed (iteration ~D), invoking Amp to fix" (1+ i))
-             (let* ((fix-prompt
-                      (format nil "The following test command failed:~%~%  ~A~%~%~
-                                   Exit code: ~D~%~%~
-                                   Test output:~%~A~%~%~
-                                   Error output:~%~A~%~%~
-                                   Please fix the code so the tests pass."
-                              test-command test-exit test-output test-error))
-                    (fix-result (amp-invoke fix-prompt
-                                           :repo-path repo-path
-                                           :timeout-seconds timeout-seconds)))
-               (incf total-elapsed (getf fix-result :elapsed-seconds))
-               (setf (getf iteration :fix-attempted) t
-                     (getf iteration :fix-result) (getf fix-result :output))
-               (push iteration iterations)))
-            (t
-             (push iteration iterations)
-             (log:info "Tests failed on final iteration ~D" (1+ i))
-             (return))))))
+      (let ((iteration (run-single-test-iteration
+                        test-command repo-path (1+ i))))
+        (incf total-elapsed (getf iteration :elapsed-seconds))
+        (cond
+          ((getf iteration :test-passed)
+           (setf success t)
+           (push iteration iterations)
+           (log:info "Tests passed on iteration ~D" (1+ i))
+           (return))
+          ((and fix-failures (< i (1- max-iterations)))
+           (log:info "Tests failed (iteration ~D), invoking Amp to fix" (1+ i))
+           (incf total-elapsed
+                 (attempt-fix iteration test-command repo-path timeout-seconds))
+           (push iteration iterations))
+          (t
+           (push iteration iterations)
+           (log:info "Tests failed on final iteration ~D" (1+ i))
+           (return)))))
     (let ((final-iterations (nreverse iterations)))
       (list :success success
             :iterations final-iterations
