@@ -646,7 +646,7 @@ argument extraction, error handling, and null-pointer return.
 
 The argument bindings are symbols bound to successive =wasmtime-val-i32=
 extractions.  The body has access to =caller=, =results=, and =nresults=.
-The macro generates the =nargs >= N= check automatically from the binding count.
+The macro generates the =nargs > N= check automatically from the binding count.
 
 *** =with-wasm-host-environment=
 
@@ -2234,6 +2234,10 @@ bot_token_credential = "discord-bot-token"
 - =threshold_low= (integer): Low battery warning percentage
 - =threshold_critical= (integer): Critical battery percentage
 - =check_interval_seconds= (integer): Poll interval
+
+AC adapter status is detected via =ac-adapter-online-p= (reads
+=ACAD/online= from sysfs).  The =battery-status-plist= includes an
+=:ac-online= key and =battery-report= prints the AC power state.
 
 **** =[discord]=
 

@@ -50,6 +50,16 @@
          (type-str (read-sysfs-file (namestring type-file))))
     (and type-str (string-equal type-str "Battery"))))
 
+(defun ac-adapter-online-p ()
+  "Return T if the system is on AC power, NIL if on battery or unknown.
+   Reads the ACAD adapter status from sysfs."
+  (let ((online-path (merge-pathnames "ACAD/online" ; Debian-specific
+                                      (pathname *battery-power-supply-path*))))
+    (handler-case
+        (let ((val (read-sysfs-file (namestring online-path))))
+          (and val (string-equal val "1")))
+      (error () nil))))
+
 (defun list-batteries ()
   "List all battery devices found in /sys/class/power_supply/.
    Returns a list of battery device names (strings), or NIL if none found."
@@ -188,9 +198,10 @@
 
 (defun battery-status-plist ()
   "Return battery status as a plist. Suitable for programmatic use.
-   Keys: :has-battery, :batteries (list of battery snapshot plists)."
+   Keys: :has-battery, :ac-online, :batteries (list of battery snapshot plists)."
   (let ((batteries (all-batteries-snapshot)))
     (list :has-battery (not (null batteries))
+          :ac-online (ac-adapter-online-p)
           :batteries batteries)))
 
 ;;; --- Public interface: battery-report (human-readable) ---
@@ -200,7 +211,9 @@
   (let ((status (battery-status-plist)))
     (if (getf status :has-battery)
         (let ((batteries (getf status :batteries)))
-          (format stream "~&System has ~D batter~:@P:~%" (length batteries))
+          (format stream "~&AC power: ~A~%"
+                  (if (getf status :ac-online) "Online" "Offline"))
+          (format stream "System has ~D batter~:@P:~%" (length batteries))
           (dolist (bat batteries)
             (format-battery bat stream)))
         (format stream "~&No battery detected.~%"))
@@ -221,32 +234,30 @@
       ;; Use defaults
       (t *battery-default-thresholds*))))
 
+(defun find-crossed-threshold (capacity thresholds)
+  "Return the highest threshold that CAPACITY is at or below, or NIL.
+   THRESHOLDS must be sorted descending."
+  (when capacity
+    (dolist (threshold thresholds)
+      (when (<= capacity threshold)
+        (return threshold)))))
+
 (defun battery-check-thresholds ()
   "Check all batteries against configured thresholds.
    Returns a plist (:alert-needed T/NIL, :batteries (list), :lowest-capacity N).
    If alert is needed, includes :threshold-crossed N."
-  (let ((batteries (all-batteries-snapshot))
-        (thresholds (sort (copy-list (battery-thresholds)) #'>))
-        (lowest-capacity nil)
-        (threshold-crossed nil))
+  (let ((batteries (all-batteries-snapshot)))
     (unless batteries
       (return-from battery-check-thresholds
         (list :alert-needed nil :batteries nil :lowest-capacity nil)))
-    ;; Find the lowest capacity across all batteries
-    (dolist (bat batteries)
-      (let ((cap (getf bat :capacity)))
-        (when (and cap (or (null lowest-capacity) (< cap lowest-capacity)))
-          (setf lowest-capacity cap))))
-    ;; Determine if we should alert
-    (when lowest-capacity
-      (dolist (threshold thresholds)
-        (when (<= lowest-capacity threshold)
-          (setf threshold-crossed threshold)
-          (return))))
-    ;; Only alert if we crossed a NEW threshold (prevent spam)
-    (let ((alert-needed (and threshold-crossed
-                             (or (null *battery-last-alert-level*)
-                                 (< lowest-capacity *battery-last-alert-level*)))))
+    (let* ((thresholds (sort (copy-list (battery-thresholds)) #'>))
+           (lowest-capacity (loop for bat in batteries
+                                  for cap = (getf bat :capacity)
+                                  when cap minimize cap))
+           (threshold-crossed (find-crossed-threshold lowest-capacity thresholds))
+           (alert-needed (and threshold-crossed
+                              (or (null *battery-last-alert-level*)
+                                  (< lowest-capacity *battery-last-alert-level*)))))
       (when alert-needed
         (setf *battery-last-alert-level* lowest-capacity))
       (list :alert-needed alert-needed
