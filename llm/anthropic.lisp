@@ -300,6 +300,155 @@
     ((string= reason-str "stop_sequence") :stop-sequence)
     (t :unknown)))
 
+;;; --- Stream accumulator state ---
+
+(defclass stream-state ()
+  ((text-accum      :initform (make-string-output-stream)
+                    :accessor sstate-text-accum)
+   (content-blocks  :initform nil
+                    :accessor sstate-content-blocks)
+   (msg-id          :initform nil :accessor sstate-msg-id)
+   (msg-model       :initform nil :accessor sstate-msg-model)
+   (stop-reason     :initform nil :accessor sstate-stop-reason)
+   (input-tokens    :initform 0   :accessor sstate-input-tokens)
+   (output-tokens   :initform 0   :accessor sstate-output-tokens)
+   (current-block-type :initform nil :accessor sstate-current-block-type)
+   (tool-blocks     :initform (make-hash-table)
+                    :accessor sstate-tool-blocks)
+   (tool-json-parts :initform (make-hash-table)
+                    :accessor sstate-tool-json-parts)))
+
+;;; --- SSE event dispatch ---
+
+(defun sse-event-keyword (event-type)
+  "Convert an SSE event-type string to a dispatch keyword."
+  (intern (substitute #\- #\_ (string-upcase event-type)) :keyword))
+
+(defgeneric handle-sse-event (state event json on-event)
+  (:documentation "Handle a single parsed SSE event, updating STATE.
+   EVENT is a keyword like :MESSAGE-START.  ON-EVENT is the user callback."))
+
+(defmethod handle-sse-event (state event json on-event)
+  "Default: ignore unknown SSE event types."
+  (declare (ignore state json on-event event)))
+
+(defmethod handle-sse-event ((s stream-state) (event (eql :message-start))
+                             json on-event)
+  (declare (ignore on-event))
+  (let ((msg (gethash "message" json)))
+    (when msg
+      (setf (sstate-msg-id s) (gethash "id" msg))
+      (setf (sstate-msg-model s) (gethash "model" msg))
+      (let ((usage (gethash "usage" msg)))
+        (when usage
+          (setf (sstate-input-tokens s)
+                (or (gethash "input_tokens" usage) 0)))))))
+
+(defmethod handle-sse-event ((s stream-state) (event (eql :content-block-start))
+                             json on-event)
+  (declare (ignore on-event))
+  (let* ((index (gethash "index" json))
+         (cb (gethash "content_block" json))
+         (btype (when cb (gethash "type" cb))))
+    (setf (sstate-current-block-type s) btype)
+    (when (and cb (string= btype "tool_use"))
+      (setf (gethash index (sstate-tool-blocks s))
+            (list :type :tool-use
+                  :id (gethash "id" cb)
+                  :name (gethash "name" cb)
+                  :input nil))
+      (setf (gethash index (sstate-tool-json-parts s)) nil))))
+
+(defmethod handle-sse-event ((s stream-state) (event (eql :content-block-delta))
+                             json on-event)
+  (let* ((delta (gethash "delta" json))
+         (dtype (when delta (gethash "type" delta))))
+    (cond
+      ((and delta (string= dtype "text_delta"))
+       (let ((text (gethash "text" delta)))
+         (when text
+           (write-string text (sstate-text-accum s))
+           (funcall on-event (list :type :delta :text text)))))
+      ((and delta (string= dtype "input_json_delta"))
+       (let ((partial (gethash "partial_json" delta))
+             (idx (gethash "index" json)))
+         (when partial
+           (push partial (gethash idx (sstate-tool-json-parts s)))))))))
+
+(defun %finalize-tool-block (state idx)
+  "Finalize a tool-use content block at IDX, parsing accumulated JSON fragments."
+  (let* ((parts (nreverse (gethash idx (sstate-tool-json-parts state))))
+         (full-json (format nil "~{~A~}" parts))
+         (input (if (plusp (length full-json))
+                    (handler-case (shasht:read-json full-json)
+                      (error () (make-hash-table :test #'equal)))
+                    (make-hash-table :test #'equal)))
+         (block (gethash idx (sstate-tool-blocks state))))
+    (setf (getf block :input) input)
+    (push block (sstate-content-blocks state))))
+
+(defun %finalize-text-block (state)
+  "Finalize the current text content block, draining the text accumulator."
+  (let ((text-so-far (get-output-stream-string (sstate-text-accum state))))
+    (when (plusp (length text-so-far))
+      (push (list :type :text :text text-so-far)
+            (sstate-content-blocks state)))))
+
+(defmethod handle-sse-event ((s stream-state) (event (eql :content-block-stop))
+                             json on-event)
+  (declare (ignore on-event))
+  (let ((idx (gethash "index" json)))
+    (cond
+      ((gethash idx (sstate-tool-blocks s))
+       (%finalize-tool-block s idx))
+      ((string= (sstate-current-block-type s) "text")
+       (%finalize-text-block s)))))
+
+(defmethod handle-sse-event ((s stream-state) (event (eql :message-delta))
+                             json on-event)
+  (declare (ignore on-event))
+  (let ((delta (gethash "delta" json))
+        (usage (gethash "usage" json)))
+    (when delta
+      (setf (sstate-stop-reason s)
+            (parse-stop-reason (gethash "stop_reason" delta))))
+    (when usage
+      (setf (sstate-output-tokens s)
+            (or (gethash "output_tokens" usage) 0)))))
+
+(defmethod handle-sse-event ((s stream-state) (event (eql :message-stop))
+                             json on-event)
+  (declare (ignore json))
+  (funcall on-event
+           (list :type :done
+                 :stop-reason (sstate-stop-reason s)
+                 :usage (list :input-tokens (sstate-input-tokens s)
+                              :output-tokens (sstate-output-tokens s))
+                 :id (sstate-msg-id s)
+                 :model (sstate-msg-model s))))
+
+;;; --- Stream result assembly ---
+
+(defun stream-state-result (state)
+  "Build the final response plist from accumulated stream state."
+  (let ((full-text (get-output-stream-string (sstate-text-accum state))))
+    (when (plusp (length full-text))
+      (push (list :type :text :text full-text)
+            (sstate-content-blocks state))))
+  (let* ((blocks (nreverse (sstate-content-blocks state)))
+         (stop (or (sstate-stop-reason state) :end-turn))
+         (result (list :content blocks
+                       :stop-reason stop
+                       :usage (list :input-tokens (sstate-input-tokens state)
+                                    :output-tokens (sstate-output-tokens state))
+                       :id (sstate-msg-id state)
+                       :model (sstate-msg-model state))))
+    (log:info "Anthropic streaming response: tokens=~A+~A stop=~A"
+              (sstate-input-tokens state) (sstate-output-tokens state) stop)
+    result))
+
+;;; --- stream-message method ---
+
 (defmethod stream-message ((provider anthropic-provider) messages on-event
                            &key system max-tokens temperature tools tool-choice)
   (let* ((normalized (normalize-messages messages))
@@ -353,17 +502,7 @@
                             (close response-stream)
                             (get-output-stream-string buf))))
             (classify-anthropic-error status body-str provider)))
-        (let ((text-accum (make-string-output-stream))
-              (content-blocks nil)
-              (msg-id nil)
-              (msg-model nil)
-              (stop-reason nil)
-              (input-tokens 0)
-              (output-tokens 0)
-              ;; Tool use accumulation
-              (tool-blocks (make-hash-table))  ; index → plist
-              (tool-json-parts (make-hash-table)) ; index → list of strings
-              (current-block-type nil))
+        (let ((state (make-instance 'stream-state)))
           (unwind-protect
                (let ((char-stream
                        (flexi-streams:make-flexi-stream
@@ -373,119 +512,11 @@
                   (lambda (event-type data)
                     (handler-case
                         (let ((json (shasht:read-json data)))
-                          (cond
-                            ;; message_start: extract id, model, usage
-                            ((string= event-type "message_start")
-                             (let ((msg (gethash "message" json)))
-                               (when msg
-                                 (setf msg-id (gethash "id" msg))
-                                 (setf msg-model (gethash "model" msg))
-                                 (let ((usage (gethash "usage" msg)))
-                                   (when usage
-                                     (setf input-tokens
-                                           (or (gethash "input_tokens" usage) 0)))))))
-
-                            ;; content_block_start: track block type
-                            ((string= event-type "content_block_start")
-                             (let* ((index (gethash "index" json))
-                                    (cb (gethash "content_block" json))
-                                    (btype (when cb (gethash "type" cb))))
-                               (setf current-block-type btype)
-                               (when (and cb (string= btype "tool_use"))
-                                 (setf (gethash index tool-blocks)
-                                       (list :type :tool-use
-                                             :id (gethash "id" cb)
-                                             :name (gethash "name" cb)
-                                             :input nil))
-                                 (setf (gethash index tool-json-parts) nil))))
-
-                            ;; content_block_delta: text or tool input
-                            ((string= event-type "content_block_delta")
-                             (let* ((delta (gethash "delta" json))
-                                    (dtype (when delta (gethash "type" delta))))
-                               (cond
-                                 ((and delta (string= dtype "text_delta"))
-                                  (let ((text (gethash "text" delta)))
-                                    (when text
-                                      (write-string text text-accum)
-                                      (funcall on-event
-                                               (list :type :delta :text text)))))
-                                 ((and delta (string= dtype "input_json_delta"))
-                                  (let ((partial (gethash "partial_json" delta))
-                                        (idx (gethash "index" json)))
-                                    (when partial
-                                      (push partial
-                                            (gethash idx tool-json-parts))))))))
-
-                            ;; content_block_stop: finalize blocks
-                            ((string= event-type "content_block_stop")
-                             (let ((idx (gethash "index" json)))
-                               (cond
-                                 ;; Tool use block: parse accumulated JSON
-                                 ((gethash idx tool-blocks)
-                                  (let* ((parts (nreverse
-                                                 (gethash idx tool-json-parts)))
-                                         (full-json
-                                           (format nil "~{~A~}" parts))
-                                         (input
-                                           (if (plusp (length full-json))
-                                               (handler-case
-                                                   (shasht:read-json full-json)
-                                                 (error ()
-                                                   (make-hash-table
-                                                    :test #'equal)))
-                                               (make-hash-table
-                                                :test #'equal)))
-                                         (block (gethash idx tool-blocks)))
-                                    (setf (getf block :input) input)
-                                    (push block content-blocks)))
-                                 ;; Text block: push now to maintain correct ordering
-                                 ((string= current-block-type "text")
-                                  (let ((text-so-far (get-output-stream-string text-accum)))
-                                    (when (plusp (length text-so-far))
-                                      (push (list :type :text :text text-so-far)
-                                            content-blocks)))))))
-
-                            ;; message_delta: stop reason + output tokens
-                            ((string= event-type "message_delta")
-                             (let ((delta (gethash "delta" json))
-                                   (usage (gethash "usage" json)))
-                               (when delta
-                                 (setf stop-reason
-                                       (parse-stop-reason
-                                        (gethash "stop_reason" delta))))
-                               (when usage
-                                 (setf output-tokens
-                                       (or (gethash "output_tokens" usage)
-                                           0)))))
-
-                            ;; message_stop: emit done event
-                            ((string= event-type "message_stop")
-                             (funcall on-event
-                                      (list :type :done
-                                            :stop-reason stop-reason
-                                            :usage (list :input-tokens
-                                                         input-tokens
-                                                         :output-tokens
-                                                         output-tokens)
-                                            :id msg-id
-                                            :model msg-model)))))
+                          (handle-sse-event state
+                                            (sse-event-keyword event-type)
+                                            json on-event))
                       (error (c)
                         (log:warn "Error processing SSE event ~A: ~A"
                                   event-type c))))))
             (close response-stream))
-          ;; Build the final text block if we accumulated any text
-          (let ((full-text (get-output-stream-string text-accum)))
-            (when (plusp (length full-text))
-              (push (list :type :text :text full-text) content-blocks)))
-          ;; Return blocks in order (they were pushed in reverse)
-          (setf content-blocks (nreverse content-blocks))
-          (let ((result (list :content content-blocks
-                              :stop-reason (or stop-reason :end-turn)
-                              :usage (list :input-tokens input-tokens
-                                           :output-tokens output-tokens)
-                              :id msg-id
-                              :model msg-model)))
-            (log:info "Anthropic streaming response: tokens=~A+~A stop=~A"
-                      input-tokens output-tokens (or stop-reason :end-turn))
-            result))))))
+          (stream-state-result state))))))
