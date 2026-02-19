@@ -65,12 +65,6 @@
            #:remove-subscriber
            #:notification-post))
 
-(defpackage #:crichton/cli
-  (:use #:cl)
-  (:export #:main
-           #:remote-eval
-           #:remote-eval-quiet))
-
 (defpackage #:crichton/rpc
   (:use #:cl)
   (:export #:*max-message-bytes*
