@@ -14,16 +14,46 @@
   "The currently executing skill context (bound during skill invocation).")
 
 (defclass skill-context ()
-  ((id :initarg :id :accessor skill-context-id :initform "" :type string)
-   (name :initarg :name :accessor skill-context-name :initform "" :type string)
-   (version :initarg :version :accessor skill-context-version :initform "" :type string)
-   (signature :initarg :signature :accessor skill-context-signature :initform "" :type string)
-   (signed-p :initarg :signed-p :accessor skill-context-signed-p :initform nil :type boolean)
-   (http-allowlist :initarg :http-allowlist :accessor skill-context-http-allowlist :initform nil :type list)
-   (max-memory-mb :initarg :max-memory-mb :accessor skill-context-max-memory-mb :initform 64 :type integer)
-   (max-cpu-seconds :initarg :max-cpu-seconds :accessor skill-context-max-cpu-seconds :initform 30 :type integer)
-   (kv-store :initarg :kv-store :accessor skill-context-kv-store :initform (make-hash-table :test #'equal) :type hash-table)
-   (secret-resolver :initarg :secret-resolver :accessor skill-context-secret-resolver :initform nil :type (or null function)))
+  ((id                        :initarg :id
+                              :accessor skill-context-id
+                              :initform ""
+                              :type string)
+   (name                      :initarg :name
+                              :accessor skill-context-name
+                              :initform ""
+                              :type string)
+   (version                   :initarg :version
+                              :accessor skill-context-version
+                              :initform ""
+                              :type string)
+   (signature                 :initarg :signature
+                              :accessor skill-context-signature
+                              :initform ""
+                              :type string)
+   (signed-p                  :initarg :signed-p
+                              :accessor skill-context-signed-p
+                              :initform nil
+                              :type boolean)
+   (http-allowlist            :initarg :http-allowlist
+                              :accessor skill-context-http-allowlist
+                              :initform nil
+                              :type list)
+   (max-memory-mb             :initarg :max-memory-mb
+                              :accessor skill-context-max-memory-mb
+                              :initform 64
+                              :type integer)
+   (max-cpu-seconds           :initarg :max-cpu-seconds
+                              :accessor skill-context-max-cpu-seconds
+                              :initform 30
+                              :type integer)
+   (kv-store                  :initarg :kv-store
+                              :accessor skill-context-kv-store
+                              :initform (make-hash-table :test #'equal)
+                              :type hash-table)
+   (secret-resolver           :initarg :secret-resolver
+                              :accessor skill-context-secret-resolver
+                              :initform nil
+                              :type (or null function)))
   (:documentation "Metadata and constraints for a running skill instance."))
 
 (defun make-skill-context-from-manifest (manifest &key secret-resolver)
