@@ -99,10 +99,12 @@ each message into PROGRAM."
                                   :height (- (model-height model) 3))
           (model-status-text model) "Connected")
     (let ((program tui:*current-program*))
-      (lambda ()
-        (start-daemon-reader stream program)
-        (write-message stream (make-subscribe-request))
-        nil))))
+      (tui:batch
+       (lambda ()
+         (start-daemon-reader stream program)
+         (write-message stream (make-subscribe-request))
+         nil)
+       (clock-tick-cmd)))))
 
 ;;; --- Local command handling ---
 
@@ -226,6 +228,16 @@ a batched command that sends the chat request to the daemon."
                                   text
                                   (model-session-id model))
                    (tui.spinner:spinner-init spinner)))))
+
+;;; --- Update: clock tick
+
+(defun clock-tick-cmd ()
+  (lambda ()
+    (sleep 10)         ; update every 10 seconds — matches your HH:MM resolution
+    (make-instance 'clock-tick-msg)))
+
+(defmethod tui:update-message ((model tui-model) (msg clock-tick-msg))
+  (values model (clock-tick-cmd)))  ; schedule the next tick, view redraws automatically
 
 ;;; --- Update: key-msg ---
 

@@ -6,6 +6,10 @@
 
 (in-package #:crichton-tui)
 
+;;; --- Clock tick (drives title bar time update) ---
+
+(tui:defmessage clock-tick-msg ())
+
 ;;; --- Daemon response (chat reply or error) ---
 
 (tui:defmessage daemon-response-msg
