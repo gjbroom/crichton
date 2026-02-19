@@ -495,23 +495,25 @@
          status (%drain-stream-to-string response-stream) provider))
       response-stream)))
 
+(defun %dispatch-sse-event (state on-event event-type data)
+  "Parse DATA as JSON and dispatch to the appropriate HANDLE-SSE-EVENT method.
+   Logs and swallows errors so a single bad event does not abort the stream."
+  (handler-case
+      (let ((json (shasht:read-json data)))
+        (handle-sse-event state (sse-event-keyword event-type) json on-event))
+    (error (c)
+      (log:warn "Error processing SSE event ~A: ~A" event-type c))))
+
 (defun %process-sse-stream (response-stream state on-event)
   "Read SSE events from RESPONSE-STREAM, dispatching to STATE methods.
    Ensures RESPONSE-STREAM is closed on exit."
   (unwind-protect
        (let ((char-stream (flexi-streams:make-flexi-stream
-                           response-stream :external-format :utf-8)))
+                            response-stream :external-format :utf-8)))
          (parse-sse-events
           char-stream
           (lambda (event-type data)
-            (handler-case
-                (let ((json (shasht:read-json data)))
-                  (handle-sse-event state
-                                    (sse-event-keyword event-type)
-                                    json on-event))
-              (error (c)
-                (log:warn "Error processing SSE event ~A: ~A"
-                          event-type c))))))
+            (%dispatch-sse-event state on-event event-type data))))
     (close response-stream)))
 
 ;;; --- stream-message method ---
