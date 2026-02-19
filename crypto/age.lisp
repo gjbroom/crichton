@@ -55,21 +55,22 @@
 
 ;;; --- Process stream helpers ---
 
+(defun read-stream-string (stream)
+  "Read all lines from STREAM and return a trimmed string."
+  (string-trim '(#\Newline #\Return #\Space)
+               (with-output-to-string (s)
+                 (loop for line = (read-line stream nil nil)
+                       while line do (write-line line s)))))
+
 (defun read-process-output-string (process)
   "Read the full output of PROCESS as a trimmed string.
    PROCESS must have been created with :output :stream."
-  (string-trim '(#\Newline #\Return #\Space)
-               (with-output-to-string (s)
-                 (loop for line = (read-line (sb-ext:process-output process) nil nil)
-                       while line do (write-line line s)))))
+  (read-stream-string (sb-ext:process-output process)))
 
 (defun read-process-error-string (process)
   "Read the full error output of PROCESS as a trimmed string.
    PROCESS must have been created with :error :stream."
-  (string-trim '(#\Newline #\Return #\Space)
-               (with-output-to-string (s)
-                 (loop for line = (read-line (sb-ext:process-error process) nil nil)
-                       while line do (write-line line s)))))
+  (read-stream-string (sb-ext:process-error process)))
 
 (defun read-all-bytes (stream)
   "Read all bytes from a binary STREAM into a simple octet vector."
