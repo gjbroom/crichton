@@ -29,12 +29,7 @@
                                            :error nil
                                            :wait t))
              (output (when (zerop (sb-ext:process-exit-code process))
-                       (string-trim '(#\Newline #\Return #\Space)
-                                    (with-output-to-string (s)
-                                      (loop for line = (read-line
-                                                        (sb-ext:process-output process)
-                                                        nil nil)
-                                            while line do (write-string line s)))))))
+                       (read-process-output-string process))))
         (sb-ext:process-close process)
         (when (and output (plusp (length output)) (probe-file output))
           output))
