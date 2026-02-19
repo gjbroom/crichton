@@ -447,6 +447,73 @@
               (sstate-input-tokens state) (sstate-output-tokens state) stop)
     result))
 
+;;; --- Streaming HTTP helpers ---
+
+(defun %extract-dex-error-body (condition)
+  "Extract a string body from a dexador HTTP-REQUEST-FAILED condition."
+  (let ((body (dex:response-body condition)))
+    (cond
+      ((stringp body) body)
+      ((streamp body)
+       (let ((octets (flexi-streams:with-output-to-sequence (out)
+                       (loop for byte = (read-byte body nil nil)
+                             while byte do (write-byte byte out)))))
+         (ignore-errors (close body))
+         (flexi-streams:octets-to-string octets :external-format :utf-8)))
+      (t (format nil "~A" body)))))
+
+(defun %drain-stream-to-string (stream)
+  "Read all lines from STREAM into a string, then close it."
+  (let ((buf (make-string-output-stream)))
+    (loop for line = (read-line stream nil nil)
+          while line do (write-line line buf))
+    (close stream)
+    (get-output-stream-string buf)))
+
+(defun %anthropic-streaming-post (provider json-body)
+  "POST JSON-BODY to the Anthropic Messages API with streaming enabled.
+   Returns the response stream.  Signals LLM conditions on failure."
+  (let ((url (format nil "~A/v1/messages" (anthropic-api-base provider))))
+    (multiple-value-bind (response-stream status)
+        (handler-case
+            (dex:post url
+              :headers (anthropic-headers (anthropic-api-key provider))
+              :content json-body
+              :want-stream t
+              :force-binary t
+              :read-timeout 120)
+          (dex:http-request-failed (c)
+            (classify-anthropic-error
+             (dex:response-status c)
+             (%extract-dex-error-body c)
+             provider))
+          (error (c)
+            (error 'llm-error :provider provider
+                              :message (format nil "HTTP request failed: ~A" c))))
+      (unless (= status 200)
+        (classify-anthropic-error
+         status (%drain-stream-to-string response-stream) provider))
+      response-stream)))
+
+(defun %process-sse-stream (response-stream state on-event)
+  "Read SSE events from RESPONSE-STREAM, dispatching to STATE methods.
+   Ensures RESPONSE-STREAM is closed on exit."
+  (unwind-protect
+       (let ((char-stream (flexi-streams:make-flexi-stream
+                           response-stream :external-format :utf-8)))
+         (parse-sse-events
+          char-stream
+          (lambda (event-type data)
+            (handler-case
+                (let ((json (shasht:read-json data)))
+                  (handle-sse-event state
+                                    (sse-event-keyword event-type)
+                                    json on-event))
+              (error (c)
+                (log:warn "Error processing SSE event ~A: ~A"
+                          event-type c))))))
+    (close response-stream)))
+
 ;;; --- stream-message method ---
 
 (defmethod stream-message ((provider anthropic-provider) messages on-event
@@ -466,57 +533,11 @@
                   :tools tools
                   :tool-choice tool-choice
                   :stream t))
-           (json-body (shasht:write-json body nil))
-           (url (format nil "~A/v1/messages" (anthropic-api-base provider))))
+           (json-body (shasht:write-json body nil)))
       (log:info "Anthropic streaming request: model=~A max_tokens=~A"
                 (provider-model provider)
                 (or max-tokens *anthropic-default-max-tokens*))
-      (multiple-value-bind (response-stream status)
-          (handler-case
-              (dex:post url
-                :headers (anthropic-headers (anthropic-api-key provider))
-                :content json-body
-                :want-stream t
-                :force-binary t
-                :read-timeout 120)
-            (dex:http-request-failed (c)
-              (let* ((body (dex:response-body c))
-                     (body-str (cond
-                                 ((stringp body) body)
-                                 ((streamp body)
-                                  (let ((octets (flexi-streams:with-output-to-sequence (out)
-                                                  (loop for byte = (read-byte body nil nil)
-                                                        while byte do (write-byte byte out)))))
-                                    (ignore-errors (close body))
-                                    (flexi-streams:octets-to-string octets :external-format :utf-8)))
-                                 (t (format nil "~A" body)))))
-                (classify-anthropic-error
-                 (dex:response-status c) body-str provider)))
-            (error (c)
-              (error 'llm-error :provider provider
-                                :message (format nil "HTTP request failed: ~A" c))))
-        (unless (= status 200)
-          (let ((body-str (let ((buf (make-string-output-stream)))
-                            (loop for line = (read-line response-stream nil nil)
-                                  while line do (write-line line buf))
-                            (close response-stream)
-                            (get-output-stream-string buf))))
-            (classify-anthropic-error status body-str provider)))
-        (let ((state (make-instance 'stream-state)))
-          (unwind-protect
-               (let ((char-stream
-                       (flexi-streams:make-flexi-stream
-                        response-stream :external-format :utf-8)))
-                 (parse-sse-events
-                  char-stream
-                  (lambda (event-type data)
-                    (handler-case
-                        (let ((json (shasht:read-json data)))
-                          (handle-sse-event state
-                                            (sse-event-keyword event-type)
-                                            json on-event))
-                      (error (c)
-                        (log:warn "Error processing SSE event ~A: ~A"
-                                  event-type c))))))
-            (close response-stream))
-          (stream-state-result state))))))
+      (let ((response-stream (%anthropic-streaming-post provider json-body))
+            (state (make-instance 'stream-state)))
+        (%process-sse-stream response-stream state on-event)
+        (stream-state-result state)))))
