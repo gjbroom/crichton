@@ -390,6 +390,4 @@
            #:skill-kv-store
            #:skill-resolve-secret))
 
-(defpackage #:crichton
-  (:use #:cl)
-  (:export #:main))
+
