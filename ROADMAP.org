@@ -105,7 +105,8 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
     - [X] Callable from SWANK REPL
     - [X] Graceful handling of partial reload failures
 
-*** TODO [#B] Scheduling Enhancements
+*** TODO [#B] Scheduling Enhanceme
+nts
     - [ ] User-facing task creation interface (cricht-c44)
     - [ ] Agent tool for schedule management
     - [ ] List/modify/delete scheduled tasks
@@ -290,7 +291,7 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
 
 * Code Quality & Refactoring
 
-** TODO Technical Debt [1/7]
+** TODO Technical Debt [1/8]
 
 *** DONE [#B] Convert defstruct to defclass for hot-reload safety
     CLOSED: [2026-02-12 Thu]
@@ -311,12 +312,15 @@ See [[file:AGENT_SPEC.md][AGENT_SPEC.md]] for the full design specification.
     - [ ] Reduce nesting in handle-message-create
 
 *** TODO [#C] Refactor WASM engine functions
+    - [X] Extract with-wasm-simple-module macro from run-wasm-module (55→3 lines)
+    - [ ] Unify with-wasm-simple-module and with-wasm-host-environment into call-with-wasm-environment (cricht-g6h)
+    - [ ] Make defhost-callback generate testable -impl functions (cricht-g6h)
+    - [ ] Deduplicate call-i32-export / call-export-by-name (cricht-g6h)
     - [ ] De-duplicate run-wasm-with-host-fns variants (cricht-sei)
     - [ ] Extract shared host-fn registration
-    - [ ] Reduce nesting (8+ levels currently)
 
 *** TODO [#C] Refactor ephemeris calculations
-    - [ ] Split sunrise-sunset-for-date into step helpers (cricht-wbd)
+    - [X] Split sunrise-sunset-for-date into step helpers (cricht-wbd)
     - [ ] Improve testability of astronomical algorithms
 
 *** TODO [#C] Improve error handling
