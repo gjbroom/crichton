@@ -8,13 +8,21 @@
   "The active LLM provider instance. Set during daemon initialization.")
 
 (defun resolve-api-key (credential-name &optional (field :api-key))
-  "Resolve an API key from the credential store."
-  (handler-case
-      (crichton/credentials:resolve-credential credential-name field)
-    (error (c)
-      (error 'llm-error :provider nil
-                         :message (format nil "Cannot resolve API key ~S: ~A"
-                                         credential-name c)))))
+  "Resolve an API key from the credential store.
+   Offers a :USE-VALUE restart to supply the key interactively."
+  (restart-case
+      (handler-case
+          (crichton/credentials:resolve-credential credential-name field)
+        (error (c)
+          (error 'llm-error :provider nil
+                             :message (format nil "Cannot resolve API key ~S: ~A"
+                                             credential-name c))))
+    (:use-value (api-key)
+      :report (lambda (s) (format s "Supply API key for ~A" credential-name))
+      :interactive (lambda ()
+                     (format *query-io* "~&Enter API key: ")
+                     (list (read-line *query-io*)))
+      api-key)))
 
 (defun make-llm-provider-from-config ()
   "Create an LLM provider based on the current configuration.

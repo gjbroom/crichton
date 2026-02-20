@@ -192,7 +192,7 @@
                (resolved-params (resolve-refs raw-params results)))
           (log:info "Pipeline step ~A (~A): ~A"
                     id kind (or skill builtin-name))
-          (handler-case
+          (restart-case
               (let ((result
                       (ecase kind
                         (:builtin
@@ -209,9 +209,34 @@
                                        :params resolved-params)))))
                 (setf (gethash id results) result)
                 (log:info "Pipeline step ~A completed" id))
-            (error (c)
-              (error 'pipeline-error
-                     :step-id id
-                     :step-skill (or skill builtin-name)
-                     :format-control "~A"
-                     :format-arguments (list c)))))))))
+            (:skip-step ()
+              :report (lambda (s) (format s "Skip pipeline step ~A" id))
+              (setf (gethash id results) nil)
+              (log:warn "Pipeline step ~A skipped" id))
+            (:use-value (value)
+              :report (lambda (s) (format s "Supply a result for step ~A" id))
+              :interactive (lambda ()
+                             (format *query-io* "~&Step ~A result: " id)
+                             (list (eval (read *query-io*))))
+              (setf (gethash id results) value)
+              (log:info "Pipeline step ~A: using supplied value" id))
+            (:retry ()
+              :report (lambda (s) (format s "Retry pipeline step ~A" id))
+              ;; Re-resolve refs in case upstream results changed
+              (let ((re-resolved (resolve-refs raw-params results)))
+                (setf resolved-params re-resolved))
+              ;; Re-run step dispatch inline
+              (let ((result
+                      (ecase kind
+                        (:builtin
+                         (let* ((name (or builtin-name entry-point))
+                                (fn (pipeline-builtin name)))
+                           (unless fn
+                             (error "Unknown pipeline builtin: ~S" name))
+                           (funcall fn resolved-params)))
+                        (:wasm
+                         (invoke-skill skill
+                                       :entry-point entry-point
+                                       :params resolved-params)))))
+                (setf (gethash id results) result)
+                (log:info "Pipeline step ~A completed (retry)" id)))))))))

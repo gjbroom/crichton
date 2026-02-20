@@ -253,12 +253,22 @@
            (count 0))
       (dolist (file files)
         (let ((skill-id (pathname-name file)))
-          (handler-case
-              (progn
-                (setf (gethash skill-id *kv-cache*) (load-skill-kv skill-id))
-                (incf count))
-            (error (c)
-              (log:warn "Failed to load KV store for ~A: ~A" skill-id c)))))
+          (handler-bind
+              ((error (lambda (c)
+                        (log:warn "Failed to load KV store for ~A: ~A" skill-id c)
+                        (let ((r (find-restart :skip-store)))
+                          (when r (invoke-restart r))))))
+            (restart-case
+                (progn
+                  (setf (gethash skill-id *kv-cache*) (load-skill-kv skill-id))
+                  (incf count))
+              (:skip-store ()
+                :report (lambda (s) (format s "Skip KV store for ~A" skill-id)))
+              (:use-empty-store ()
+                :report (lambda (s) (format s "Use empty store for ~A" skill-id))
+                (setf (gethash skill-id *kv-cache*)
+                      (make-hash-table :test #'equal))
+                (incf count))))))
       (log:info "Preloaded ~D KV store~:P" count)
       count)))
 
@@ -267,12 +277,22 @@
   (bt:with-lock-held (*kv-lock*)
     (let ((count 0))
       (maphash (lambda (skill-id data-ht)
-                 (handler-case
-                     (progn
+                 (handler-bind
+                     ((error (lambda (c)
+                               (log:warn "Failed to flush KV store for ~A: ~A"
+                                         skill-id c)
+                               (let ((r (find-restart :skip-store)))
+                                 (when r (invoke-restart r))))))
+                   (restart-case
+                       (progn
+                         (save-skill-kv skill-id data-ht)
+                         (incf count))
+                     (:skip-store ()
+                       :report (lambda (s) (format s "Skip flushing ~A" skill-id)))
+                     (:retry ()
+                       :report (lambda (s) (format s "Retry flushing ~A" skill-id))
                        (save-skill-kv skill-id data-ht)
-                       (incf count))
-                   (error (c)
-                     (log:warn "Failed to flush KV store for ~A: ~A" skill-id c))))
+                       (incf count)))))
                *kv-cache*)
       (log:info "Flushed ~D KV store~:P" count)
       count)))

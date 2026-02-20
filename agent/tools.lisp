@@ -51,15 +51,29 @@
 
 (defun dispatch-tool (name input)
   "Call the handler for tool NAME with INPUT (a hash-table from the LLM).
-   Returns a result string. On error, returns an error description string."
+   Returns a result string. On error, returns an error description string.
+   Offers :USE-VALUE and :REPORT-ERROR restarts."
   (let ((tool (get-tool name)))
     (unless tool
       (return-from dispatch-tool
         (format nil "Error: unknown tool ~S" name)))
-    (handler-case
-        (funcall (agent-tool-handler tool) input)
-      (error (c)
-        (format nil "Error executing ~A: ~A" name c)))))
+    (handler-bind
+        ((error (lambda (c)
+                  (let ((r (find-restart :report-error)))
+                    (when r
+                      (invoke-restart r
+                        (format nil "Error executing ~A: ~A" name c)))))))
+      (restart-case
+          (funcall (agent-tool-handler tool) input)
+        (:use-value (value)
+          :report (lambda (s) (format s "Supply a result for tool ~A" name))
+          :interactive (lambda ()
+                         (format *query-io* "~&Tool result string: ")
+                         (list (read-line *query-io*)))
+          value)
+        (:report-error (message)
+          :report (lambda (s) (format s "Return error message to LLM for ~A" name))
+          message)))))
 
 ;;; --- Helper: hash-table key access with default ---
 

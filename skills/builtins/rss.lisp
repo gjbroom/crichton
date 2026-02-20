@@ -163,17 +163,25 @@
 
 (defun fetch-feed (url)
   "Fetch and parse an RSS/Atom feed from URL.
-   Returns (values items feed-title feed-format)."
+   Returns (values items feed-title feed-format).
+   Offers :RETRY and :USE-VALUE restarts on failure."
   (log:info "Fetching RSS feed: ~A" url)
-  (handler-case
+  (restart-case
       (multiple-value-bind (body status)
           (dex:get url :headers '(("Accept" . "application/rss+xml, application/atom+xml, application/xml, text/xml")
                                   ("User-Agent" . "Crichton/0.1")))
         (unless (= status 200)
           (error "Feed fetch returned HTTP ~D for ~A" status url))
         (parse-feed-xml body))
-    (error (c)
-      (error "Feed fetch failed for ~A: ~A" url c))))
+    (:retry ()
+      :report (lambda (s) (format s "Retry fetching ~A" url))
+      (fetch-feed url))
+    (:use-value (items &optional (title "") (fmt nil))
+      :report (lambda (s) (format s "Supply feed data for ~A" url))
+      :interactive (lambda ()
+                     (format *query-io* "~&Items (list): ")
+                     (list (eval (read *query-io*))))
+      (values items title fmt))))
 
 ;;; --- Seen-item state for monitoring ---
 
@@ -375,19 +383,31 @@
 
 (defun rss-monitor-poll (name url)
   "Poll a single RSS feed, log new items, and post notifications.
-   Called by the scheduler callback registered via RSS-MONITOR-START."
-  (handler-case
-      (let ((result (rss-check url)))
-        (when (plusp (getf result :new-count))
-          (log:info "RSS ~A: ~D new item~:P" name (getf result :new-count))
-          (dolist (item (getf result :new-items))
-            (log:info "  ~A: ~A" name (getf item :title)))
-          (crichton/daemon:notification-post
-           "rss"
-           (format nil "~D new item~:P in ~A" (getf result :new-count) name)
-           name)))
-    (error (c)
-      (log:warn "RSS monitor ~A failed: ~A" name c))))
+   Called by the scheduler callback registered via RSS-MONITOR-START.
+   Retries transient failures up to 2 times via fetch-feed's :RETRY restart."
+  (let ((attempts 0)
+        (max-retries 2))
+    (handler-bind
+        ((error (lambda (c)
+                  (let ((r (find-restart :retry c)))
+                    (when (and r (< attempts max-retries))
+                      (incf attempts)
+                      (log:warn "RSS monitor ~A: retrying (~D/~D) after: ~A"
+                                name attempts max-retries c)
+                      (invoke-restart r))))))
+      (handler-case
+          (let ((result (rss-check url)))
+            (when (plusp (getf result :new-count))
+              (log:info "RSS ~A: ~D new item~:P" name (getf result :new-count))
+              (dolist (item (getf result :new-items))
+                (log:info "  ~A: ~A" name (getf item :title)))
+              (crichton/daemon:notification-post
+               "rss"
+               (format nil "~D new item~:P in ~A" (getf result :new-count) name)
+               name)))
+        (error (c)
+          (log:warn "RSS monitor ~A failed after ~D attempt~:P: ~A"
+                    name (1+ attempts) c))))))
 
 (defun rss-monitor-start (name url interval-seconds &key (replace t))
   "Start monitoring a feed by scheduling periodic checks.

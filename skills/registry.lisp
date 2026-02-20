@@ -104,13 +104,20 @@
     (dolist (subdir-path (uiop:subdirectories skills-dir))
       (let ((manifest-path (merge-pathnames "skill.toml" subdir-path)))
         (when (probe-file manifest-path)
-          (handler-case
-              (let ((manifest (parse-skill-manifest manifest-path)))
-                (when (register-skill-from-manifest manifest subdir-path)
-                  (incf count)))
-            (error (c)
-              (log:warn "Failed to load skill manifest ~A: ~A"
-                        (namestring manifest-path) c))))))
+          (handler-bind
+              ((error (lambda (c)
+                        (log:warn "Failed to load skill manifest ~A: ~A"
+                                  (namestring manifest-path) c)
+                        (let ((r (find-restart :skip-skill)))
+                          (when r (invoke-restart r))))))
+            (restart-case
+                (let ((manifest (parse-skill-manifest manifest-path)))
+                  (when (register-skill-from-manifest manifest subdir-path)
+                    (incf count)))
+              (:skip-skill ()
+                :report (lambda (s)
+                          (format s "Skip skill manifest ~A"
+                                  (namestring manifest-path)))))))))
     (log:info "Discovered ~D skill~:P" count)
     count))
 
@@ -288,11 +295,9 @@
               name entry-point effective-abi)
     (crichton/runner:call-with-skill-context context
       (lambda ()
-        (handler-case
-            (dispatch-skill-call entry entry-point effective-abi params)
-          (error (c)
-            (log:error "Skill ~A failed: ~A" name c)
-            (error c)))))))
+        (handler-bind ((error (lambda (c)
+                                (log:error "Skill ~A failed: ~A" name c))))
+          (dispatch-skill-call entry entry-point effective-abi params))))))
 
 ;;; --- Unloading ---
 
