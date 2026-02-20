@@ -27,6 +27,8 @@ For development details, see the git commit history and BEADS issue tracker.
 
 ** Added
 
+- *RSS feed retry*: RSS monitor polls now retry transient HTTP failures up to 2 times before logging a warning
+- *Debugger restarts*: key operations (feed fetch, skill invocation, API key resolution, pipeline steps, tool dispatch) now offer named restarts (=:retry=, =:use-value=, =:skip-step=, etc.) visible from SLIME/SLY debugger
 - *AC power detection*: battery reports and status plists now include AC adapter online status via =ac-adapter-online-p=
 - *TUI client* (Phase 1 MVP): new =crichton-tui= binary for interactive terminal use with full ANSI colour, adaptive layout, scrollable chat history with viewport, markdown rendering of LLM responses, input editing with cursor support, spinner during thinking, and local commands (=:quit=, =:clear=, =:new=, =:session=, =:status=). Uses cl-tuition (TEA/Elm architecture), no ncurses dependency. One-shot CLI mode also supported. (cricht-5bg, cricht-gu8, cricht-0ix, cricht-7po, cricht-317, cricht-k63, cricht-o5s, cricht-knm, cricht-y2d, cricht-hew, cricht-qhb)
 - *TUI push notifications* (Phase 2): daemon pushes real-time notifications to subscribed TUI clients (cricht-531, cricht-72b)
