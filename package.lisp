@@ -12,6 +12,10 @@
            #:reload-config
            #:config-get
            #:config-section-get
+           ;; TOML conversion (config/loader.lisp)
+           #:toml-key-to-keyword
+           #:toml-value-to-lisp
+           #:toml-table-to-plist
            ;; shared utilities (config/util.lisp)
            #:iso8601-now
            #:safe-intern-keyword

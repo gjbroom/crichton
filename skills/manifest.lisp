@@ -5,32 +5,6 @@
 
 (in-package #:crichton/skills)
 
-;;; --- TOML conversion (local reimplementation, same pattern as config/loader) ---
-
-(defun toml-key-to-keyword (key)
-  (intern (string-upcase (substitute #\- #\_ (string key)))
-          :keyword))
-
-(defun toml-value-to-lisp (value)
-  (cond
-    ((hash-table-p value) (toml-table-to-plist value))
-    ((eq value 'cl-toml:true) t)
-    ((eq value 'cl-toml:false) nil)
-    ((stringp value) value)
-    ((vectorp value) (map 'list #'toml-value-to-lisp value))
-    (t value)))
-
-(defun toml-table-to-plist (table)
-  (when (hash-table-p table)
-    (let (result)
-      (maphash (lambda (k v)
-                 (let ((key (toml-key-to-keyword k))
-                       (val (toml-value-to-lisp v)))
-                   (push val result)
-                   (push key result)))
-               table)
-      result)))
-
 ;;; --- Manifest parsing ---
 
 (define-condition manifest-error (simple-error)
@@ -52,7 +26,7 @@
                             :problems (list (format nil "TOML parse failed: ~A" c))
                             :format-control "~A"
                             :format-arguments (list c)))))
-         (manifest (toml-table-to-plist parsed)))
+         (manifest (crichton/config:toml-table-to-plist parsed)))
     (validate-required-fields manifest path)
     manifest))
 

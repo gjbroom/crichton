@@ -54,6 +54,7 @@
     ((eq value 'cl-toml:true) t)
     ((eq value 'cl-toml:false) nil)
     ((stringp value) value)
+    ((vectorp value) (map 'list #'toml-value-to-lisp value))
     (t value)))
 
 (defun deep-merge-plist (defaults overrides)
