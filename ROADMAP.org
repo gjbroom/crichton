@@ -313,9 +313,9 @@ nts
 
 *** TODO [#C] Refactor WASM engine functions
     - [X] Extract with-wasm-simple-module macro from run-wasm-module (55→3 lines)
-    - [ ] Unify with-wasm-simple-module and with-wasm-host-environment into call-with-wasm-environment (cricht-g6h)
-    - [ ] Make defhost-callback generate testable -impl functions (cricht-g6h)
-    - [ ] Deduplicate call-i32-export / call-export-by-name (cricht-g6h)
+    - [X] Unify with-wasm-simple-module and with-wasm-host-environment into call-with-wasm-environment (cricht-g6h)
+    - [X] Make defhost-callback generate testable -impl functions (cricht-g6h)
+    - [X] Deduplicate call-i32-export / call-export-by-name (cricht-g6h)
     - [ ] De-duplicate run-wasm-with-host-fns variants (cricht-sei)
     - [ ] Extract shared host-fn registration
 
