@@ -89,11 +89,16 @@
   (:use #:cl)
   (:export #:ensure-wasmtime-loaded
            #:assert-wasmtime-abi
+           #:call-with-wasm-bytes
+           #:call-with-compiled-module
+           #:call-with-instantiated-instance
+           #:call-with-wasm-environment
            #:run-wasm-module
            #:run-wasm-with-host-fns
            #:run-wasm-bytes-with-host-fns
            #:run-wasm-json-call
            #:run-wasm-bytes-json-call
+           #:call-export-by-name
            #:wat-to-wasm
            #:make-functype
            #:*test-host-log-wat*))

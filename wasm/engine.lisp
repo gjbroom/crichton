@@ -55,6 +55,102 @@
             (data (cffi:foreign-slot-value wasm-bytes '(:struct wasm-byte-vec) 'data)))
         (values data size wasm-bytes)))))
 
+;;; --- Continuation-passing WASM lifecycle helpers ---
+
+(defun call-with-wasm-bytes (source-type source k)
+  "Convert SOURCE to a foreign byte range and call K with (ptr len cleanup-fn).
+SOURCE-TYPE is :WAT (a string) or :WASM (an octet vector).  The foreign memory
+is only valid within K's dynamic extent."
+  (ecase source-type
+    (:wat
+     (cffi:with-foreign-object (wasm-bytes '(:struct wasm-byte-vec))
+       (let ((wat-err (wasmtime-wat2wasm source (length source) wasm-bytes)))
+         (unless (cffi:null-pointer-p wat-err)
+           (error "WAT parse error: ~A" (wasmtime-error-to-string wat-err)))
+         (unwind-protect
+              (let ((data (cffi:foreign-slot-value
+                           wasm-bytes '(:struct wasm-byte-vec) 'data))
+                    (size (cffi:foreign-slot-value
+                           wasm-bytes '(:struct wasm-byte-vec) 'size)))
+                (funcall k data size))
+           (wasm-byte-vec-delete wasm-bytes)))))
+    (:wasm
+     (let ((len (length source)))
+       (cffi:with-foreign-object (wasm-ptr :uint8 len)
+         (loop for i below len
+               do (setf (cffi:mem-aref wasm-ptr :uint8 i)
+                        (aref source i)))
+         (funcall k wasm-ptr len))))))
+
+(defun call-with-compiled-module (engine ptr len k)
+  "Compile WASM bytes at foreign PTR (LEN bytes) into a module, call K with it.
+Deletes the module on unwind."
+  (let ((module nil))
+    (unwind-protect
+         (cffi:with-foreign-object (module-ptr :pointer)
+           (let ((mod-err (wasmtime-module-new engine ptr len module-ptr)))
+             (unless (cffi:null-pointer-p mod-err)
+               (error "Module compile error: ~A"
+                      (wasmtime-error-to-string mod-err)))
+             (setf module (cffi:mem-ref module-ptr :pointer))
+             (funcall k module)))
+      (when module (wasmtime-module-delete module)))))
+
+(defun call-with-instantiated-instance (context module k &key linker)
+  "Instantiate MODULE and call K with the instance struct pointer.
+When LINKER is provided, uses wasmtime-linker-instantiate; otherwise uses
+wasmtime-instance-new with no imports."
+  (cffi:with-foreign-objects ((instance '(:struct wasmtime-instance))
+                              (trap-ptr :pointer))
+    (setf (cffi:mem-ref trap-ptr :pointer) (cffi:null-pointer))
+    (let ((err (if linker
+                   (wasmtime-linker-instantiate linker context module
+                                                instance trap-ptr)
+                   (wasmtime-instance-new context module
+                                          (cffi:null-pointer) 0
+                                          instance trap-ptr))))
+      (check-wasmtime-error err trap-ptr "instantiate"))
+    (funcall k context instance)))
+
+(defun call-with-wasm-environment (source-type source fn
+                                   &key host-fn-registrar)
+  "Set up a complete WASM environment and call FN with (context instance).
+SOURCE-TYPE is :WAT or :WASM.  When HOST-FN-REGISTRAR is provided, it is
+called with (linker engine) to register host functions before instantiation.
+Handles engine/store/linker/module creation and full cleanup on unwind."
+  (ensure-wasmtime-loaded)
+  (when host-fn-registrar (assert-wasmtime-abi))
+  (let ((engine (wasm-engine-new))
+        (store nil)
+        (linker nil)
+        (functypes nil))
+    (when (cffi:null-pointer-p engine)
+      (error "Failed to create wasmtime engine"))
+    (unwind-protect
+         (progn
+           (setf store (wasmtime-store-new engine
+                                           (cffi:null-pointer)
+                                           (cffi:null-pointer)))
+           (when (cffi:null-pointer-p store)
+             (error "Failed to create wasmtime store"))
+           (when host-fn-registrar
+             (setf linker (wasmtime-linker-new engine))
+             (when (cffi:null-pointer-p linker)
+               (error "Failed to create wasmtime linker"))
+             (setf functypes (funcall host-fn-registrar linker engine)))
+           (let ((context (wasmtime-store-context store)))
+             (call-with-wasm-bytes source-type source
+               (lambda (ptr len)
+                 (call-with-compiled-module engine ptr len
+                   (lambda (module)
+                     (call-with-instantiated-instance context module fn
+                       :linker linker)))))))
+      (dolist (ft functypes)
+        (when ft (wasm-functype-delete ft)))
+      (when linker (wasmtime-linker-delete linker))
+      (when store (wasmtime-store-delete store))
+      (wasm-engine-delete engine))))
+
 ;;; --- Simple module execution (no imports) ---
 
 (defmacro with-wasm-simple-module ((context instance) wat-string &body body)
@@ -62,71 +158,14 @@
 Compiles WAT-STRING, instantiates the module with no imports, and binds
 CONTEXT and INSTANCE for use in BODY.  Handles engine/store/module lifecycle
 and full cleanup on unwind."
-  (let ((engine (gensym "ENGINE"))
-        (store (gensym "STORE"))
-        (module (gensym "MODULE"))
-        (module-ptr (gensym "MODULE-PTR"))
-        (trap-ptr (gensym "TRAP-PTR"))
-        (source (gensym "SOURCE")))
-    `(progn
-       (ensure-wasmtime-loaded)
-       (let ((,engine (wasm-engine-new))
-             (,store nil)
-             (,module nil)
-             (,source ,wat-string))
-         (when (cffi:null-pointer-p ,engine)
-           (error "Failed to create wasmtime engine"))
-         (unwind-protect
-              (progn
-                (setf ,store (wasmtime-store-new ,engine
-                                                 (cffi:null-pointer)
-                                                 (cffi:null-pointer)))
-                (when (cffi:null-pointer-p ,store)
-                  (error "Failed to create wasmtime store"))
-                (let ((,context (wasmtime-store-context ,store)))
-                  (cffi:with-foreign-object (wasm-bytes '(:struct wasm-byte-vec))
-                    (let ((wat-err (wasmtime-wat2wasm
-                                    ,source (length ,source) wasm-bytes)))
-                      (unless (cffi:null-pointer-p wat-err)
-                        (error "WAT parse error: ~A"
-                               (wasmtime-error-to-string wat-err)))
-                      (unwind-protect
-                           (let ((wasm-data
-                                   (cffi:foreign-slot-value
-                                    wasm-bytes '(:struct wasm-byte-vec) 'data))
-                                 (wasm-size
-                                   (cffi:foreign-slot-value
-                                    wasm-bytes '(:struct wasm-byte-vec) 'size)))
-                             (cffi:with-foreign-object (,module-ptr :pointer)
-                               (let ((mod-err (wasmtime-module-new
-                                               ,engine wasm-data wasm-size
-                                               ,module-ptr)))
-                                 (unless (cffi:null-pointer-p mod-err)
-                                   (error "Module compile error: ~A"
-                                          (wasmtime-error-to-string mod-err)))
-                                 (setf ,module (cffi:mem-ref ,module-ptr :pointer))
-                                 (cffi:with-foreign-objects
-                                     ((,instance '(:struct wasmtime-instance))
-                                      (,trap-ptr :pointer))
-                                   (setf (cffi:mem-ref ,trap-ptr :pointer)
-                                         (cffi:null-pointer))
-                                   (let ((inst-err (wasmtime-instance-new
-                                                    ,context ,module
-                                                    (cffi:null-pointer) 0
-                                                    ,instance ,trap-ptr)))
-                                     (check-wasmtime-error inst-err ,trap-ptr
-                                                           "instantiate"))
-                                   ,@body))))
-                        (wasm-byte-vec-delete wasm-bytes))))))
-           (when ,module (wasmtime-module-delete ,module))
-           (when ,store (wasmtime-store-delete ,store))
-           (wasm-engine-delete ,engine))))))
+  `(call-with-wasm-environment :wat ,wat-string
+     (lambda (,context ,instance) ,@body)))
 
 (defun run-wasm-module (wat-string export-name)
   "Compile WAT, instantiate with no imports, call the named export.
    Expects the export to return a single i32. Returns the i32 value."
   (with-wasm-simple-module (context instance) wat-string
-    (call-i32-export context instance export-name nil 1)))
+    (call-export-by-name context instance export-name nil 1)))
 
 ;;; --- Functype construction ---
 
@@ -160,35 +199,42 @@ and full cleanup on unwind."
 ;;; --- defhost-callback macro ---
 
 (defmacro defhost-callback (name arg-bindings &body body)
-  "Define a CFFI callback for a WASM host function.  ARG-BINDINGS is a list
-of symbols bound to successive wasmtime-val-i32 extractions from the args
-array.  The generated callback validates that NARGS >= (length ARG-BINDINGS),
-wraps BODY in handler-case, and always returns a null pointer.  BODY may
-reference CALLER, RESULTS, and NRESULTS freely; unused params are declared
-ignorable so no warnings are emitted."
-  (let ((nargs-required (length arg-bindings)))
-    `(cffi:defcallback ,name :pointer
-         ((env :pointer) (caller :pointer)
-          (args :pointer) (nargs :size)
-          (results :pointer) (nresults :size))
-       (declare (ignore env)
-                (ignorable caller results nresults))
-       (handler-case
-           (progn
-             (unless (>= nargs ,nargs-required)
-               (log:debug "~A: expected nargs >= ~D, got ~A"
-                          ',name ,nargs-required nargs)
-               (return-from ,name (cffi:null-pointer)))
-             (let* (,@(loop for sym in arg-bindings
-                            for i from 0
-                            collect `(,sym (wasmtime-val-i32
-                                           (cffi:mem-aptr args
-                                                          '(:struct wasmtime-val)
-                                                          ,i)))))
-               ,@body))
-         (error (c)
-           (log:error "Host ~A callback error: ~A" ',name c)))
-       (cffi:null-pointer))))
+  "Define a CFFI callback and a testable -impl function for a WASM host
+function.  ARG-BINDINGS is a list of symbols bound to successive i32 args.
+Generates:
+  (defun NAME-impl (caller results nresults ARG-BINDINGS...) ...)
+  (cffi:defcallback NAME ...)
+The -impl function contains the real logic and is callable from Lisp tests.
+The callback is a thin wrapper that validates nargs, extracts i32 values,
+delegates to -impl, and catches errors."
+  (let ((nargs-required (length arg-bindings))
+        (impl-name (intern (format nil "~A-IMPL" (symbol-name name)))))
+    `(progn
+       (defun ,impl-name (caller results nresults ,@arg-bindings)
+         (declare (ignorable caller results nresults))
+         (block ,name
+           ,@body))
+       (cffi:defcallback ,name :pointer
+           ((env :pointer) (caller :pointer)
+            (args :pointer) (nargs :size)
+            (results :pointer) (nresults :size))
+         (declare (ignore env))
+         (handler-case
+             (progn
+               (unless (>= nargs ,nargs-required)
+                 (log:debug "~A: expected nargs >= ~D, got ~A"
+                            ',name ,nargs-required nargs)
+                 (return-from ,name (cffi:null-pointer)))
+               (let* (,@(loop for sym in arg-bindings
+                              for i from 0
+                              collect `(,sym (wasmtime-val-i32
+                                             (cffi:mem-aptr args
+                                                            '(:struct wasmtime-val)
+                                                            ,i)))))
+                 (,impl-name caller results nresults ,@arg-bindings)))
+           (error (c)
+             (log:error "Host ~A callback error: ~A" ',name c)))
+         (cffi:null-pointer)))))
 
 ;;; --- Host function: log ---
 ;;;
@@ -325,145 +371,9 @@ functype pointers that the caller must delete with wasm-functype-delete."
 either :WAT (a WAT string) or :WASM (a WASM byte vector).  Binds CONTEXT and
 INSTANCE for use in BODY.  Handles engine/store/linker/module creation, host
 function registration, instantiation, and full cleanup on unwind."
-  (let ((engine (gensym "ENGINE"))
-        (store (gensym "STORE"))
-        (module (gensym "MODULE"))
-        (linker (gensym "LINKER"))
-        (functypes (gensym "FUNCTYPES"))
-        (source (gensym "SOURCE"))
-        (module-ptr (gensym "MODULE-PTR"))
-        (trap-ptr (gensym "TRAP-PTR"))
-        (mod-err (gensym "MOD-ERR"))
-        (inst-err (gensym "INST-ERR")))
-    `(progn
-       (ensure-wasmtime-loaded)
-       (assert-wasmtime-abi)
-       (let ((,engine (wasm-engine-new))
-             (,store nil)
-             (,module nil)
-             (,linker nil)
-             (,functypes nil)
-             (,source ,source-form))
-         (when (cffi:null-pointer-p ,engine)
-           (error "Failed to create wasmtime engine"))
-         (unwind-protect
-              (progn
-                (setf ,store (wasmtime-store-new ,engine
-                                                 (cffi:null-pointer)
-                                                 (cffi:null-pointer)))
-                (when (cffi:null-pointer-p ,store)
-                  (error "Failed to create wasmtime store"))
-                (setf ,linker (wasmtime-linker-new ,engine))
-                (when (cffi:null-pointer-p ,linker)
-                  (error "Failed to create wasmtime linker"))
-                (let ((,context (wasmtime-store-context ,store)))
-                  (setf ,functypes
-                        (register-standard-host-fns ,linker ,engine))
-                  ,@(ecase source-type
-                      (:wat
-                       `((cffi:with-foreign-object (wasm-bytes
-                                                    '(:struct wasm-byte-vec))
-                           (let ((wat-err (wasmtime-wat2wasm
-                                           ,source (length ,source) wasm-bytes)))
-                             (unless (cffi:null-pointer-p wat-err)
-                               (error "WAT parse error: ~A"
-                                      (wasmtime-error-to-string wat-err)))
-                             (unwind-protect
-                                  (let ((wasm-data
-                                          (cffi:foreign-slot-value
-                                           wasm-bytes '(:struct wasm-byte-vec) 'data))
-                                        (wasm-size
-                                          (cffi:foreign-slot-value
-                                           wasm-bytes '(:struct wasm-byte-vec) 'size)))
-                                    (cffi:with-foreign-object (,module-ptr :pointer)
-                                      (let ((,mod-err (wasmtime-module-new
-                                                       ,engine wasm-data wasm-size
-                                                       ,module-ptr)))
-                                        (unless (cffi:null-pointer-p ,mod-err)
-                                          (error "Module compile error: ~A"
-                                                 (wasmtime-error-to-string ,mod-err)))
-                                        (setf ,module (cffi:mem-ref ,module-ptr :pointer))
-                                        (cffi:with-foreign-objects
-                                            ((,instance '(:struct wasmtime-instance))
-                                             (,trap-ptr :pointer))
-                                          (setf (cffi:mem-ref ,trap-ptr :pointer)
-                                                (cffi:null-pointer))
-                                          (let ((,inst-err
-                                                  (wasmtime-linker-instantiate
-                                                   ,linker ,context ,module
-                                                   ,instance ,trap-ptr)))
-                                            (check-wasmtime-error ,inst-err ,trap-ptr
-                                                                  "linker_instantiate"))
-                                          ,@body))))
-                               (wasm-byte-vec-delete wasm-bytes))))))
-                      (:wasm
-                       (let ((wasm-len (gensym "WASM-LEN"))
-                             (wasm-ptr (gensym "WASM-PTR")))
-                         `((let ((,wasm-len (length ,source)))
-                             (cffi:with-foreign-object (,wasm-ptr :uint8 ,wasm-len)
-                               (loop for i below ,wasm-len
-                                     do (setf (cffi:mem-aref ,wasm-ptr :uint8 i)
-                                              (aref ,source i)))
-                               (cffi:with-foreign-object (,module-ptr :pointer)
-                                 (let ((,mod-err (wasmtime-module-new
-                                                  ,engine ,wasm-ptr ,wasm-len
-                                                  ,module-ptr)))
-                                   (unless (cffi:null-pointer-p ,mod-err)
-                                     (error "Module compile error: ~A"
-                                            (wasmtime-error-to-string ,mod-err)))
-                                   (setf ,module (cffi:mem-ref ,module-ptr :pointer))
-                                   (cffi:with-foreign-objects
-                                       ((,instance '(:struct wasmtime-instance))
-                                        (,trap-ptr :pointer))
-                                     (setf (cffi:mem-ref ,trap-ptr :pointer)
-                                           (cffi:null-pointer))
-                                     (let ((,inst-err
-                                             (wasmtime-linker-instantiate
-                                              ,linker ,context ,module
-                                              ,instance ,trap-ptr)))
-                                       (check-wasmtime-error ,inst-err ,trap-ptr
-                                                             "linker_instantiate"))
-                                     ,@body)))))))))))
-           (dolist (ft ,functypes)
-             (when ft (wasm-functype-delete ft)))
-           (when ,linker (wasmtime-linker-delete ,linker))
-           (when ,module (wasmtime-module-delete ,module))
-           (when ,store (wasmtime-store-delete ,store))
-           (wasm-engine-delete ,engine))))))
-
-;;; --- Export call helper ---
-
-(defun call-i32-export (context instance export-name args nresults)
-  "Get export EXPORT-NAME from INSTANCE, call with i32 ARGS list, return result.
-NRESULTS should be 0 or 1.  Returns NIL if nresults=0."
-  (cffi:with-foreign-object (ext '(:struct wasmtime-extern))
-    (unless (wasmtime-instance-export-get
-             context instance
-             export-name (length export-name)
-             ext)
-      (error "Export ~S not found" export-name))
-    (let* ((func-ptr (wasmtime-extern-func-ptr ext))
-           (nargs (length args)))
-      (cffi:with-foreign-objects ((wasm-args '(:struct wasmtime-val) (max nargs 1))
-                                  (wasm-results '(:struct wasmtime-val) (max nresults 1))
-                                  (call-trap :pointer))
-        (loop for val in args
-              for i from 0
-              do (setf (wasmtime-val-i32
-                        (cffi:mem-aptr wasm-args '(:struct wasmtime-val) i))
-                       val))
-        (setf (cffi:mem-ref call-trap :pointer) (cffi:null-pointer))
-        (let ((call-err (wasmtime-func-call
-                         context func-ptr
-                         (if (zerop nargs) (cffi:null-pointer) wasm-args)
-                         nargs
-                         (if (zerop nresults) (cffi:null-pointer) wasm-results)
-                         nresults
-                         call-trap)))
-          (check-wasmtime-error call-err call-trap "func_call")
-          (if (zerop nresults)
-              nil
-              (wasmtime-val-i32 wasm-results)))))))
+  `(call-with-wasm-environment ,source-type ,source-form
+     (lambda (,context ,instance) ,@body)
+     :host-fn-registrar #'register-standard-host-fns))
 
 ;;; --- Linker-based module execution (with host functions) ---
 
@@ -472,14 +382,14 @@ NRESULTS should be 0 or 1.  Returns NIL if nresults=0."
   "Compile WAT, register host functions via linker, instantiate, call export.
 ARGS is a list of i32 values to pass.  Returns i32 result (or NIL if nresults=0)."
   (with-wasm-host-environment (context instance) (:wat wat-string)
-    (call-i32-export context instance export-name args nresults)))
+    (call-export-by-name context instance export-name args nresults)))
 
 (defun run-wasm-bytes-with-host-fns (wasm-bytes export-name
                                       &key (args nil) (nresults 1))
   "Like run-wasm-with-host-fns but accepts pre-compiled WASM bytes (octet vector)
 instead of a WAT string.  Returns i32 result (or NIL if nresults=0)."
   (with-wasm-host-environment (context instance) (:wasm wasm-bytes)
-    (call-i32-export context instance export-name args nresults)))
+    (call-export-by-name context instance export-name args nresults)))
 
 ;;; --- Host function: kv_get ---
 ;;;
