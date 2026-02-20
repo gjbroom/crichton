@@ -225,23 +225,28 @@
       (log:info "Anthropic request: model=~A max_tokens=~A"
                 (provider-model provider)
                 (or max-tokens *anthropic-default-max-tokens*))
-      (multiple-value-bind (response-body status)
-          (handler-case
-              (dex:post url
-                :headers (anthropic-headers (anthropic-api-key provider))
-                :content json-body)
-            (error (c)
-              (error 'llm-error :provider provider
-                                :message (format nil "HTTP request failed: ~A" c))))
-        (unless (= status 200)
-          (classify-anthropic-error status response-body provider))
-        (let* ((json (shasht:read-json response-body))
-               (result (parse-anthropic-response json)))
-          (log:info "Anthropic response: tokens=~A+~A stop=~A"
-                    (getf (getf result :usage) :input-tokens)
-                    (getf (getf result :usage) :output-tokens)
-                    (getf result :stop-reason))
-          result)))))
+      (loop
+        (restart-case
+            (return
+              (multiple-value-bind (response-body status)
+                  (handler-case
+                      (dex:post url
+                        :headers (anthropic-headers (anthropic-api-key provider))
+                        :content json-body)
+                    (error (c)
+                      (error 'llm-error :provider provider
+                                        :message (format nil "HTTP request failed: ~A" c))))
+                (unless (= status 200)
+                  (classify-anthropic-error status response-body provider))
+                (let* ((json (shasht:read-json response-body))
+                       (result (parse-anthropic-response json)))
+                  (log:info "Anthropic response: tokens=~A+~A stop=~A"
+                            (getf (getf result :usage) :input-tokens)
+                            (getf (getf result :usage) :output-tokens)
+                            (getf result :stop-reason))
+                  result)))
+          (:retry ()
+            :report (lambda (s) (format s "Retry the Anthropic API call"))))))))
 
 ;;; --- SSE parsing ---
 
@@ -539,7 +544,12 @@
       (log:info "Anthropic streaming request: model=~A max_tokens=~A"
                 (provider-model provider)
                 (or max-tokens *anthropic-default-max-tokens*))
-      (let ((response-stream (%anthropic-streaming-post provider json-body))
-            (state (make-instance 'stream-state)))
-        (%process-sse-stream response-stream state on-event)
-        (stream-state-result state)))))
+      (loop
+        (restart-case
+            (return
+              (let ((response-stream (%anthropic-streaming-post provider json-body))
+                    (state (make-instance 'stream-state)))
+                (%process-sse-stream response-stream state on-event)
+                (stream-state-result state)))
+          (:retry ()
+            :report (lambda (s) (format s "Retry the Anthropic streaming API call"))))))))

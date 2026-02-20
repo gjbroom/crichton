@@ -288,6 +288,7 @@
            #:llm-api-error-body
            #:llm-auth-error
            #:llm-rate-limit-error
+           #:llm-rate-limit-retry-after
            #:llm-feature-not-supported
            ;; anthropic
            #:anthropic-provider

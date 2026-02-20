@@ -36,7 +36,10 @@
                          "unknown")
                      (llm-error-message c)))))
 
-(define-condition llm-rate-limit-error (llm-api-error) ()
+(define-condition llm-rate-limit-error (llm-api-error)
+  ((retry-after :initarg :retry-after :reader llm-rate-limit-retry-after
+                :initform nil
+                :documentation "Suggested retry delay in seconds, or NIL if unknown."))
   (:report (lambda (c s)
              (format s "LLM rate limited (~A): ~A"
                      (if (slot-boundp c 'provider)

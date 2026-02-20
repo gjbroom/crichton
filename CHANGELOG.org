@@ -27,6 +27,7 @@ For development details, see the git commit history and BEADS issue tracker.
 
 ** Added
 
+- *LLM rate-limit retry*: When the API returns HTTP 429, Crichton now automatically retries up to 3 times with 15/30/45-second backoff before reporting failure to the TUI
 - *RSS feed retry*: RSS monitor polls now retry transient HTTP failures up to 2 times before logging a warning
 - *Debugger restarts*: key operations (feed fetch, skill invocation, API key resolution, pipeline steps, tool dispatch) now offer named restarts (=:retry=, =:use-value=, =:skip-step=, etc.) visible from SLIME/SLY debugger
 - *AC power detection*: battery reports and status plists now include AC adapter online status via =ac-adapter-online-p=

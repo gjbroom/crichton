@@ -57,42 +57,67 @@
 (defmacro with-llm-error-handling ((id &key stream lock session-id) &body body)
   "Execute BODY with unified error handling for LLM/agent errors.
 When STREAM and LOCK are provided, also pushes chat_done messages for
-streaming clients before returning the error response."
+streaming clients before returning the error response.
+
+Automatically retries rate-limited requests up to 3 times with backoff
+when a :RETRY restart is available (established by the LLM provider)."
   (let ((c (gensym "C"))
-        (err-msg (gensym "ERR-MSG")))
-    `(handler-case (progn ,@body)
-       (crichton/llm:llm-rate-limit-error (,c)
-         (let ((,err-msg "I'm being rate limited by the API right now. Please try again in a minute or two."))
-           (log:warn "Rate limited by ~A: ~A"
-                     (crichton/llm:provider-id (crichton/llm:llm-error-provider ,c))
-                     (crichton/llm:llm-error-message ,c))
-           ,@(when stream `((push-chat-done ,stream ,lock ,id ,err-msg ,session-id)))
-           (crichton/rpc:make-error-response ,id "rate_limited" ,err-msg)))
-       (crichton/llm:llm-auth-error (,c)
-         (let ((,err-msg "My API credentials appear to be invalid. Please check the configuration."))
-           (log:error "Authentication failed for ~A: ~A"
-                      (crichton/llm:provider-id (crichton/llm:llm-error-provider ,c))
-                      (crichton/llm:llm-error-message ,c))
-           ,@(when stream `((push-chat-done ,stream ,lock ,id ,err-msg ,session-id)))
-           (crichton/rpc:make-error-response ,id "auth_error" ,err-msg)))
-       (crichton/llm:llm-api-error (,c)
-         (let ((,err-msg "I encountered an error communicating with my AI provider. Check the logs for details."))
-           (log:error "LLM API error (~A) HTTP ~D: ~A"
-                      (crichton/llm:provider-id (crichton/llm:llm-error-provider ,c))
-                      (crichton/llm:llm-api-error-status ,c)
-                      (crichton/llm:llm-error-message ,c))
-           ,@(when stream `((push-chat-done ,stream ,lock ,id ,err-msg ,session-id)))
-           (crichton/rpc:make-error-response ,id "llm_error" ,err-msg)))
-       (crichton/llm:llm-error (,c)
-         (let ((,err-msg "I encountered an error communicating with my AI provider. Check the logs for details."))
-           (log:error "LLM error: ~A" (crichton/llm:llm-error-message ,c))
-           ,@(when stream `((push-chat-done ,stream ,lock ,id ,err-msg ,session-id)))
-           (crichton/rpc:make-error-response ,id "llm_error" ,err-msg)))
-       (error (,c)
-         (let ((,err-msg (format nil "An unexpected error occurred: ~A" ,c)))
-           (log:error "Agent error: ~A" ,c)
-           ,@(when stream `((push-chat-done ,stream ,lock ,id ,err-msg ,session-id)))
-           (crichton/rpc:make-error-response ,id "agent_error" ,err-msg))))))
+        (err-msg (gensym "ERR-MSG"))
+        (attempts (gensym "ATTEMPTS"))
+        (max-retries (gensym "MAX-RETRIES"))
+        (retry (gensym "RETRY"))
+        (delay (gensym "DELAY")))
+    `(let ((,attempts 0)
+           (,max-retries 3))
+       (handler-case
+           (handler-bind
+               ((crichton/llm:llm-rate-limit-error
+                  (lambda (,c)
+                    (let ((,retry (find-restart :retry ,c)))
+                      (when (and ,retry (< ,attempts ,max-retries))
+                        (incf ,attempts)
+                        (let ((,delay (or (crichton/llm:llm-rate-limit-retry-after ,c)
+                                          (* 15 ,attempts))))
+                          (log:warn "Rate limited by ~A (attempt ~D/~D), retrying in ~Ds"
+                                    (crichton/llm:provider-id (crichton/llm:llm-error-provider ,c))
+                                    ,attempts ,max-retries ,delay)
+                          (sleep ,delay)
+                          (invoke-restart ,retry)))))))
+             (progn ,@body))
+         (crichton/llm:llm-rate-limit-error (,c)
+           (let ((,err-msg (format nil "Rate limited by the API after ~D retry attempt~:P. ~
+                                       Please try again in a few minutes."
+                                   ,max-retries)))
+             (log:warn "Rate limited by ~A (retries exhausted): ~A"
+                       (crichton/llm:provider-id (crichton/llm:llm-error-provider ,c))
+                       (crichton/llm:llm-error-message ,c))
+             ,@(when stream `((push-chat-done ,stream ,lock ,id ,err-msg ,session-id)))
+             (crichton/rpc:make-error-response ,id "rate_limited" ,err-msg)))
+         (crichton/llm:llm-auth-error (,c)
+           (let ((,err-msg "My API credentials appear to be invalid. Please check the configuration."))
+             (log:error "Authentication failed for ~A: ~A"
+                        (crichton/llm:provider-id (crichton/llm:llm-error-provider ,c))
+                        (crichton/llm:llm-error-message ,c))
+             ,@(when stream `((push-chat-done ,stream ,lock ,id ,err-msg ,session-id)))
+             (crichton/rpc:make-error-response ,id "auth_error" ,err-msg)))
+         (crichton/llm:llm-api-error (,c)
+           (let ((,err-msg "I encountered an error communicating with my AI provider. Check the logs for details."))
+             (log:error "LLM API error (~A) HTTP ~D: ~A"
+                        (crichton/llm:provider-id (crichton/llm:llm-error-provider ,c))
+                        (crichton/llm:llm-api-error-status ,c)
+                        (crichton/llm:llm-error-message ,c))
+             ,@(when stream `((push-chat-done ,stream ,lock ,id ,err-msg ,session-id)))
+             (crichton/rpc:make-error-response ,id "llm_error" ,err-msg)))
+         (crichton/llm:llm-error (,c)
+           (let ((,err-msg "I encountered an error communicating with my AI provider. Check the logs for details."))
+             (log:error "LLM error: ~A" (crichton/llm:llm-error-message ,c))
+             ,@(when stream `((push-chat-done ,stream ,lock ,id ,err-msg ,session-id)))
+             (crichton/rpc:make-error-response ,id "llm_error" ,err-msg)))
+         (error (,c)
+           (let ((,err-msg (format nil "An unexpected error occurred: ~A" ,c)))
+             (log:error "Agent error: ~A" ,c)
+             ,@(when stream `((push-chat-done ,stream ,lock ,id ,err-msg ,session-id)))
+             (crichton/rpc:make-error-response ,id "agent_error" ,err-msg)))))))
 
 (defun handle-streaming-chat-request (id msg stream lock)
   "Handle a streaming 'chat' request. Pushes chat_delta/chat_done messages."
