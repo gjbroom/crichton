@@ -126,20 +126,26 @@ each message into PROGRAM."
              (model-messages model) nil)
        (render-chat-history model)
        (setf (model-status-text model) "New session")
-       (values model nil t))
+       (values model (tui:tick 3 (lambda ()
+                                   (setf (model-status-text model) "Ready")))
+               t))
 
       ((string-equal cmd-text "session")
        (setf (model-status-text model)
              (if (model-session-id model)
                  (format nil "Session: ~A" (model-session-id model))
                  "No active session"))
-       (values model nil t))
+       (values model (tui:tick 3 (lambda ()
+                                   (setf (model-status-text model) "Ready")))
+               t))
 
       ((string-equal cmd-text "status")
        (when (model-daemon-stream model)
          (write-message (model-daemon-stream model) (make-status-request)))
        (setf (model-status-text model) "Status requested")
-       (values model nil t))
+       (values model (tui:tick 3 (lambda ()
+                                   (setf (model-status-text model) "Ready")))
+               t))
 
       ((string-equal cmd-text "notifications")
        (if (model-notification-history model)
@@ -160,7 +166,9 @@ each message into PROGRAM."
              (render-chat-history model)
              (tui.viewport:viewport-goto-bottom (model-viewport model)))
            (setf (model-status-text model) "No notifications yet"))
-       (values model nil t))
+       (values model (tui:tick 3 (lambda ()
+                                   (setf (model-status-text model) "Ready")))
+               t))
 
       ((or (string-equal cmd-text "sixel on")
            (string-equal cmd-text "sixel off"))
@@ -168,7 +176,9 @@ each message into PROGRAM."
          (setf (model-sixel-enabled model) (if on-p :on :off))
          (setf (model-status-text model)
                (if on-p "Sixel rendering enabled" "Sixel rendering disabled")))
-       (values model nil t))
+       (values model (tui:tick 3 (lambda ()
+                                   (setf (model-status-text model) "Ready")))
+               t))
 
       ((and (>= (length cmd-text) 4)
             (string-equal (subseq cmd-text 0 4) "img "))
@@ -189,12 +199,16 @@ each message into PROGRAM."
                                               :time (get-universal-time)))))
             (render-chat-history model)
             (tui.viewport:viewport-goto-bottom (model-viewport model)))))
-       (values model nil t))
+       (values model (tui:tick 3 (lambda ()
+                                   (setf (model-status-text model) "Ready")))
+               t))
 
       (t
        (setf (model-status-text model)
              (format nil "Unknown command: :~A" cmd-text))
-       (values model nil t)))))
+       (values model (tui:tick 3 (lambda ()
+                                    (setf (model-status-text model) "Ready")))
+               t)))))
 
 ;;; --- Enter-key chat submission ---
 
@@ -233,7 +247,7 @@ a batched command that sends the chat request to the daemon."
 
 (defun clock-tick-cmd ()
   (lambda ()
-    (sleep 10)         ; update every 10 seconds — matches your HH:MM resolution
+    (sleep 0.1)
     (make-instance 'clock-tick-msg)))
 
 (defmethod tui:update-message ((model tui-model) (msg clock-tick-msg))
@@ -453,20 +467,9 @@ a batched command that sends the chat request to the daemon."
     (start-swank :port 4006)
     (tui:run program)))
 
-(defun one-shot-chat (text)
-  (let ((stream (connect-daemon)))
-    (unwind-protect
-         (multiple-value-bind (response-text)
-             (send-chat-sync stream text)
-           (format t "~A~%" response-text))
-      (disconnect))))
-
 (defun main ()
-  (let ((args (rest sb-ext:*posix-argv*)))
-    (handler-case
-        (if args
-            (one-shot-chat (format nil "~{~A~^ ~}" args))
-            (tui-repl))
-      (error (c)
-        (format *error-output* "~A~%" c)
-        (sb-ext:exit :code 1)))))
+  (handler-case
+      (tui-repl)
+    (error (c)
+      (format *error-output* "~A~%" c)
+      (sb-ext:exit :code 1))))

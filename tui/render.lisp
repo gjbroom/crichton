@@ -97,7 +97,7 @@ SPINNER view string and STATUS-TEXT."
                  (:waiting (format-waiting-status (model-spinner model)
                                                   (model-status-text model)))
                  (:error   (style *style-error* "Error"))
-                 (:idle    "Ready")))
+                 (:idle    (model-status-text model))))
          (right (if (model-confirm-quit model)
                     "Really quit? (y/n)"
                     ""))
