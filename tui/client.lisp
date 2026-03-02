@@ -14,7 +14,7 @@
   (when *swank-port*
     (format *error-output* "Swank already running on port ~D~%" *swank-port*)
     (return-from start-swank *swank-port*))
-  (let ((actual-port (or port 4006)))
+  (let ((actual-port (or port 4005)))
     (handler-case
         (progn
           (asdf:load-system :swank)
@@ -93,7 +93,7 @@ each message into PROGRAM."
           (model-input model) (tui.textinput:make-textinput
                                :prompt "❯ "
                                :placeholder "Type a message..."
-                               :width (- (model-width model) 4))
+                               :width 1000000)
           (model-viewport model) (tui.viewport:make-viewport
                                   :width (model-width model)
                                   :height (- (model-height model) 3))
@@ -247,7 +247,7 @@ a batched command that sends the chat request to the daemon."
 
 (defun clock-tick-cmd ()
   (lambda ()
-    (sleep 0.1)
+    (sleep (/ 10))
     (make-instance 'clock-tick-msg)))
 
 (defmethod tui:update-message ((model tui-model) (msg clock-tick-msg))
@@ -324,6 +324,27 @@ a batched command that sends the chat request to the daemon."
        (setf (model-show-notifications model) nil
              (model-confirm-quit model) nil
              (model-notifications model) nil)
+       (values model nil))
+
+      ;; Up arrow — move cursor up one visual row in multiline input
+      ((and (eq key :up) (> (input-line-count model) 1))
+       (let* ((input (model-input model))
+              (cw (input-content-width model))
+              (pos (tui.textinput:textinput-cursor-pos input))
+              (new-pos (max 0 (- pos cw))))
+         (when (< new-pos pos)
+           (setf (tui.textinput:textinput-cursor-pos input) new-pos)))
+       (values model nil))
+
+      ;; Down arrow — move cursor down one visual row in multiline input
+      ((and (eq key :down) (> (input-line-count model) 1))
+       (let* ((input (model-input model))
+              (cw (input-content-width model))
+              (pos (tui.textinput:textinput-cursor-pos input))
+              (len (length (tui.textinput:textinput-value input)))
+              (new-pos (min len (+ pos cw))))
+         (when (> new-pos pos)
+           (setf (tui.textinput:textinput-cursor-pos input) new-pos)))
        (values model nil))
 
       ;; Otherwise — pass to textinput
@@ -437,8 +458,8 @@ a batched command that sends the chat request to the daemon."
   (setf (model-width model) (tui:window-size-msg-width msg)
         (model-height model) (tui:window-size-msg-height msg))
   (setf (tui.viewport:viewport-width (model-viewport model)) (model-width model)
-        (tui.viewport:viewport-height (model-viewport model)) (- (model-height model) 3))
-  (setf (tui.textinput:textinput-width (model-input model)) (- (model-width model) 4))
+        (tui.viewport:viewport-height (model-viewport model))
+        (max 1 (- (model-height model) (+ 2 (input-line-count model)))))
   (dolist (e (model-messages model))
     (setf (entry-rendered e) nil))
   (render-chat-history model)
@@ -462,12 +483,13 @@ a batched command that sends the chat request to the daemon."
 (defun tui-repl ()
   (let ((program (tui:make-program
                   (make-instance 'tui-model)
-                  :alt-screen t
+                  :alt-screen nil
                   :mouse nil)))
     (start-swank :port 4006)
     (tui:run program)))
 
 (defun main ()
+  (format *error-output* "Starting TUI")
   (handler-case
       (tui-repl)
     (error (c)
