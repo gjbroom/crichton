@@ -1,0 +1,452 @@
+#+TITLE: User State — Local Identity & Memory Files
+#+AUTHOR: Gordon J. Broom
+#+DATE: 2026-03-02
+#+STARTUP: content
+
+/Inspired by OpenClaw's workspace bootstrap pattern, adapted for Crichton's
+security-first architecture./
+
+* Overview
+
+Crichton wakes fresh on every session.  These files /are/ its continuity.
+They live in =~/.crichton/state/= as plain org-mode files, are loaded at
+session startup, and injected verbatim into the LLM system prompt so the
+agent always knows who it is, who the user is, and what matters.
+
+#+begin_src ditaa
+  +--------------------+
+  | ~/.crichton/state/  |
+  |                    |
+  | SOUL.org           |  <-- persona, values, tone
+  | MEMORY.org         |  <-- curated long-term facts
+  | HEARTBEAT.org      |  <-- periodic task checklist
+  | USER.org           |  <-- user preferences & context
+  |                    |
+  | journal/           |
+  |   2026-03-02.org   |  <-- today's raw daily log
+  |   2026-03-01.org   |  <-- yesterday's daily log
+  |                    |
+  | heartbeat-state.age|  <-- last-checked timestamps (encrypted)
+  +--------------------+
+#+end_src
+
+** Why plain text?
+
+- Org-mode is the project's documentation standard (per AGENTS.org).
+- No schema drift — the LLM reads prose, not data structures.
+- Human-editable in Emacs without tooling.
+- Encrypted at rest when the user opts in (already have age infrastructure).
+
+** Why not reuse storage/store.lisp?
+
+The KV store is for structured daemon data (meters, RSS state, scheduler
+tasks).  User state is /prose for the LLM/ — free-form, human-readable,
+injected wholesale into the system prompt.  Different purpose, different
+API.
+
+* File Definitions
+
+** SOUL.org — Persona & Values
+
+/Who is Crichton?  How should it behave?/
+
+Loaded on every turn.  Tells the model its identity and behavioural
+boundaries.  The user writes this file; the agent may suggest edits but
+must ask first.
+
+Example:
+
+#+begin_example
+,#+TITLE: Soul
+
+,* Core Truths
+- Be genuinely helpful, not performatively helpful.
+- Have opinions.  Disagree when warranted.
+- Be resourceful before asking.
+- You're a guest in someone's life.  Treat access with respect.
+
+,* Boundaries
+- Private things stay private.
+- When in doubt, ask before acting externally.
+
+,* Vibe
+The quietly competent servant who's actually running everything.
+#+end_example
+
+Defaults: ship a minimal template on first boot if the file doesn't exist.
+
+** MEMORY.org — Curated Long-Term Memory
+
+/What does Crichton need to remember across sessions?/
+
+Auto-injected in main sessions.  /Not/ injected in channel (Discord)
+sessions or subagent contexts — personal facts must not leak.
+
+The agent writes this file when it learns durable facts (user
+preferences, ongoing project context, lessons learned).  It is /not/ a
+raw log — it is curated.
+
+Example:
+
+#+begin_example
+,#+TITLE: Long-Term Memory
+
+,* User Preferences
+- Prefers Emacs org-mode over Markdown.
+- Uses SBCL for everything.
+- Timezone: America/Vancouver (Pacific).
+
+,* Ongoing Projects
+- Crichton: secure AI daemon (~/devel/crichton)
+- Focus: TUI client, WASM skill pipeline, RSS filtering.
+
+,* Lessons Learned
+- Always rebuild client binary after changing package exports.
+- Discord heartbeat interval comes from the HELLO payload, not config.
+#+end_example
+
+** HEARTBEAT.org — Periodic Task Checklist
+
+/What should Crichton check when it wakes up on a timer?/
+
+Read by the heartbeat runner (see §Heartbeat Integration below).
+If the file is effectively empty (only headings, blank lines, or empty
+list items), the heartbeat run is /skipped entirely/ — no LLM call, no
+token cost.
+
+Example:
+
+#+begin_example
+,#+TITLE: Heartbeat Checklist
+
+- Check RSS feeds for new items.
+- If battery below 20%, alert the user.
+- Quick scan of system health (load, disk, thermals).
+#+end_example
+
+** USER.org — User Context
+
+/Who is the human?  How should the agent address them?/
+
+Loaded on every turn alongside SOUL.org.
+
+Example:
+
+#+begin_example
+,#+TITLE: User
+
+,* Identity
+- Name: Gord
+- Handle: gjbroom
+- Location: Victoria, BC, Canada
+
+,* Communication Style
+- Prefers concise, direct responses.
+- Dislikes filler phrases ("Great question!", "Absolutely!").
+- Appreciates dry humour.
+#+end_example
+
+** journal/ — Daily Logs
+
+/Raw, append-only daily notes./
+
+Never auto-injected (would blow the context window).  Searchable
+on-demand via a =memory= agent tool.  One file per day:
+=journal/YYYY-MM-DD.org=.
+
+The agent appends to today's journal when it encounters facts worth
+recording but that don't rise to MEMORY.org level.  A pre-compaction
+flush writes transient session knowledge here before context is
+discarded.
+
+* Architecture
+
+** File Layout
+
+#+begin_src
+~/.crichton/state/
+├── SOUL.org
+├── MEMORY.org
+├── HEARTBEAT.org
+├── USER.org
+├── journal/
+│   ├── 2026-03-02.org
+│   └── ...
+└── heartbeat-state.age
+#+end_src
+
+Directory permissions: =0700=.  File permissions: =0600=.
+
+** Module: =crichton/state=
+
+New ASDF module: =(:module "state" :components ((:file "bootstrap") (:file "journal") (:file "heartbeat")))=.
+
+New package =crichton/state= exporting:
+
+| Function                          | Purpose                                              |
+|-----------------------------------+------------------------------------------------------|
+| =state-dir=                       | Return/create =~/.crichton/state/= with 0700 perms   |
+| =load-bootstrap-files=            | Read SOUL + USER + MEMORY + HEARTBEAT into a plist   |
+| =filter-bootstrap-for-session=    | Strip MEMORY + HEARTBEAT for subagent/channel sessions |
+| =bootstrap-system-prompt=         | Build composite system prompt with bootstrap context |
+| =file-effectively-empty-p=        | Check if a file has no substantive content            |
+| =journal-dir=                     | Return/create =state/journal/= directory              |
+| =journal-today-path=              | Return path for today's journal file                 |
+| =journal-append=                  | Append an entry to today's journal                   |
+| =journal-search=                  | Search journal files by date range and/or keyword    |
+| =heartbeat-state-path=            | Path to =heartbeat-state.age=                        |
+| =load-heartbeat-state=            | Decrypt and load last-checked timestamps             |
+| =save-heartbeat-state=            | Encrypt and persist heartbeat timestamps             |
+
+** Bootstrap Loading Flow
+
+#+begin_src ditaa
+  +-------------------+     +--------------------+
+  | Agent turn starts  |---->| load-bootstrap-files|
+  +-------------------+     +--------+-----------+
+                                     |
+                             +-------v--------+
+                             | Session type?  |
+                             +---+--------+---+
+                                 |        |
+                          main/private  channel/subagent
+                                 |        |
+                         +-------v--+  +--v---------+
+                         | Full set |  | Minimal set|
+                         | SOUL     |  | SOUL       |
+                         | USER     |  | USER       |
+                         | MEMORY   |  +------------+
+                         | HEARTBEAT|
+                         +----+-----+
+                              |
+                     +--------v---------+
+                     | Assemble system  |
+                     | prompt with      |
+                     | bootstrap context|
+                     +--------+---------+
+                              |
+                     +--------v---------+
+                     | *default-system- |
+                     |  prompt* +       |
+                     | bootstrap text   |
+                     +------------------+
+#+end_src
+
+The =bootstrap-system-prompt= function concatenates
+=*default-system-prompt*= with the loaded bootstrap files, respecting
+a configurable character budget (default: 20,000 chars per file,
+150,000 total).
+
+** Integration with Agent Loop
+
+=agent/loop.lisp= changes:
+
+1. =run-agent= and =run-agent/stream= gain a =:session-type= keyword
+   (default =:main=; alternatives =:channel=, =:subagent=).
+
+2. When =:system= is not explicitly provided, the agent loop calls
+   =bootstrap-system-prompt= instead of using
+   =*default-system-prompt*= directly:
+
+   #+begin_src lisp
+   (let ((system (or system
+                     (crichton/state:bootstrap-system-prompt
+                      :session-type session-type))))
+     ...)
+   #+end_src
+
+3. The RPC chat handler passes =:session-type= based on the request
+   source (TUI/client → =:main=, Discord → =:channel=).
+
+** Agent Tools for Memory
+
+Two new tools registered in =agent/tools.lisp=:
+
+*** =memory_write=
+
+Write a fact to MEMORY.org or today's journal.
+
+#+begin_src lisp
+;; Tool definition
+(:name "memory_write"
+ :description "Write a durable fact to long-term memory (MEMORY.org)
+or today's journal. Use 'memory' target for important, curated facts.
+Use 'journal' target for session-specific notes."
+ :input-schema (:type "object"
+                :properties (:target (:type "string" :enum ("memory" "journal"))
+                             :content (:type "string"))
+                :required ("target" "content")))
+#+end_src
+
+*** =memory_search=
+
+Search journal entries by date range and/or keyword.
+
+#+begin_src lisp
+(:name "memory_search"
+ :description "Search daily journal entries. Returns matching excerpts."
+ :input-schema (:type "object"
+                :properties (:query (:type "string")
+                             :days-back (:type "integer" :default 7))
+                :required ("query")))
+#+end_src
+
+* Heartbeat Integration
+
+** Current State
+
+Crichton already has a scheduler (=skills/builtins/scheduler.lisp=)
+that can run periodic tasks.  The heartbeat is a scheduled action
+that:
+
+1. Reads HEARTBEAT.org.
+2. If effectively empty → skip (no LLM call).
+3. Otherwise, runs an agent turn with the heartbeat checklist as the
+   user prompt, in a dedicated heartbeat session.
+4. If the response is =HEARTBEAT_OK= → suppress, prune transcript.
+5. If real content → route to notification system (Pushover, TUI
+   toast, or Discord).
+
+** Effectively Empty Check
+
+#+begin_src lisp
+(defun file-effectively-empty-p (path)
+  "Return T if PATH has no substantive content.
+   Blank lines, org-mode headers (#+TITLE, * Heading), and empty
+   list items (- [ ]) are not considered substantive."
+  (with-open-file (s path :direction :input :if-does-not-exist nil)
+    (unless s (return-from file-effectively-empty-p t))
+    (loop for line = (read-line s nil nil)
+          while line
+          for trimmed = (string-trim '(#\Space #\Tab) line)
+          never (and (plusp (length trimmed))
+                     (not (char= (char trimmed 0) #\#))     ; #+KEYWORD
+                     (not (and (char= (char trimmed 0) #\*)  ; * Heading
+                               (or (= (length trimmed) 1)
+                                   (char= (char trimmed 1) #\Space))))
+                     (not (cl-ppcre:scan "^[-*+]\\s*(?:\\[[ Xx]?\\]\\s*)?$"
+                                          trimmed))))))
+#+end_src
+
+** Heartbeat Session Isolation
+
+The heartbeat runs in its own session (not the user's main session)
+to avoid polluting the conversation with periodic check-ins.
+=MEMORY.org= is /not/ injected in heartbeat sessions (session-type
+=:heartbeat=) — it doesn't need personal context to check RSS or
+battery levels.
+
+** Transcript Pruning
+
+When the heartbeat response is =HEARTBEAT_OK=, the heartbeat
+session's message list is truncated back to its pre-heartbeat length.
+This prevents context window erosion from zero-information ACK
+exchanges.
+
+* Configuration
+
+New =[state]= section in =config.toml=:
+
+#+begin_src toml
+[state]
+# Enable/disable bootstrap file injection
+enabled = true
+
+# Per-file character limit (prevents huge files from blowing context)
+max_file_chars = 20000
+
+# Total character budget for all bootstrap files combined
+max_total_chars = 150000
+
+# Encrypt state files at rest (uses existing age identity key)
+encrypt = false
+
+[heartbeat]
+# Interval in minutes (0 = disabled)
+interval_minutes = 30
+
+# Active hours (24h format, skip outside this window)
+active_start = "08:00"
+active_end = "22:00"
+
+# Suppress duplicate alerts within this window (hours)
+dedup_hours = 24
+#+end_src
+
+* Security Considerations
+
+| Concern                    | Mitigation                                                    |
+|----------------------------+---------------------------------------------------------------|
+| MEMORY.org leaks to skills | Skills cannot access =state/= — no host function, no RPC op  |
+| Channel sessions see personal data | =filter-bootstrap-for-session= strips MEMORY for channels |
+| Heartbeat burns tokens     | Empty-file check gates the API call entirely                  |
+| Large files blow context   | Per-file and total character budgets enforced                 |
+| State files readable       | =0700= dir, =0600= files; optional age encryption            |
+| Journal grows unbounded    | Retention policy: purge journals older than =retention_days=  |
+
+* Implementation Plan
+
+** Phase 1: Bootstrap Files (Minimal)
+1. Create =state/= module with =bootstrap.lisp=.
+2. Implement =load-bootstrap-files=, =filter-bootstrap-for-session=,
+   =bootstrap-system-prompt=.
+3. Ship default SOUL.org + USER.org templates (created on first boot).
+4. Integrate with =agent/loop.lisp= — replace bare
+   =*default-system-prompt*= with =bootstrap-system-prompt=.
+5. Add =[state]= config section parsing.
+
+** Phase 2: Journal & Memory Tools
+1. Implement =journal.lisp= — =journal-append=, =journal-search=.
+2. Register =memory_write= and =memory_search= agent tools.
+3. Add pre-compaction journal flush (when context window nears limit).
+
+** Phase 3: Heartbeat Integration
+1. Implement =heartbeat.lisp= — state tracking, empty-file check.
+2. Register heartbeat as a schedulable action.
+3. Add transcript pruning for HEARTBEAT_OK responses.
+4. Wire up notification routing (Pushover / TUI toast).
+
+** Phase 4: Polish
+1. Journal retention (purge old files, respects =sessions.retention_days=).
+2. Optional age encryption for state files.
+3. CLI/TUI commands: =:soul=, =:memory=, =:heartbeat= to view/edit.
+4. =crichton-client= subcommands for state management.
+
+* Relationship to Existing Modules
+
+#+begin_src ditaa
+  +-----------------+       +------------------+
+  | crichton/state  |       | crichton/sessions|
+  | (new)           |       | (existing)       |
+  |                 |       |                  |
+  | SOUL, USER,     |       | Conversation     |
+  | MEMORY,         |       | transcripts      |
+  | HEARTBEAT,      |       | (encrypted .age) |
+  | journal/        |       |                  |
+  |                 |       | Per-session       |
+  | Identity &      |       | message history  |
+  | continuity      |       |                  |
+  +---------+-------+       +--------+---------+
+            |                        |
+            v                        v
+  +---------+------------------------+---------+
+  |              agent/loop.lisp               |
+  |                                            |
+  |  system prompt = bootstrap + default       |
+  |  messages     = session history            |
+  +--------------------------------------------+
+
+  +-----------------+       +------------------+
+  | crichton/storage|       | crichton/skills  |
+  | (existing)      |       | /kv-store        |
+  |                 |       | (existing)       |
+  | Daemon-wide KV  |       |                  |
+  | (meters, RSS,   |       | Per-skill KV     |
+  | scheduler)      |       | (WASM sandbox)   |
+  +-----------------+       +------------------+
+#+end_src
+
+=crichton/state= is orthogonal to sessions (which store message
+history) and storage (which stores structured daemon data).  State
+files are /prose for the LLM's context window/, not data for
+programmatic access.
