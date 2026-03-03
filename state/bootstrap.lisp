@@ -1,16 +1,15 @@
 ;;;; state/bootstrap.lisp
 ;;;;
-;;;; User-state bootstrap files: SOUL.org, USER.org, MEMORY.org, HEARTBEAT.org
+;;;; User-state bootstrap files: SOUL.org, USER.org, MEMORY.org
 ;;;;
 ;;;; These org-mode files live in ~/.crichton/state/ and are injected
 ;;;; into the LLM system prompt at session startup.  They give the agent
 ;;;; its identity, user context, and long-term memory.
 ;;;;
 ;;;; Session-type filtering:
-;;;;   :main      — full set (SOUL + USER + MEMORY + HEARTBEAT)
+;;;;   :main      — full set (SOUL + USER + MEMORY)
 ;;;;   :channel   — minimal (SOUL + USER only)
 ;;;;   :subagent  — minimal (SOUL + USER only)
-;;;;   :heartbeat — SOUL + HEARTBEAT only
 
 (in-package #:crichton/state)
 
@@ -32,17 +31,15 @@
 ;;; --- Bootstrap file definitions ---
 
 (defparameter *bootstrap-files*
-  '((:name "SOUL"     :filename "SOUL.org"      :full t :minimal t :heartbeat t)
-    (:name "USER"     :filename "USER.org"       :full t :minimal t :heartbeat nil)
-    (:name "MEMORY"   :filename "MEMORY.org"     :full t :minimal nil :heartbeat nil)
-    (:name "HEARTBEAT" :filename "HEARTBEAT.org" :full t :minimal nil :heartbeat t))
+  '((:name "SOUL"   :filename "SOUL.org"   :full t :minimal t)
+    (:name "USER"   :filename "USER.org"   :full t :minimal t)
+    (:name "MEMORY" :filename "MEMORY.org" :full t :minimal nil))
   "Bootstrap file specifications.
 Each entry is a plist with:
   :NAME      — display name for the section header
   :FILENAME  — file on disk in state-dir
   :FULL      — include in :main sessions
-  :MINIMAL   — include in :channel/:subagent sessions
-  :HEARTBEAT — include in :heartbeat sessions")
+  :MINIMAL   — include in :channel/:subagent sessions")
 
 ;;; --- Default templates ---
 
@@ -129,13 +126,12 @@ Called at daemon startup."
 
 (defun session-type-filter (session-type)
   "Return the filter key for SESSION-TYPE.
-:main → :full, :channel/:subagent → :minimal, :heartbeat → :heartbeat."
+:main → :full, :channel/:subagent → :minimal."
   (case session-type
-    (:main      :full)
-    (:channel   :minimal)
-    (:subagent  :minimal)
-    (:heartbeat :heartbeat)
-    (otherwise  :full)))
+    (:main     :full)
+    (:channel  :minimal)
+    (:subagent :minimal)
+    (otherwise :full)))
 
 (defun load-bootstrap-files (&key (session-type :main))
   "Load bootstrap files appropriate for SESSION-TYPE.

@@ -99,7 +99,7 @@ SYSTEM defaults to bootstrap-assembled prompt for SESSION-TYPE.
 TOOLS defaults to all registered tools.
 MESSAGES is the conversation history (extended destructively via NCONC).
 SESSION-TYPE controls which bootstrap files are included (:main, :channel,
-:subagent, :heartbeat).
+:subagent).
 MAX-ITERATIONS prevents runaway tool loops."
   (let ((provider (or provider (crichton/llm:ensure-llm-provider)))
         (system   (%resolve-system-prompt system session-type))
@@ -122,7 +122,7 @@ MAX-ITERATIONS prevents runaway tool loops."
   "Run the agent loop on USER-INPUT, streaming the final response.
 ON-DELTA is called with each text delta string during the final streaming response.
 SESSION-TYPE controls which bootstrap files are included (:main, :channel,
-:subagent, :heartbeat).
+:subagent).
 Returns (values response-text all-messages last-response), same as run-agent."
   (let ((provider (or provider (crichton/llm:ensure-llm-provider)))
         (system   (%resolve-system-prompt system session-type))

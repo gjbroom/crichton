@@ -386,7 +386,7 @@ dedup_hours = 24
 
 * Implementation Plan
 
-** Phase 1: Bootstrap Files (Minimal)
+** Phase 1: Bootstrap Files (Minimal) — ✓ DONE
 1. Create =state/= module with =bootstrap.lisp=.
 2. Implement =load-bootstrap-files=, =filter-bootstrap-for-session=,
    =bootstrap-system-prompt=.
@@ -395,21 +395,21 @@ dedup_hours = 24
    =*default-system-prompt*= with =bootstrap-system-prompt=.
 5. Add =[state]= config section parsing.
 
-** Phase 2: Journal & Memory Tools
+** Phase 2: Journal & Memory Tools — ✓ DONE
 1. Implement =journal.lisp= — =journal-append=, =journal-search=.
 2. Register =memory_write= and =memory_search= agent tools.
 3. Add pre-compaction journal flush (when context window nears limit).
 
-** Phase 3: Heartbeat Integration
-1. Implement =heartbeat.lisp= — state tracking, empty-file check.
-2. Register heartbeat as a schedulable action.
-3. Add transcript pruning for HEARTBEAT_OK responses.
-4. Wire up notification routing (Pushover / TUI toast).
+** Phase 3: Polish — DEFERRED (~1 week)
 
-** Phase 4: Polish
+/Note: The original Phase 3 (Heartbeat Integration) was dropped.
+HEARTBEAT.org is redundant — the existing scheduler already handles
+periodic tasks.  Heartbeat-style checks are better expressed as
+schedulable actions than as a separate file./
+
 1. Journal retention (purge old files, respects =sessions.retention_days=).
 2. Optional age encryption for state files.
-3. CLI/TUI commands: =:soul=, =:memory=, =:heartbeat= to view/edit.
+3. CLI/TUI commands: =:soul=, =:memory= to view/edit.
 4. =crichton-client= subcommands for state management.
 
 * Relationship to Existing Modules
