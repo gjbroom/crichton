@@ -379,6 +379,43 @@
   "Disable automatic RSS state persistence."
   (setf *auto-persist-rss* nil))
 
+;;; --- Monitor registry (survives restarts) ---
+
+(defvar *rss-monitors-lock* (bt:make-lock "rss-monitors"))
+(defvar *rss-monitors* (make-hash-table :test #'equal)
+  "Registry of active RSS monitors: name → plist (:url :interval-seconds).")
+
+(defun persist-rss-monitors ()
+  "Save the monitor registry to storage so monitors survive restarts."
+  (bt:with-lock-held (*rss-monitors-lock*)
+    (let ((ht (make-hash-table :test #'equal)))
+      (maphash (lambda (name config)
+                 (let ((entry (make-hash-table :test #'equal)))
+                   (setf (gethash "url" entry) (getf config :url)
+                         (gethash "interval_seconds" entry) (getf config :interval-seconds))
+                   (setf (gethash name ht) entry)))
+               *rss-monitors*)
+      (crichton/storage:store-set "rss" "monitors" ht)))
+  (log:debug "Persisted ~D RSS monitor~:P" (hash-table-count *rss-monitors*)))
+
+(defun restore-rss-monitors ()
+  "Restore RSS monitors from storage and re-register them with the scheduler.
+   Call after start-scheduler during daemon init."
+  (let ((data (crichton/storage:store-get "rss" "monitors")))
+    (when (and data (hash-table-p data))
+      (let ((restored 0) (failed 0))
+        (maphash (lambda (name entry)
+                   (handler-case
+                       (let ((url (gethash "url" entry))
+                             (interval (gethash "interval_seconds" entry)))
+                         (rss-monitor-start name url interval :persist nil)
+                         (incf restored))
+                     (error (c)
+                       (log:warn "Failed to restore RSS monitor ~A: ~A" name c)
+                       (incf failed))))
+                 data)
+        (log:info "Restored ~D RSS monitor~:P (~D failed)" restored failed)))))
+
 ;;; --- Monitoring integration with scheduler ---
 
 (defun rss-monitor-poll (name url)
@@ -409,18 +446,30 @@
           (log:warn "RSS monitor ~A failed after ~D attempt~:P: ~A"
                     name (1+ attempts) c))))))
 
-(defun rss-monitor-start (name url interval-seconds &key (replace t))
+(defun rss-monitor-start (name url interval-seconds &key (replace t) (persist t))
   "Start monitoring a feed by scheduling periodic checks.
-   NAME is the task name. Results logged via log4cl."
+   NAME is the task name. Results logged via log4cl.
+   When PERSIST is T (default), saves the monitor config to storage
+   so it survives daemon restarts."
   (schedule-every name interval-seconds
                   (lambda () (rss-monitor-poll name url))
                   :replace replace)
+  (bt:with-lock-held (*rss-monitors-lock*)
+    (setf (gethash name *rss-monitors*)
+          (list :url url :interval-seconds interval-seconds)))
+  (when persist
+    (persist-rss-monitors))
   (log:info "RSS monitor started: ~A → ~A (every ~Ds)" name url interval-seconds)
   name)
 
 (defun rss-monitor-stop (name)
-  "Stop monitoring a feed by cancelling its scheduled task."
-  (cancel-task name))
+  "Stop monitoring a feed by cancelling its scheduled task.
+   Removes the monitor from persistent storage."
+  (let ((found (cancel-task name)))
+    (bt:with-lock-held (*rss-monitors-lock*)
+      (remhash name *rss-monitors*))
+    (persist-rss-monitors)
+    found))
 
 (defun rss-list-monitors ()
   "List all RSS monitor tasks (tasks whose names start with 'rss:')."

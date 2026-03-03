@@ -60,6 +60,8 @@
   (crichton/skills:start-scheduler)
   (guarded "Task restoration at startup failed"
     (crichton/skills:restore-user-tasks))
+  (guarded "RSS monitor restoration at startup failed"
+    (crichton/skills:restore-rss-monitors))
   (guarded "Skill discovery at startup failed"
     (crichton/skills:discover-skills))
   (guarded "Battery monitoring startup failed"
@@ -97,6 +99,17 @@
     (log:info "Crichton daemon exiting."))
   t)
 
+(defun persist-all-storage ()
+  "Persist all the memory data structures back to permanent storage."
+  (guarded "KV cache flush at shutdown failed"
+    (crichton/skills:flush-all-kv))
+  (guarded "Task persistence at shutdown failed"
+    (crichton/skills:persist-user-tasks))
+  (guarded "Meter persistence at shutdown failed"
+    (crichton/skills:save-meters))
+  (guarded "Storage flush at shutdown failed"
+    (crichton/storage:flush-all-storage)))
+
 (defun stop-daemon ()
   "Stop the Crichton daemon.  Wakes the foreground loop if running."
   (unless *running*
@@ -108,14 +121,7 @@
     (stop-rpc-server))
   (guarded "Battery monitoring shutdown error"
     (crichton/skills:stop-battery-monitoring))
-  (guarded "KV cache flush at shutdown failed"
-    (crichton/skills:flush-all-kv))
-  (guarded "Task persistence at shutdown failed"
-    (crichton/skills:persist-user-tasks))
-  (guarded "Meter persistence at shutdown failed"
-    (crichton/skills:save-meters))
-  (guarded "Storage flush at shutdown failed"
-    (crichton/storage:flush-all-storage))
+  (persist-all-storage)
   (crichton/skills:stop-scheduler)
   (setf *running* nil)
   (bt:with-lock-held (*shutdown-lock*)
