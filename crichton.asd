@@ -66,6 +66,8 @@ signing. Informed by a security audit of OpenClaw."
                 :components ((:file "protocol")
                              (:file "backend-age-file")
                              (:file "mediator")))
+               (:module "state"
+                 :components ((:file "bootstrap")))
                (:module "sessions"
                  :components ((:file "store")
                               (:file "retention")))

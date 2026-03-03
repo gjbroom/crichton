@@ -38,8 +38,10 @@
          (log:warn "~A: ~A" ,description ,c)))))
 
 (defun init-storage ()
-  "Initialize storage subsystems: credentials, sessions, KV cache, data store, meters."
+  "Initialize storage subsystems: credentials, sessions, KV cache, data store, meters, state."
   (crichton/credentials:ensure-credential-store)
+  (guarded "State file initialization failed"
+    (crichton/state:ensure-default-state-files))
   (guarded "Session purge at startup failed"
     (crichton/sessions:purge-expired-sessions))
   (guarded "KV cache preload at startup failed"

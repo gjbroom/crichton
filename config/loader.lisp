@@ -97,7 +97,10 @@
                          :encrypt t)
         :credentials (list :backend :auto)
         :network (list :egress-policy :deny-all)
-        :weather (list :city "Victoria")))
+        :weather (list :city "Victoria")
+        :state (list :enabled t
+                     :max-file-chars 20000
+                     :max-total-chars 150000)))
 
 (defun reload-config (&optional (path (merge-pathnames "config.toml" *agent-home*)))
   "Hot-reload configuration from PATH without restarting the daemon.

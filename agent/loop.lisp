@@ -78,7 +78,16 @@ When reporting tool results, summarize the key information clearly."
 
 ;;; --- Agent loop ---
 
+(defun %resolve-system-prompt (system session-type)
+  "Resolve the system prompt: use SYSTEM if provided, otherwise build
+from bootstrap files for SESSION-TYPE."
+  (or system
+      (if (crichton/config:config-section-get :state :enabled t)
+          (crichton/state:bootstrap-system-prompt :session-type session-type)
+          *default-system-prompt*)))
+
 (defun run-agent (user-input &key provider system tools messages
+                                  (session-type :main)
                                   (max-iterations *default-max-iterations*)
                                   (max-tokens *default-max-tokens*)
                                   temperature)
@@ -86,12 +95,14 @@ When reporting tool results, summarize the key information clearly."
 Returns (values response-text all-messages last-response).
 
 PROVIDER defaults to the configured LLM provider.
-SYSTEM defaults to *default-system-prompt*.
+SYSTEM defaults to bootstrap-assembled prompt for SESSION-TYPE.
 TOOLS defaults to all registered tools.
 MESSAGES is the conversation history (extended destructively via NCONC).
+SESSION-TYPE controls which bootstrap files are included (:main, :channel,
+:subagent, :heartbeat).
 MAX-ITERATIONS prevents runaway tool loops."
   (let ((provider (or provider (crichton/llm:ensure-llm-provider)))
-        (system   (or system *default-system-prompt*))
+        (system   (%resolve-system-prompt system session-type))
         (tools    (or tools (all-tool-defs)))
         (msgs     (%initialize-messages user-input messages)))
     (log:info "Agent start: ~A" (truncate-for-log user-input))
@@ -104,14 +115,17 @@ MAX-ITERATIONS prevents runaway tool loops."
      "Agent" max-iterations)))
 
 (defun run-agent/stream (user-input on-delta &key provider system tools messages
+                                                      (session-type :main)
                                                       (max-iterations *default-max-iterations*)
                                                       (max-tokens *default-max-tokens*)
                                                       temperature)
   "Run the agent loop on USER-INPUT, streaming the final response.
 ON-DELTA is called with each text delta string during the final streaming response.
+SESSION-TYPE controls which bootstrap files are included (:main, :channel,
+:subagent, :heartbeat).
 Returns (values response-text all-messages last-response), same as run-agent."
   (let ((provider (or provider (crichton/llm:ensure-llm-provider)))
-        (system   (or system *default-system-prompt*))
+        (system   (%resolve-system-prompt system session-type))
         (tools    (or tools (all-tool-defs)))
         (msgs     (%initialize-messages user-input messages)))
     (log:info "Agent/stream start: ~A" (truncate-for-log user-input))

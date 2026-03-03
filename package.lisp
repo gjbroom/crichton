@@ -350,6 +350,14 @@
            #:delete-credential
            #:list-credentials))
 
+(defpackage #:crichton/state
+  (:use #:cl)
+  (:export #:state-dir
+           #:load-bootstrap-files
+           #:filter-bootstrap-for-session
+           #:bootstrap-system-prompt
+           #:ensure-default-state-files))
+
 (defpackage #:crichton/sessions
   (:use #:cl)
   (:export #:create-session
