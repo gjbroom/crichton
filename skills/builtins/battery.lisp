@@ -288,8 +288,33 @@
     (error (c)
       (log:error "Battery monitor callback failed: ~A" c))))
 
-(defun start-battery-monitoring (&key (interval 300))
+(defun persist-battery-monitoring-state (enabled interval)
+  "Save battery monitoring state to storage so it survives restarts."
+  (let ((ht (make-hash-table :test #'equal)))
+    (setf (gethash "enabled" ht) enabled
+          (gethash "interval" ht) interval)
+    (crichton/storage:store-set "battery" "monitoring" ht))
+  (log:debug "Persisted battery monitoring state: enabled=~A interval=~D" enabled interval))
+
+(defun restore-battery-monitoring ()
+  "Restore battery monitoring from persistent state.
+   Call after start-scheduler during daemon init."
+  (let ((data (crichton/storage:store-get "battery" "monitoring")))
+    (when (and data (hash-table-p data))
+      (let ((enabled (gethash "enabled" data))
+            (interval (gethash "interval" data)))
+        (cond
+          ((not enabled)
+           (log:info "Battery monitoring disabled by saved state"))
+          ((not (has-battery-p))
+           (log:info "Battery monitoring saved as enabled but no battery detected"))
+          (t
+           (start-battery-monitoring :interval (or interval 300) :persist nil)
+           (log:info "Restored battery monitoring (interval: ~Ds)" (or interval 300))))))))
+
+(defun start-battery-monitoring (&key (interval 300) (persist t))
   "Start periodic battery monitoring. INTERVAL is in seconds (default: 5 minutes).
+   When PERSIST is T (default), saves the state to storage so it survives restarts.
    Returns T if monitoring started, NIL if already running or no battery present."
   (unless (has-battery-p)
     (log:info "No battery detected; skipping battery monitoring.")
@@ -303,13 +328,18 @@
     (return-from start-battery-monitoring nil))
   ;; Schedule periodic check
   (schedule-every *battery-monitoring-task-name* interval #'battery-monitor-callback)
+  (when persist
+    (persist-battery-monitoring-state t interval))
   (log:info "Battery monitoring started (interval: ~Ds, thresholds: ~S)"
             interval (battery-thresholds))
   t)
 
-(defun stop-battery-monitoring ()
-  "Stop periodic battery monitoring. Returns T if stopped, NIL if not running."
+(defun stop-battery-monitoring (&key (persist t))
+  "Stop periodic battery monitoring. Returns T if stopped, NIL if not running.
+   When PERSIST is T (default), saves disabled state to storage."
   (when (cancel-task *battery-monitoring-task-name*)
     (log:info "Battery monitoring stopped.")
     (setf *battery-last-alert-level* nil)
+    (when persist
+      (persist-battery-monitoring-state nil 300))
     t))

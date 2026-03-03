@@ -64,6 +64,8 @@
     (crichton/skills:restore-rss-monitors))
   (guarded "Skill discovery at startup failed"
     (crichton/skills:discover-skills))
+  (guarded "Battery monitoring restoration failed"
+    (crichton/skills:restore-battery-monitoring))
   (guarded "Battery monitoring startup failed"
     (let ((interval (or (crichton/config:config-section-get :battery :interval) 300)))
       (crichton/skills:start-battery-monitoring :interval interval))))

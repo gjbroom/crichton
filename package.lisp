@@ -235,6 +235,7 @@
            #:battery-check-thresholds
            #:start-battery-monitoring
            #:stop-battery-monitoring
+           #:restore-battery-monitoring
            ;; log inspector
            #:log-file-path
            #:read-log-tail
