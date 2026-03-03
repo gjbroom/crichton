@@ -13,6 +13,12 @@
 
 (in-package #:crichton/state)
 
+;;; --- Character budget for context estimation ---
+
+(defparameter *chars-per-token* 4
+  "Rough estimate: ~4 characters per token for English text.
+Used for context window budget estimation, not billing.")
+
 ;;; --- Journal directory ---
 
 (defun journal-dir ()
@@ -161,3 +167,61 @@ Case-insensitive substring matching."
     (if (zerop total-matches)
         (format nil "No matches for \"~A\" in the last ~D days." query days-back)
         (get-output-stream-string output))))
+
+;;; --- Pre-compaction journal flush ---
+
+(defun %extract-message-text (message)
+  "Extract text content from a MESSAGE plist.
+Content may be a string or a list of content blocks."
+  (let ((content (getf message :content)))
+    (typecase content
+      (string content)
+      (list
+       (with-output-to-string (s)
+         (dolist (block content)
+           (when (and (listp block) (eq (getf block :type) :text))
+             (write-string (or (getf block :text) "") s)
+             (terpri s)))))
+      (t ""))))
+
+(defun estimate-messages-tokens (messages)
+  "Estimate the total token count for MESSAGES using character count heuristic."
+  (let ((total-chars 0))
+    (dolist (msg messages)
+      (incf total-chars (length (%extract-message-text msg))))
+    (ceiling total-chars *chars-per-token*)))
+
+(defun flush-session-to-journal (messages &key (max-chars 8000))
+  "Flush the current session's message history to today's journal.
+Extracts user and assistant messages and writes a summary to the journal
+as a pre-compaction snapshot.  Truncates to MAX-CHARS to avoid huge
+journal entries.
+
+Call this before pruning the message history to preserve session knowledge.
+Returns the journal file path, or NIL if there was nothing to flush."
+  (let ((output (make-string-output-stream))
+        (msg-count 0)
+        (char-count 0))
+    (format output "Pre-compaction session snapshot:~%")
+    (dolist (msg messages)
+      (let* ((role (getf msg :role))
+             (text (%extract-message-text msg))
+             (trimmed (string-trim '(#\Space #\Tab #\Newline) text)))
+        (when (and (plusp (length trimmed))
+                   (member role '(:user :assistant)))
+          (let ((prefix (if (eq role :user) "User" "Crichton")))
+            (let ((entry (format nil "- ~A: ~A~%"
+                                 prefix
+                                 (if (> (length trimmed) 500)
+                                     (format nil "~A..." (subseq trimmed 0 497))
+                                     trimmed))))
+              (when (> (+ char-count (length entry)) max-chars)
+                (format output "- ... (truncated)~%")
+                (return))
+              (write-string entry output)
+              (incf char-count (length entry))
+              (incf msg-count))))))
+    (when (zerop msg-count)
+      (return-from flush-session-to-journal nil))
+    (log:info "Flushing ~D messages to journal (pre-compaction)" msg-count)
+    (journal-append (get-output-stream-string output))))

@@ -362,7 +362,10 @@
            #:journal-today-path
            #:journal-append
            #:journal-search
-           #:append-to-memory))
+           #:append-to-memory
+           ;; pre-compaction (state/journal.lisp)
+           #:estimate-messages-tokens
+           #:flush-session-to-journal))
 
 (defpackage #:crichton/sessions
   (:use #:cl)
