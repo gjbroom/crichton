@@ -27,7 +27,7 @@
                             time-str)
                     time-str))
          (visible-right (tui:visible-length right))
-         (padding (max 0 (- width (length title) visible-right)))
+         (padding (max 0 (- width (tui:visible-length title) visible-right)))
          (line (format nil "~A~A~A" title
                        (make-string padding :initial-element #\Space)
                        right)))
@@ -128,50 +128,56 @@ SPINNER view string and STATUS-TEXT."
          (cursor-line (1+ (floor cursor-pos cw))))
     (max 1 (max text-lines cursor-line))))
 
+(defparameter +ansi-inverse-on+  (format nil "~C[7m" #\Escape))
+(defparameter +ansi-inverse-off+ (format nil "~C[27m" #\Escape))
+
+(defun render-line-with-cursor (prefix line-text cursor-col)
+  "Render a single input line with reverse-video cursor at CURSOR-COL."
+  (let* ((col (min cursor-col (length line-text)))
+         (before (subseq line-text 0 col))
+         (cursor-char (if (< col (length line-text))
+                          (string (char line-text col))
+                          " "))
+         (after (if (< col (length line-text))
+                    (subseq line-text (1+ col))
+                    "")))
+    (format nil "~A~A~A~A~A~A"
+            prefix before
+            +ansi-inverse-on+ cursor-char +ansi-inverse-off+
+            after)))
+
 (defun render-input-area (model)
   "Render the input area with visual line wrapping."
   (let* ((input (model-input model))
          (value (tui.textinput:textinput-value input))
-         (cursor-pos (tui.textinput:textinput-cursor-pos input))
-         (prompt (tui.textinput:textinput-prompt input))
-         (prompt-len (tui:visible-length prompt))
-         (cw (input-content-width model))
-         (focused (tui.textinput:textinput-focused input))
          (placeholder (tui.textinput:textinput-placeholder input)))
     (cond
-      ;; Empty with placeholder
       ((and (zerop (length value)) (plusp (length placeholder)))
        (tui.textinput:textinput-view input))
-      ;; Content: wrap across lines
       (t
-       (let* ((nlines (input-line-count model))
+       (let* ((cursor-pos (tui.textinput:textinput-cursor-pos input))
+              (prompt (tui.textinput:textinput-prompt input))
+              (prompt-len (tui:visible-length prompt))
+              (cw (input-content-width model))
+              (focused (tui.textinput:textinput-focused input))
+              (nlines (input-line-count model))
               (padding (make-string prompt-len :initial-element #\Space))
               (cursor-row (floor cursor-pos cw))
-              (cursor-col (mod cursor-pos cw))
-              (lines '()))
-         (dotimes (i nlines)
-           (let* ((start (* i cw))
-                  (end (min (length value) (+ start cw)))
-                  (line-text (if (< start (length value))
-                                 (subseq value start end)
-                                 ""))
-                  (prefix (if (zerop i) prompt padding))
-                  (cursor-on-line (and focused (= i cursor-row))))
-             (push (if cursor-on-line
-                       (let* ((before (subseq line-text
-                                              0 (min cursor-col (length line-text))))
-                              (cursor-char (if (< cursor-col (length line-text))
-                                               (string (char line-text cursor-col))
-                                               " "))
-                              (after (if (< cursor-col (length line-text))
-                                         (subseq line-text (1+ cursor-col))
-                                         ""))
-                              (reversed (format nil "~C[7m~A~C[27m"
-                                                #\Escape cursor-char #\Escape)))
-                         (format nil "~A~A~A~A" prefix before reversed after))
-                       (format nil "~A~A" prefix line-text))
-                   lines)))
-         (format nil "~{~A~^~%~}" (nreverse lines)))))))
+              (cursor-col (mod cursor-pos cw)))
+         (with-output-to-string (s)
+           (dotimes (i nlines)
+             (when (plusp i) (terpri s))
+             (let* ((start (* i cw))
+                    (end (min (length value) (+ start cw)))
+                    (line-text (if (< start (length value))
+                                   (subseq value start end)
+                                   ""))
+                    (prefix (if (zerop i) prompt padding)))
+               (write-string
+                (if (and focused (= i cursor-row))
+                    (render-line-with-cursor prefix line-text cursor-col)
+                    (format nil "~A~A" prefix line-text))
+                s)))))))))
 
 ;;; --- Notification toast ---
 

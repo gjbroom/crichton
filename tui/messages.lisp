@@ -48,6 +48,14 @@
    (session :initarg :session :accessor msg-done-session)
    (error-p :initarg :error-p :initform nil :accessor msg-done-error-p)))
 
+;;; --- Reset status bar to "Ready" (TEA-ish delayed reset) ---
+
+(tui:defmessage reset-status-msg ())
+
+;;; --- Reset Ctrl-C confirm-quit state ---
+
+(tui:defmessage reset-confirm-quit-msg ())
+
 ;;; --- User sends a chat message ---
 
 (tui:defmessage send-chat-msg

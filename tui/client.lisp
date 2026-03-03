@@ -27,6 +27,38 @@
         (format *error-output* "Could not start Swank: ~A~%" c)
         nil))))
 
+;;; --- Helpers ---
+
+(defun reset-status-cmd (model &key (delay 3))
+  "Return a TEA command that resets the status bar to Ready after DELAY seconds."
+  (declare (ignore model))
+  (tui:tick delay (lambda () (make-instance 'reset-status-msg))))
+
+(defun set-status-temporarily (model text &key (delay 3))
+  "Set STATUS-TEXT on MODEL and return a command that resets it after DELAY."
+  (setf (model-status-text model) text)
+  (reset-status-cmd model :delay delay))
+
+(defun handled (model &optional cmd)
+  "Standard return shape for local commands: (values model cmd t)."
+  (values model cmd t))
+
+(defun append-chat-entry (model entry &key (scroll-p t))
+  "Append ENTRY to MODEL's message list, re-render, and optionally scroll."
+  (setf (model-messages model)
+        (append (model-messages model) (list entry)))
+  (render-chat-history model)
+  (when scroll-p
+    (tui.viewport:viewport-goto-bottom (model-viewport model)))
+  model)
+
+(defun refresh-chat (model &key (scroll-p t))
+  "Re-render chat history and optionally scroll to bottom."
+  (render-chat-history model)
+  (when scroll-p
+    (tui.viewport:viewport-goto-bottom (model-viewport model)))
+  model)
+
 ;;; --- Daemon reader thread ---
 
 (defun dispatch-daemon-message (program msg)
@@ -108,125 +140,116 @@ each message into PROGRAM."
 
 ;;; --- Local command handling ---
 
+(defun parse-local-command (text)
+  "Parse a colon-prefixed command. Returns (values keyword args raw-string)."
+  (let* ((raw (string-trim '(#\Space #\Tab) (subseq text 1)))
+         (space-pos (position #\Space raw))
+         (cmd-str (if space-pos (subseq raw 0 space-pos) raw))
+         (args (when space-pos
+                 (string-trim '(#\Space #\Tab) (subseq raw (1+ space-pos))))))
+    (values (intern (string-upcase cmd-str) :keyword)
+            args
+            raw)))
+
+(defun format-notification-history (history)
+  "Format notification history entries into a single display string."
+  (with-output-to-string (s)
+    (dolist (n history)
+      (format s "~A [~A/~A] ~A~%"
+              (format-time (notif-time n))
+              (or (notif-source n) "?")
+              (or (notif-kind n) "?")
+              (notif-text n)))))
+
+(defun handle-sixel-command (model args)
+  "Handle :sixel on/off command."
+  (let ((on-p (string-equal args "on")))
+    (setf (model-sixel-enabled model) (if on-p :on :off))
+    (set-status-temporarily model
+      (if on-p "Sixel rendering enabled" "Sixel rendering disabled"))))
+
+(defun handle-img-command (model args)
+  "Handle :img <path> command."
+  (let ((path (string-trim '(#\Space #\Tab) (or args ""))))
+    (cond
+      ((not (probe-file path))
+       (set-status-temporarily model (format nil "File not found: ~A" path)))
+      ((not (eq (model-sixel-enabled model) :on))
+       (set-status-temporarily model "Sixel not enabled (use :sixel on)"))
+      (t
+       (append-chat-entry model
+         (make-instance 'chat-entry
+                        :role :notification
+                        :text (format nil "[Image: ~A]" path)
+                        :time (get-universal-time)))
+       (reset-status-cmd model)))))
+
 (defun handle-local-command (model text)
   "Handle colon-prefixed local commands. Returns (values model cmd handled-p)."
-  (let ((cmd-text (string-trim '(#\Space #\Tab) (subseq text 1))))
-    (cond
-      ((or (string-equal cmd-text "quit")
-           (string-equal cmd-text "q"))
-       (values model (tui:quit-cmd) t))
+  (multiple-value-bind (cmd args) (parse-local-command text)
+    (handled model
+      (case cmd
+        ((:quit :q)
+         (tui:quit-cmd))
 
-      ((string-equal cmd-text "clear")
-       (setf (model-messages model) nil)
-       (render-chat-history model)
-       (values model nil t))
+        (:clear
+         (setf (model-messages model) nil)
+         (render-chat-history model)
+         nil)
 
-      ((string-equal cmd-text "new")
-       (setf (model-session-id model) nil
-             (model-messages model) nil)
-       (render-chat-history model)
-       (setf (model-status-text model) "New session")
-       (values model (tui:tick 3 (lambda ()
-                                   (setf (model-status-text model) "Ready")))
-               t))
+        (:new
+         (setf (model-session-id model) nil
+               (model-messages model) nil)
+         (render-chat-history model)
+         (set-status-temporarily model "New session"))
 
-      ((string-equal cmd-text "session")
-       (setf (model-status-text model)
-             (if (model-session-id model)
-                 (format nil "Session: ~A" (model-session-id model))
-                 "No active session"))
-       (values model (tui:tick 3 (lambda ()
-                                   (setf (model-status-text model) "Ready")))
-               t))
+        (:session
+         (set-status-temporarily model
+           (if (model-session-id model)
+               (format nil "Session: ~A" (model-session-id model))
+               "No active session")))
 
-      ((string-equal cmd-text "status")
-       (when (model-daemon-stream model)
-         (write-message (model-daemon-stream model) (make-status-request)))
-       (setf (model-status-text model) "Status requested")
-       (values model (tui:tick 3 (lambda ()
-                                   (setf (model-status-text model) "Ready")))
-               t))
+        (:status
+         (when (model-daemon-stream model)
+           (write-message (model-daemon-stream model) (make-status-request)))
+         (set-status-temporarily model "Status requested"))
 
-      ((string-equal cmd-text "notifications")
-       (if (model-notification-history model)
-           (let ((history-text
-                   (with-output-to-string (s)
-                     (dolist (n (model-notification-history model))
-                       (format s "~A [~A/~A] ~A~%"
-                               (format-time (notif-time n))
-                               (or (notif-source n) "?")
-                               (or (notif-kind n) "?")
-                               (notif-text n))))))
-             (setf (model-messages model)
-                   (nconc (model-messages model)
-                          (list (make-instance 'chat-entry
-                                               :role :notification
-                                               :text history-text
-                                               :time (get-universal-time)))))
-             (render-chat-history model)
-             (tui.viewport:viewport-goto-bottom (model-viewport model)))
-           (setf (model-status-text model) "No notifications yet"))
-       (values model (tui:tick 3 (lambda ()
-                                   (setf (model-status-text model) "Ready")))
-               t))
+        (:notifications
+         (if (model-notification-history model)
+             (progn
+               (append-chat-entry model
+                 (make-instance 'chat-entry
+                                :role :notification
+                                :text (format-notification-history
+                                       (model-notification-history model))
+                                :time (get-universal-time)))
+               (reset-status-cmd model))
+             (set-status-temporarily model "No notifications yet")))
 
-      ((or (string-equal cmd-text "sixel on")
-           (string-equal cmd-text "sixel off"))
-       (let ((on-p (string-equal cmd-text "sixel on")))
-         (setf (model-sixel-enabled model) (if on-p :on :off))
-         (setf (model-status-text model)
-               (if on-p "Sixel rendering enabled" "Sixel rendering disabled")))
-       (values model (tui:tick 3 (lambda ()
-                                   (setf (model-status-text model) "Ready")))
-               t))
+        (:sixel
+         (handle-sixel-command model args))
 
-      ((and (>= (length cmd-text) 4)
-            (string-equal (subseq cmd-text 0 4) "img "))
-       (let* ((path (string-trim '(#\Space #\Tab) (subseq cmd-text 4))))
-         (cond
-           ((not (probe-file path))
-            (setf (model-status-text model)
-                  (format nil "File not found: ~A" path)))
-           ((not (eq (model-sixel-enabled model) :on))
-            (setf (model-status-text model)
-                  "Sixel not enabled (use :sixel on)"))
-           (t
-            (setf (model-messages model)
-                  (nconc (model-messages model)
-                         (list (make-instance 'chat-entry
-                                              :role :notification
-                                              :text (format nil "[Image: ~A]" path)
-                                              :time (get-universal-time)))))
-            (render-chat-history model)
-            (tui.viewport:viewport-goto-bottom (model-viewport model)))))
-       (values model (tui:tick 3 (lambda ()
-                                   (setf (model-status-text model) "Ready")))
-               t))
+        (:img
+         (handle-img-command model args))
 
-      (t
-       (setf (model-status-text model)
-             (format nil "Unknown command: :~A" cmd-text))
-       (values model (tui:tick 3 (lambda ()
-                                    (setf (model-status-text model) "Ready")))
-               t)))))
+        (otherwise
+         (set-status-temporarily model
+           (format nil "Unknown command: :~A"
+                   (string-downcase (symbol-name cmd)))))))))
 
 ;;; --- Enter-key chat submission ---
 
 (defun handle-send-chat (model text)
   "Append user and placeholder assistant entries, start spinner, and return
 a batched command that sends the chat request to the daemon."
-  (setf (model-messages model)
-        (nconc (model-messages model)
-               (list (make-instance 'chat-entry
-                                    :role :user
-                                    :text text
-                                    :time (get-universal-time)))))
+  (append-chat-entry model
+    (make-instance 'chat-entry :role :user :text text
+                               :time (get-universal-time))
+    :scroll-p nil)
   (let ((placeholder (make-instance 'chat-entry
-                                     :role :assistant
-                                     :text ""
+                                     :role :assistant :text ""
                                      :time (get-universal-time))))
-    (setf (model-messages model)
-          (nconc (model-messages model) (list placeholder)))
+    (append-chat-entry model placeholder)
     (setf (model-streaming-entry model) placeholder))
   (tui.textinput:textinput-reset (model-input model))
   (setf (model-status model) :waiting
@@ -235,8 +258,6 @@ a batched command that sends the chat request to the daemon."
                   :frames tui.spinner:*spinner-dot*
                   :fps 0.1)))
     (setf (model-spinner model) spinner)
-    (render-chat-history model)
-    (tui.viewport:viewport-goto-bottom (model-viewport model))
     (values model (tui:batch
                    (send-chat-cmd (model-daemon-stream model)
                                   text
@@ -247,115 +268,110 @@ a batched command that sends the chat request to the daemon."
 
 (defun clock-tick-cmd ()
   (lambda ()
-    (sleep (/ 10))
+    (sleep 0.1)
     (make-instance 'clock-tick-msg)))
 
 (defmethod tui:update-message ((model tui-model) (msg clock-tick-msg))
   (values model (clock-tick-cmd)))  ; schedule the next tick, view redraws automatically
 
-;;; --- Update: key-msg ---
+;;; --- Update: key-msg (decomposed) ---
+
+(defun handle-enter (model)
+  "Handle Enter key: submit chat or dispatch a local command."
+  (let ((text (string-trim '(#\Space #\Tab)
+                           (tui.textinput:textinput-value (model-input model)))))
+    (cond
+      ((zerop (length text))
+       (values model nil))
+      ((char= (char text 0) #\:)
+       (tui.textinput:textinput-reset (model-input model))
+       (handle-local-command model text))
+      ((eq (model-status model) :waiting)
+       (values model nil))
+      (t
+       (handle-send-chat model text)))))
+
+(defun handle-ctrl-c (model)
+  "Handle Ctrl-C: quit on second press, arm confirmation on first."
+  (if (model-confirm-quit model)
+      (values model (tui:quit-cmd))
+      (progn
+        (setf (model-confirm-quit model) t
+              (model-status-text model) "Press Ctrl-C again to quit")
+        (values model (tui:tick 3 (lambda ()
+                                    (make-instance 'reset-confirm-quit-msg)))))))
+
+(defun move-input-cursor-vertical (model delta-rows)
+  "Move the input cursor by DELTA-ROWS visual lines. Clamps to bounds."
+  (let* ((input (model-input model))
+         (cw (input-content-width model))
+         (pos (tui.textinput:textinput-cursor-pos input))
+         (len (length (tui.textinput:textinput-value input)))
+         (new-pos (min len (max 0 (+ pos (* delta-rows cw))))))
+    (unless (= new-pos pos)
+      (setf (tui.textinput:textinput-cursor-pos input) new-pos)))
+  (values model nil))
+
+(defun handle-ctrl-key (model key)
+  "Dispatch Ctrl+<key> chords."
+  (cond
+    ((and (characterp key) (char= key #\c))
+     (handle-ctrl-c model))
+    ((and (characterp key) (char= key #\d))
+     (values model (tui:quit-cmd)))
+    ((and (characterp key) (char= key #\l))
+     (render-chat-history model)
+     (values model nil))
+    (t
+     (values model nil))))
+
+(defun handle-normal-key (model msg key)
+  "Dispatch non-Ctrl keys: navigation, escape, multiline cursor, textinput."
+  (case key
+    (:enter     (handle-enter model))
+    (:page-up   (tui.viewport:viewport-page-up (model-viewport model))
+                (values model nil))
+    (:page-down (tui.viewport:viewport-page-down (model-viewport model))
+                (values model nil))
+    (:home      (tui.viewport:viewport-goto-top (model-viewport model))
+                (values model nil))
+    (:end       (tui.viewport:viewport-goto-bottom (model-viewport model))
+                (values model nil))
+    (:escape    (setf (model-show-notifications model) nil
+                      (model-confirm-quit model) nil
+                      (model-notifications model) nil)
+                (values model nil))
+    (:up        (if (> (input-line-count model) 1)
+                    (move-input-cursor-vertical model -1)
+                    (values model nil)))
+    (:down      (if (> (input-line-count model) 1)
+                    (move-input-cursor-vertical model 1)
+                    (values model nil)))
+    (otherwise  (when (model-confirm-quit model)
+                  (setf (model-confirm-quit model) nil
+                        (model-status-text model) "Ready"))
+                (multiple-value-bind (new-input cmd)
+                    (tui.textinput:textinput-update (model-input model) msg)
+                  (setf (model-input model) new-input)
+                  (values model cmd)))))
 
 (defmethod tui:update-message ((model tui-model) (msg tui:key-msg))
-  (let ((key (tui:key-msg-key msg)))
-    (cond
-      ;; Enter — send chat or handle local command
-      ((eq key :enter)
-       (let ((text (string-trim '(#\Space #\Tab)
-                                (tui.textinput:textinput-value (model-input model)))))
-         (cond
-           ((zerop (length text))
-            (values model nil))
-           ((char= (char text 0) #\:)
-            (tui.textinput:textinput-reset (model-input model))
-            (handle-local-command model text))
-           ((eq (model-status model) :waiting)
-            (values model nil))
-           (t
-            (handle-send-chat model text)))))
+  (if (tui:key-msg-ctrl msg)
+      (handle-ctrl-key model (tui:key-msg-key msg))
+      (handle-normal-key model msg (tui:key-msg-key msg))))
 
-      ;; Ctrl-C — quit with confirmation
-      ;; The returned lambda runs as a TEA command on a background thread;
-      ;; the sleep gives the user time to press Ctrl-C again before the
-      ;; confirmation resets.
-      ((and (tui:key-msg-ctrl msg)
-            (characterp key) (char= key #\c))
-       (if (model-confirm-quit model)
-           (values model (tui:quit-cmd))
-           (progn
-             (setf (model-confirm-quit model) t
-                   (model-status-text model) "Press Ctrl-C again to quit")
-             (values model (lambda ()
-                           (sleep 3.0)
-                           (setf (model-confirm-quit model) nil
-                                 (model-status-text model) "Ready")
-                           nil)))))
+;;; --- Update: reset-status-msg ---
 
-      ;; Ctrl-D — immediate quit
-      ((and (tui:key-msg-ctrl msg)
-            (characterp key) (char= key #\d))
-       (values model (tui:quit-cmd)))
+(defmethod tui:update-message ((model tui-model) (msg reset-status-msg))
+  (setf (model-status-text model) "Ready")
+  (values model nil))
 
-      ;; Ctrl-L — force redraw
-      ((and (tui:key-msg-ctrl msg)
-            (characterp key) (char= key #\l))
-       (render-chat-history model)
-       (values model nil))
+;;; --- Update: reset-confirm-quit-msg ---
 
-      ;; Page Up / Page Down — delegate to viewport
-      ((eq key :page-up)
-       (tui.viewport:viewport-page-up (model-viewport model))
-       (values model nil))
-
-      ((eq key :page-down)
-       (tui.viewport:viewport-page-down (model-viewport model))
-       (values model nil))
-
-      ;; Home / End — top / bottom of chat
-      ((eq key :home)
-       (tui.viewport:viewport-goto-top (model-viewport model))
-       (values model nil))
-
-      ((eq key :end)
-       (tui.viewport:viewport-goto-bottom (model-viewport model))
-       (values model nil))
-
-      ;; Escape — dismiss notifications, clear confirm-quit
-      ((eq key :escape)
-       (setf (model-show-notifications model) nil
-             (model-confirm-quit model) nil
-             (model-notifications model) nil)
-       (values model nil))
-
-      ;; Up arrow — move cursor up one visual row in multiline input
-      ((and (eq key :up) (> (input-line-count model) 1))
-       (let* ((input (model-input model))
-              (cw (input-content-width model))
-              (pos (tui.textinput:textinput-cursor-pos input))
-              (new-pos (max 0 (- pos cw))))
-         (when (< new-pos pos)
-           (setf (tui.textinput:textinput-cursor-pos input) new-pos)))
-       (values model nil))
-
-      ;; Down arrow — move cursor down one visual row in multiline input
-      ((and (eq key :down) (> (input-line-count model) 1))
-       (let* ((input (model-input model))
-              (cw (input-content-width model))
-              (pos (tui.textinput:textinput-cursor-pos input))
-              (len (length (tui.textinput:textinput-value input)))
-              (new-pos (min len (+ pos cw))))
-         (when (> new-pos pos)
-           (setf (tui.textinput:textinput-cursor-pos input) new-pos)))
-       (values model nil))
-
-      ;; Otherwise — pass to textinput
-      (t
-       (when (model-confirm-quit model)
-         (setf (model-confirm-quit model) nil
-               (model-status-text model) "Ready"))
-       (multiple-value-bind (new-input cmd)
-           (tui.textinput:textinput-update (model-input model) msg)
-         (setf (model-input model) new-input)
-         (values model cmd))))))
+(defmethod tui:update-message ((model tui-model) (msg reset-confirm-quit-msg))
+  (setf (model-confirm-quit model) nil
+        (model-status-text model) "Ready")
+  (values model nil))
 
 ;;; --- Update: daemon-chat-delta-msg ---
 
@@ -363,11 +379,10 @@ a batched command that sends the chat request to the daemon."
   (let ((entry (model-streaming-entry model)))
     (when entry
       (setf (entry-text entry)
-            (concatenate 'string (entry-text entry) (msg-delta-text msg)))
-      (setf (entry-rendered entry) nil)
-      (setf (model-status-text model) "Streaming...")
-      (render-chat-history model)
-      (tui.viewport:viewport-goto-bottom (model-viewport model))))
+            (concatenate 'string (entry-text entry) (msg-delta-text msg))
+            (entry-rendered entry) nil
+            (model-status-text model) "Streaming...")
+      (refresh-chat model)))
   (values model nil))
 
 ;;; --- Update: daemon-chat-done-msg ---
@@ -388,8 +403,7 @@ a batched command that sends the chat request to the daemon."
         (model-status model) :idle
         (model-spinner model) nil
         (model-status-text model) "Ready")
-  (render-chat-history model)
-  (tui.viewport:viewport-goto-bottom (model-viewport model))
+  (refresh-chat model)
   (values model nil))
 
 ;;; --- Update: daemon-response-msg ---
@@ -402,19 +416,16 @@ a batched command that sends the chat request to the daemon."
             (remove id (model-handled-stream-ids model)))
       (return-from tui:update-message (values model nil))))
   (let ((role (if (msg-response-error-p msg) :error :assistant)))
-    (setf (model-messages model)
-          (nconc (model-messages model)
-                 (list (make-instance 'chat-entry
-                                       :role role
-                                       :text (msg-response-text msg)
-                                       :time (get-universal-time)))))
+    (append-chat-entry model
+      (make-instance 'chat-entry
+                     :role role
+                     :text (msg-response-text msg)
+                     :time (get-universal-time)))
     (when (msg-response-session msg)
       (setf (model-session-id model) (msg-response-session msg)))
     (setf (model-status model) :idle
           (model-spinner model) nil
           (model-status-text model) "Ready")
-    (render-chat-history model)
-    (tui.viewport:viewport-goto-bottom (model-viewport model))
     (values model nil)))
 
 ;;; --- Update: daemon-notification-msg ---
