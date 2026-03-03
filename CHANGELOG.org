@@ -62,6 +62,11 @@ For development details, see the git commit history and BEADS issue tracker.
   - Status bar shows "Streaming..." during active response delivery
   - Duplicate response suppression: streaming IDs tracked to prevent double-display from legacy response path
   - Graceful fallback: if streaming unsupported, falls back to non-streaming =send-message= automatically
+- *User state: journal & memory tools* (Phase 2): agent can now write and search its own memory
+  - =memory_write= tool: write curated facts to MEMORY.org or session notes to today's journal
+  - =memory_search= tool: search journal entries by keyword across recent days
+  - Daily journal files in =~/.crichton/state/journal/YYYY-MM-DD.org= (append-only, timestamped)
+  - Pre-compaction journal flush: session history can be dumped to journal before context pruning
 - *Sixel graphics support* (Phase 3): infrastructure for terminal image rendering (cricht-pmg)
   - Sixel terminal detection heuristic (foot, xterm, mlterm, wezterm, yaft)
   - =img2sixel= integration with result caching
