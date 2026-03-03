@@ -356,7 +356,13 @@
            #:load-bootstrap-files
            #:filter-bootstrap-for-session
            #:bootstrap-system-prompt
-           #:ensure-default-state-files))
+           #:ensure-default-state-files
+           ;; journal & memory (state/journal.lisp)
+           #:journal-dir
+           #:journal-today-path
+           #:journal-append
+           #:journal-search
+           #:append-to-memory))
 
 (defpackage #:crichton/sessions
   (:use #:cl)
