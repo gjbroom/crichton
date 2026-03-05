@@ -145,6 +145,12 @@
            #:pipeline-error-step-skill
            #:register-pipeline-builtin
            #:register-default-pipeline-builtins
+           ;; saved pipelines
+           #:save-pipeline
+           #:delete-pipeline
+           #:list-saved-pipelines
+           #:get-saved-pipeline
+           #:restore-saved-pipelines
            #:weather-report
            #:weather-conditions
            #:system-loadavg
@@ -261,7 +267,24 @@
            #:amp-invoke
            #:amp-code-task
            #:amp-test-task
-           #:amp-report))
+           #:amp-report
+           ;; raindrop.io bookmarks
+           #:raindrop-save
+           #:raindrop-find
+           #:format-raindrop
+           #:format-raindrop-list
+           #:raindrop-get-one
+           #:raindrop-update
+           #:raindrop-remove
+           #:raindrop-list
+           #:raindrop-search
+           #:raindrop-list-collections
+           #:raindrop-list-tags
+           #:raindrop-create-collection
+           #:raindrop-save-report
+           #:raindrop-find-report
+           #:raindrop-collections-report
+           #:raindrop-tags-report))
 
 (defpackage #:crichton/llm
   (:use #:cl)

@@ -590,6 +590,104 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
               :default 7))
   (crichton/state:journal-search query :days-back days-back))
 
+;;; --- Raindrop.io bookmarks tool ---
+
+(define-tool raindrop
+    (:description "Manage bookmarks in Raindrop.io.  Actions: 'save' (create a new bookmark), 'search' (find bookmarks by keyword), 'list' (list bookmarks in a collection), 'get' (get a bookmark by ID), 'update' (modify a bookmark), 'delete' (trash a bookmark), 'collections' (list all collections), 'create_collection' (create a new collection), 'tags' (list all tags).  Requires Raindrop.io API token stored as 'raindrop-api' in credentials.")
+  ((action "string"
+           "The bookmark action to perform."
+           :enum ("save" "search" "list" "get" "update" "delete"
+                  "collections" "create_collection" "tags")
+           :required-p t)
+   (url "string"
+        "Bookmark URL. Required for 'save'.")
+   (title "string"
+          "Bookmark title. Optional for 'save' and 'update'.")
+   (excerpt "string"
+            "Bookmark description/excerpt. Optional for 'save' and 'update'.")
+   (tags "string"
+         "Comma-separated tags. Optional for 'save' and 'update'.")
+   (collection-id "integer"
+                   "Collection ID. For 'save'/'update': target collection. For 'list'/'tags': scope. Use 0 for all, -1 for Unsorted.")
+   (query "string"
+          "Search query text. Required for 'search'.")
+   (id "integer"
+       "Raindrop (bookmark) ID. Required for 'get', 'update', 'delete'.")
+   (important "string"
+              "Mark as favorite: 'true' or 'false'. For 'update'.")
+   (page "integer"
+         "Page number (0-based) for 'list' and 'search'. Default: 0."
+         :default 0)
+   (per-page "integer"
+             "Results per page for 'list' and 'search'. Max 50. Default: 25."
+             :default 25))
+  (let ((tag-list (when tags
+                    (mapcar (lambda (s) (string-trim '(#\Space) s))
+                            (cl-ppcre:split "," tags)))))
+    (cond
+      ((string-equal action "save")
+       (unless url
+         (return-from handler "Error: 'url' is required for save."))
+       (with-output-to-string (s)
+         (crichton/skills:raindrop-save-report
+          url :title title :excerpt excerpt :tags tag-list
+              :collection-id collection-id :stream s)))
+      ((string-equal action "search")
+       (unless query
+         (return-from handler "Error: 'query' is required for search."))
+       (with-output-to-string (s)
+         (crichton/skills:raindrop-find-report
+          query :collection-id (or collection-id 0)
+                :max-items per-page :stream s)))
+      ((string-equal action "list")
+       (with-output-to-string (s)
+         (multiple-value-bind (items total)
+             (crichton/skills:raindrop-list
+              (or collection-id 0) :page page :per-page per-page)
+           (crichton/skills:format-raindrop-list
+            items :stream s :total total))))
+      ((string-equal action "get")
+       (unless id
+         (return-from handler "Error: 'id' is required for get."))
+       (let ((item (crichton/skills:raindrop-get-one id)))
+         (if item
+             (with-output-to-string (s)
+               (crichton/skills:format-raindrop item s))
+             (format nil "Bookmark ~D not found." id))))
+      ((string-equal action "update")
+       (unless id
+         (return-from handler "Error: 'id' is required for update."))
+       (let ((result (crichton/skills:raindrop-update
+                      id :title title :excerpt excerpt
+                         :tags tag-list :link url
+                         :collection-id collection-id
+                         :important important)))
+         (with-output-to-string (s)
+           (format s "Updated bookmark:~%")
+           (crichton/skills:format-raindrop result s))))
+      ((string-equal action "delete")
+       (unless id
+         (return-from handler "Error: 'id' is required for delete."))
+       (if (crichton/skills:raindrop-remove id)
+           (format nil "Bookmark ~D moved to Trash." id)
+           (format nil "Failed to delete bookmark ~D." id)))
+      ((string-equal action "collections")
+       (with-output-to-string (s)
+         (crichton/skills:raindrop-collections-report :stream s)))
+      ((string-equal action "create_collection")
+       (unless title
+         (return-from handler "Error: 'title' is required for create_collection."))
+       (let ((result (crichton/skills:raindrop-create-collection
+                      title :parent-id collection-id)))
+         (format nil "Created collection: ~A (id: ~D)"
+                 (getf result :title) (getf result :id))))
+      ((string-equal action "tags")
+       (with-output-to-string (s)
+         (crichton/skills:raindrop-tags-report
+          :collection-id collection-id :stream s)))
+      (t
+       (format nil "Unknown raindrop action: ~A" action)))))
+
 ;;; --- Skills tool helpers ---
 
 (defun %skills-run-pipeline (steps)
@@ -616,19 +714,20 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
 ;;; --- Skills tool ---
 
 (define-tool skills
-    (:description "Manage external WASM skills and pipelines.  Actions: 'list' (show all discovered skills), 'info' (get details for a specific skill), 'invoke' (run a skill with optional params), 'refresh' (re-scan skills directory), 'pipeline' (run a multi-step pipeline chaining skills together).  Skills are discovered from ~/.crichton/skills/ and can be scheduled using the scheduler tool.  Use 'params' to pass structured input to skills that expect JSON data (e.g., rss-filter).  Use 'pipeline' to chain multiple steps where later steps reference earlier results via {\"ref\": \"step_id.key\"}.")
+    (:description "Manage external WASM skills and pipelines.  Actions: 'list' (show all discovered skills), 'info' (get details for a specific skill), 'invoke' (run a skill with optional params), 'refresh' (re-scan skills directory), 'pipeline' (run a multi-step pipeline chaining skills together), 'save_pipeline' (save a named pipeline for scheduling), 'delete_pipeline' (remove a saved pipeline), 'list_pipelines' (show saved pipelines).  Saved pipelines are registered as schedulable actions (name: 'pipeline:<name>') and can be scheduled via the scheduler tool.  Use 'params' to pass structured input to skills that expect JSON data (e.g., rss-filter).  Use 'pipeline' to chain multiple steps where later steps reference earlier results via {\"ref\": \"step_id.key\"}.")
   ((action "string"
            "The skills action to perform."
-           :enum ("list" "info" "invoke" "refresh" "pipeline")
+           :enum ("list" "info" "invoke" "refresh" "pipeline"
+                  "save_pipeline" "delete_pipeline" "list_pipelines")
            :required-p t)
    (name "string"
-         "Skill name. Required for info and invoke.")
+         "Skill name. Required for info, invoke, save_pipeline, delete_pipeline.")
    (entry-point "string"
                 "Function entry point to call. Optional; defaults to the manifest's declared entry point.")
    (params "object"
            "JSON parameters to pass to the skill. When provided, the JSON ABI is used automatically. Required for pure-function skills like rss-filter.")
    (steps "array"
-          "Pipeline steps array (for 'pipeline' action). Each step is an object with: id (string, required), kind ('wasm'/'builtin'/'auto'), skill (string, for WASM steps), builtin (string, for builtin steps like 'rss_fetch', 'rss_check', 'weather'), entry_point (string), params (object, may contain {\"ref\": \"step_id.key\"} references to earlier step outputs)."))
+          "Pipeline steps array (for 'pipeline' and 'save_pipeline' actions). Each step is an object with: id (string, required), kind ('wasm'/'builtin'/'auto'), skill (string, for WASM steps), builtin (string, for builtin steps like 'rss_fetch', 'rss_check', 'weather'), entry_point (string), params (object, may contain {\"ref\": \"step_id.key\"} references to earlier step outputs)."))
   (cond
     ((string-equal action "list")
      (crichton/skills:discover-skills)            ; refresh before listing
@@ -653,6 +752,29 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
          (format nil "Error invoking skill '~A': ~A" name c))))
     ((string-equal action "pipeline")
      (%skills-run-pipeline steps))
+    ((string-equal action "save_pipeline")
+     (unless name
+       (return-from handler "Error: 'name' is required for save_pipeline."))
+     (unless steps
+       (return-from handler "Error: 'steps' is required for save_pipeline."))
+     (crichton/skills:save-pipeline name steps)
+     (format nil "Pipeline '~A' saved (~D step~:P). Schedulable as action 'pipeline:~A'."
+             name (length steps) name))
+    ((string-equal action "delete_pipeline")
+     (unless name
+       (return-from handler "Error: 'name' is required for delete_pipeline."))
+     (if (crichton/skills:delete-pipeline name)
+         (format nil "Pipeline '~A' deleted." name)
+         (format nil "Pipeline '~A' not found." name)))
+    ((string-equal action "list_pipelines")
+     (let ((pipelines (crichton/skills:list-saved-pipelines)))
+       (if pipelines
+           (with-output-to-string (s)
+             (format s "Saved pipelines:~%")
+             (dolist (p pipelines)
+               (format s "  ~A (~D step~:P) — schedulable as 'pipeline:~A'~%"
+                       (getf p :name) (getf p :step-count) (getf p :name))))
+           "No saved pipelines.")))
     ((string-equal action "refresh")
      (let ((count (crichton/skills:discover-skills)))
        (format nil "Discovered ~D skill~:P." count)))
@@ -678,6 +800,7 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
   (register-skills-tool)
   (register-memory-write-tool)
   (register-memory-search-tool)
+  (register-raindrop-tool)
   ;; Register pipeline built-in functions
   (crichton/skills:register-default-pipeline-builtins)
   (log:info "Registered ~D agent tools" (hash-table-count *agent-tools*)))

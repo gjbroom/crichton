@@ -73,6 +73,17 @@ For development details, see the git commit history and BEADS issue tracker.
   - Markdown image reference extraction (=![alt](path)=)
   - =:sixel on/off= toggle command
   - =:img path= command to display images in chat (placeholder mode; full sixel rendering in Phase 4)
+- *Raindrop.io bookmark management*: new built-in skill and =raindrop= agent tool for managing bookmarks via the Raindrop.io API
+  - =save=: create bookmarks with title, tags, description, and target collection
+  - =search=: full-text search across all bookmarks with pagination
+  - =list=: browse bookmarks by collection with sorting and pagination
+  - =get=: retrieve a single bookmark by ID
+  - =update=: modify bookmark title, tags, description, URL, collection, or favorite status
+  - =delete=: move bookmarks to Trash
+  - =collections=: list all collections (root and nested)
+  - =create_collection=: create new collections with optional parent
+  - =tags=: list all tags with usage counts
+  - Authentication via OAuth2 test token stored as =raindrop-api= in credential store
 
 ** Changed
 
