@@ -328,7 +328,6 @@ a batched command that sends the chat request to the daemon."
 (defun handle-normal-key (model msg key)
   "Dispatch non-Ctrl keys: navigation, escape, multiline cursor, textinput."
   (case key
-    (:enter     (handle-enter model))
     (:page-up   (tui.viewport:viewport-page-up (model-viewport model))
                 (values model nil))
     (:page-down (tui.viewport:viewport-page-down (model-viewport model))
@@ -356,9 +355,16 @@ a batched command that sends the chat request to the daemon."
                   (values model cmd)))))
 
 (defmethod tui:update-message ((model tui-model) (msg tui:key-msg))
-  (if (tui:key-msg-ctrl msg)
-      (handle-ctrl-key model (tui:key-msg-key msg))
-      (handle-normal-key model msg (tui:key-msg-key msg))))
+  (let ((key (tui:key-msg-key msg)))
+    (cond
+      ;; Enter comes through with :ctrl t (it's a control character),
+      ;; so check for it before dispatching on the ctrl flag.
+      ((eq key :enter)
+       (handle-enter model))
+      ((tui:key-msg-ctrl msg)
+       (handle-ctrl-key model key))
+      (t
+       (handle-normal-key model msg key)))))
 
 ;;; --- Update: reset-status-msg ---
 
