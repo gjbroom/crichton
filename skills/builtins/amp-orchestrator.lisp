@@ -79,7 +79,12 @@
               :exit-code -1 :elapsed-seconds 0 :timed-out-p nil)))
     (let* ((start-time (get-internal-real-time))
            (directory (when repo-path (namestring (truename repo-path))))
-           (process (sb-ext:run-program binary (list prompt)
+           (process (sb-ext:run-program binary
+                                        (list "--execute"
+                                              "--dangerously-allow-all"
+                                              "--no-notifications"
+                                              "--no-ide"
+                                              prompt)
                                         :output :stream
                                         :error :stream
                                         :wait nil
