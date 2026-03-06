@@ -226,16 +226,16 @@ nts
     - [ ] Issue/PR management
     - [ ] Webhook support
 
-*** TODO [#B] Amp Orchestration Security Alignment (cricht-qg7)
+*** DONE [#B] Amp Orchestration Security Alignment (cricht-qg7)
     - [X] Amp LLM coding/testing orchestration skill (cricht-058)
     - [X] Fix CLI invocation to use --execute mode
-    - [ ] Config gate and policy: amp.enable, allowed_repo_roots (cricht-a4j)
-    - [ ] Eliminate /bin/sh -c shell execution (cricht-t4o)
-    - [ ] Credential mediation: amp-api in credential store, minimal env (cricht-a81)
-    - [ ] Structured I/O: git diff tracking, truncation, ANSI strip (cricht-c0d)
-    - [ ] Structured audit logging (cricht-683)
-    - [ ] Add restarts and fix thread cleanup (cricht-vof)
-    - [ ] Dual interface: JSON-returning tool variants (cricht-olb)
+    - [X] Config gate and policy: amp.enable, allowed_repo_roots (cricht-a4j)
+    - [X] Eliminate /bin/sh -c shell execution (cricht-t4o)
+    - [X] Credential mediation: amp-api in credential store, minimal env (cricht-a81)
+    - [X] Structured I/O: git diff tracking, truncation, ANSI strip (cricht-c0d)
+    - [X] Structured audit logging (cricht-683)
+    - [X] Add restarts and fix thread cleanup (cricht-vof)
+    - [X] Dual interface: JSON-returning tool variants (cricht-olb)
     - [ ] Multi-agent coordination
     - [ ] Code generation and testing workflows
 

@@ -27,6 +27,15 @@ For development details, see the git commit history and BEADS issue tracker.
 
 ** Added
 
+- *Amp orchestrator security alignment*: comprehensive hardening of the Amp CLI coding agent integration (cricht-qg7)
+  - Config gate: Amp is now disabled by default; enable with =[amp] enable = true= in config.toml
+  - Repo allowlist: =allowed_repo_roots= restricts which directories Amp can operate in
+  - Credential mediation: API key resolved from encrypted credential store (=amp-api=), passed via minimal subprocess environment (HOME, PATH, AMP_API_KEY only)
+  - No shell execution: all subprocess invocations use direct argv (no =/bin/sh -c=); =amp_test= tool now takes =test_runner= + =test_args= instead of freeform shell command
+  - Structured I/O: git status tracking shows changed files, ANSI escapes stripped, output truncated with configurable caps
+  - Audit logging: structured JSON audit events for every invocation attempt (repo, sanitized argv, policy decisions, exit code, elapsed time, changed files)
+  - Restarts: =use-different-repo=, =retry-with-longer-timeout=, =return-partial-result= available in the SLIME/SLY debugger
+  - JSON tools: new =amp_check_json=, =amp_code_json=, =amp_test_json= tools for programmatic chaining
 - *TUI multiline input*: input area now wraps long prompts onto multiple lines instead of scrolling horizontally; grows and shrinks dynamically as you type; up/down arrow keys navigate between visual lines
 - *LLM rate-limit retry*: When the API returns HTTP 429, Crichton now automatically retries up to 3 times with 15/30/45-second backoff before reporting failure to the TUI
 - *RSS feed retry*: RSS monitor polls now retry transient HTTP failures up to 2 times before logging a warning
