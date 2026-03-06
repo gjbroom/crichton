@@ -24,12 +24,12 @@ This guide covers *WASM skill development*, which provides isolation, portabilit
 
 A WASM skill is a directory in =~/.crichton/skills/= containing:
 
-#+begin_example
+#+begin_src ditaa
 ~/.crichton/skills/my-skill/
-├── skill.toml          # Manifest (required)
-├── skill.wasm          # Compiled WASM binary (required)
-└── skill.wat           # WAT source (optional, for development)
-#+end_example
++-- skill.toml          : Manifest (required)
++-- skill.wasm          : Compiled WASM binary (required)
++-- skill.wat           : WAT source (optional, for development)
+#+end_src
 
 ** Manifest Format (skill.toml)
 

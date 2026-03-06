@@ -697,7 +697,7 @@ Prevents keyword package exhaustion from untrusted JSON input.
 
 *** =plist-to-json-bytes (plist)= / =json-bytes-to-plist (bytes)=
 
-Round-trip plist ↔ JSON byte serialization.  Keys convert between keywords
+Round-trip plist <-> JSON byte serialization.  Keys convert between keywords
 and lowercase strings.  Used by credential and session stores.
 
 *** =delete-file-if-exists (path)=

@@ -55,33 +55,33 @@ Derived from OpenClaw audit findings:
 
 *Decision*: Single SBCL daemon process + separate WASM skill-runner process(es)
 
-#+begin_example
-┌─────────────────────────────────────────────┐
-│              SBCL Daemon                     │
-│                                              │
-│  ┌──────────┐ ┌──────────┐ ┌──────────────┐ │
-│  │ LLM      │ │ Channel  │ │ Credential   │ │
-│  │ Providers│ │ Adapters │ │ Store        │ │
-│  └────┬─────┘ └────┬─────┘ └──────┬───────┘ │
-│       │            │              │          │
-│  ┌────┴────────────┴──────────────┴───────┐  │
-│  │          Core Agent Loop               │  │
-│  └────────────────┬───────────────────────┘  │
-│                   │ RPC (unix socket)        │
-└───────────────────┼──────────────────────────┘
-                    │
-        ┌───────────┴───────────┐
-        │   Skill Runner        │
-        │   (separate process)  │
-        │                       │
-        │  ┌─────────────────┐  │
-        │  │ wasmtime engine │  │
-        │  │ (WASI sandbox)  │  │
-        │  └─────────────────┘  │
-        │  No FS / No network   │
-        │  Only host functions  │
-        └───────────────────────┘
-#+end_example
+#+begin_src ditaa
++---------------------------------------------+
+|              SBCL Daemon                     |
+|                                              |
+|  +----------+ +----------+ +--------------+ |
+|  | LLM      | | Channel  | | Credential   | |
+|  | Providers| | Adapters | | Store        | |
+|  +----+-----+ +----+-----+ +------+-------+ |
+|       |            |              |          |
+|  +----+------------+--------------+-------+  |
+|  |          Core Agent Loop               |  |
+|  +----------------+-----------------------+  |
+|                   | RPC (unix socket)        |
++-------------------+--------------------------+
+                    |
+        +-----------+-----------+
+        |   Skill Runner        |
+        |   (separate process)  |
+        |                       |
+        |  +-----------------+  |
+        |  | wasmtime engine |  |
+        |  | (WASI sandbox)  |  |
+        |  +-----------------+  |
+        |  No FS / No network   |
+        |  Only host functions  |
+        +-----------------------+
+#+end_src
 
 *Trust boundary*: The RPC interface between daemon and skill-runner. Skills never run in the daemon process. The runner process can be killed/resource-limited independently.
 

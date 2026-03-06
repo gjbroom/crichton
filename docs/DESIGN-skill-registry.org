@@ -37,38 +37,39 @@ Two new subsystems, implemented as subagent tasks:
 
 ** Architecture Diagram
 
-#+begin_example
-                        ┌─────────────────────┐
-                        │   Agent Tool Layer   │
-                        │                      │
-                        │  "skills" tool       │  ← list/invoke/info
-                        │  "scheduler" tool    │  ← schedule_every etc.
-                        └─────┬───────┬────────┘
-                              │       │
-              ┌───────────────┘       └──────────────┐
-              ▼                                      ▼
-   ┌─────────────────────┐           ┌──────────────────────────┐
-   │   Skill Registry    │           │  Schedulable Actions     │
-   │   (new subsystem)   │           │  (existing, extended)    │
-   │                     │           │                          │
-   │  *skill-registry*   │──bridge──▶│  *schedulable-actions*   │
-   │  discover-skills    │           │  register-schedulable-   │
-   │  load-skill         │           │    action                │
-   │  invoke-skill       │           └──────────────────────────┘
-   │  list-skills        │
-   │  skill-info         │
-   └─────────┬───────────┘
-             │
-             ▼
-   ┌─────────────────────┐
-   │  WASM Engine Layer  │
-   │                     │
-   │  run-wasm-bytes-    │
-   │    with-host-fns    │
-   │  wat-to-wasm        │
-   │  skill-context      │
-   └─────────────────────┘
-#+end_example
+#+begin_src ditaa
+                        +---------------------+
+                        |   Agent Tool Layer   |
+                        |                      |
+                        |  "skills" tool       |  <-- list/invoke/info
+                        |  "scheduler" tool    |  <-- schedule_every etc.
+                        +-----+-------+--------+
+                              |       |
+              +---------------+       +--------------+
+              |                                      |
+              v                                      v
+   +---------------------+           +--------------------------+
+   |   Skill Registry    |           |  Schedulable Actions     |
+   |   (new subsystem)   |           |  (existing, extended)    |
+   |                     |           |                          |
+   |  *skill-registry*   +--bridge-->|  *schedulable-actions*   |
+   |  discover-skills    |           |  register-schedulable-   |
+   |  load-skill         |           |    action                |
+   |  invoke-skill       |           +--------------------------+
+   |  list-skills        |
+   |  skill-info         |
+   +---------+-----------+
+             |
+             v
+   +---------------------+
+   |  WASM Engine Layer  |
+   |                     |
+   |  run-wasm-bytes-    |
+   |    with-host-fns    |
+   |  wat-to-wasm        |
+   |  skill-context      |
+   +---------------------+
+#+end_src
 
 * Task A: Skill Registry
 

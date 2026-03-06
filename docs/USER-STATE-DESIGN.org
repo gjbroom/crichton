@@ -141,14 +141,14 @@ discarded.
 
 ** File Layout
 
-#+begin_src
+#+begin_src ditaa
 ~/.crichton/state/
-├── SOUL.org
-├── MEMORY.org
-├── USER.org
-├── journal/
-│   ├── 2026-03-02.org
-│   └── ...
++-- SOUL.org
++-- MEMORY.org
++-- USER.org
++-- journal/
+|   +-- 2026-03-02.org
+|   +-- ...
 #+end_src
 
 Directory permissions: =0700=.  File permissions: =0600=.
