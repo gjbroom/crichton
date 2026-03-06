@@ -83,6 +83,32 @@
     (close *json-log-stream*))
   (setf *json-log-stream* nil))
 
+;;; --- Structured audit events ---
+
+(defun write-audit-event (event-type fields)
+  "Write a structured JSON audit event directly to the log stream.
+   EVENT-TYPE is a string (e.g. \"amp.invoke\").  FIELDS is a hash-table
+   of additional event-specific data.  Timestamp, level (AUDIT), and
+   event type are added automatically.  Secrets in field values are
+   redacted."
+  (when *json-log-stream*
+    (let ((entry (make-hash-table :test #'equal)))
+      (setf (gethash "timestamp" entry) (crichton/config:iso8601-now)
+            (gethash "level" entry) "AUDIT"
+            (gethash "event" entry) event-type)
+      (maphash (lambda (k v)
+                 (setf (gethash k entry)
+                       (if (stringp v) (redact-string v) v)))
+               fields)
+      (handler-case
+          (let ((*print-pretty* nil))
+            (shasht:write-json entry *json-log-stream*)
+            (terpri *json-log-stream*)
+            (finish-output *json-log-stream*))
+        (error (c)
+          (declare (ignore c))
+          nil)))))
+
 ;;; --- Setup ---
 
 (defun suppress-console-logging ()

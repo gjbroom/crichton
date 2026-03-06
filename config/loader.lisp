@@ -98,6 +98,8 @@
         :credentials (list :backend :auto)
         :network (list :egress-policy :deny-all)
         :weather (list :city "Victoria")
+        :amp (list :enable nil
+                   :allowed-repo-roots nil)
         :state (list :enabled t
                      :max-file-chars 20000
                      :max-total-chars 150000)))

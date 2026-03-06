@@ -47,7 +47,8 @@
   (:use #:cl)
   (:export #:setup-logging
            #:suppress-console-logging
-           #:with-redaction))
+           #:with-redaction
+           #:write-audit-event))
 
 (defpackage #:crichton/daemon
   (:use #:cl)
@@ -264,6 +265,8 @@
            #:kv-quota-exceeded
            ;; amp orchestrator
            #:amp-available-p
+           #:amp-enabled-p
+           #:amp-status
            #:amp-invoke
            #:amp-code-task
            #:amp-test-task
