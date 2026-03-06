@@ -7,6 +7,9 @@
 ;;;; Pipelines are linear sequences of steps.  Each step produces a
 ;;;; result stored in a results table keyed by step id.  Subsequent
 ;;;; steps can reference earlier results via {"ref": "step-id.key.subkey"}.
+;;;;
+;;;; Saved pipelines: named pipeline definitions can be persisted to
+;;;; storage and registered as schedulable actions for periodic execution.
 
 (in-package #:crichton/skills)
 
@@ -240,3 +243,93 @@
                                        :params resolved-params)))))
                 (setf (gethash id results) result)
                 (log:info "Pipeline step ~A completed (retry)" id)))))))))
+
+;;; --- Saved pipelines ---
+
+(defvar *saved-pipelines-lock* (bt:make-lock "saved-pipelines"))
+(defvar *saved-pipelines* (make-hash-table :test #'equal)
+  "Registry of saved pipeline definitions: name → steps (vector of hash-tables).")
+
+(defun save-pipeline (name steps)
+  "Save a named pipeline definition and persist to storage.
+   STEPS is a vector/list of step hash-tables (as received from JSON).
+   Registers the pipeline as a schedulable action."
+  (let ((steps-vec (if (vectorp steps) steps (coerce steps 'vector))))
+    (bt:with-lock-held (*saved-pipelines-lock*)
+      (setf (gethash name *saved-pipelines*) steps-vec))
+    (register-pipeline-action name steps-vec)
+    (persist-saved-pipelines)
+    (log:info "Saved pipeline: ~A (~D step~:P)" name (length steps-vec))
+    name))
+
+(defun delete-pipeline (name)
+  "Delete a saved pipeline by name. Removes from storage and schedulable actions."
+  (let ((found nil))
+    (bt:with-lock-held (*saved-pipelines-lock*)
+      (setf found (nth-value 1 (gethash name *saved-pipelines*)))
+      (remhash name *saved-pipelines*))
+    (when found
+      (let ((action-name (format nil "pipeline:~A" name)))
+        (remhash action-name *schedulable-actions*))
+      (persist-saved-pipelines)
+      (log:info "Deleted saved pipeline: ~A" name))
+    found))
+
+(defun list-saved-pipelines ()
+  "Return a list of plists describing saved pipelines."
+  (bt:with-lock-held (*saved-pipelines-lock*)
+    (let (result)
+      (maphash (lambda (name steps)
+                 (push (list :name name :step-count (length steps)) result))
+               *saved-pipelines*)
+      (sort result #'string< :key (lambda (x) (getf x :name))))))
+
+(defun get-saved-pipeline (name)
+  "Return the steps vector for a saved pipeline, or NIL."
+  (bt:with-lock-held (*saved-pipelines-lock*)
+    (gethash name *saved-pipelines*)))
+
+(defun register-pipeline-action (name steps-vec)
+  "Register a saved pipeline as a schedulable action.
+   Action name format: pipeline:<name>"
+  (let ((action-name (format nil "pipeline:~A" name)))
+    (register-schedulable-action action-name
+      (format nil "Run saved pipeline: ~A (~D step~:P)" name (length steps-vec))
+      (lambda ()
+        (handler-case
+            (let ((results (execute-pipeline (coerce steps-vec 'list))))
+              (log:info "Scheduled pipeline ~A completed (~D step~:P)"
+                        name (hash-table-count results)))
+          (error (c)
+            (log:warn "Scheduled pipeline ~A failed: ~A" name c)))))))
+
+(defun persist-saved-pipelines ()
+  "Save all pipeline definitions to storage."
+  (bt:with-lock-held (*saved-pipelines-lock*)
+    (let ((ht (make-hash-table :test #'equal)))
+      (maphash (lambda (name steps)
+                 (setf (gethash name ht) steps))
+               *saved-pipelines*)
+      (crichton/storage:store-set "pipelines" "saved" ht)))
+  (log:debug "Persisted ~D saved pipeline~:P"
+             (hash-table-count *saved-pipelines*)))
+
+(defun restore-saved-pipelines ()
+  "Restore saved pipelines from storage and re-register as schedulable actions.
+   Call after start-scheduler during daemon init."
+  (let ((data (crichton/storage:store-get "pipelines" "saved")))
+    (when (and data (hash-table-p data))
+      (let ((restored 0) (failed 0))
+        (maphash (lambda (name steps)
+                   (handler-case
+                       (progn
+                         (bt:with-lock-held (*saved-pipelines-lock*)
+                           (setf (gethash name *saved-pipelines*) steps))
+                         (register-pipeline-action name steps)
+                         (incf restored))
+                     (error (c)
+                       (log:warn "Failed to restore pipeline ~A: ~A" name c)
+                       (incf failed))))
+                 data)
+        (log:info "Restored ~D saved pipeline~:P (~D failed)"
+                  restored failed)))))
