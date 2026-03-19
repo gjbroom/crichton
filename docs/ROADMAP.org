@@ -194,10 +194,13 @@ nts
     - [ ] Lisp-side integration test (cricht-8ee)
     - [ ] Build and deploy WASM binary (cricht-cg4)
 
-*** TODO [#B] Org-Mode Skill
-    - [ ] Org-Mode file read/write skill (cricht-1gm)
-    - [ ] Parse org structure (headlines, properties, timestamps)
-    - [ ] Generate valid org syntax
+*** DONE [#B] Org-Mode Skill
+    CLOSED: [2026-03-19 Wed]
+    - [X] Org-Mode file read/write skill (cricht-1gm)
+    - [X] Parse org structure (headlines, properties, timestamps)
+    - [X] Generate valid org syntax
+    - [X] Org-roam integration (SQLite DB queries, backlinks, node search)
+    - [X] Config-gated local-only access with path allowlist
     - [ ] Support for TODO lists, tables, literate programming
 
 *** TODO [#B] RSS Writing

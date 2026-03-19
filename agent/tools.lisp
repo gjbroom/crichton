@@ -895,6 +895,87 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
     (t
      (format nil "Unknown skills action: ~A" action))))
 
+;;; --- Org-mode tool ---
+
+(define-tool orgmode
+    (:description "Read, search, create, and manage org-mode files and org-roam notes.  LOCAL-ONLY: requires [orgmode] config.  Actions: 'read' (parse a file), 'search' (find notes by title/tag), 'list_tags' (org-roam tags), 'backlinks' (graph links), 'create_note' (new org-roam note), 'append' (add text to a file), 'list_files' (enumerate org files), 'status' (skill config).")
+  ((action "string"
+           "The orgmode action to perform."
+           :enum ("read" "search" "list_tags" "backlinks" "create_note" "append" "list_files" "status")
+           :required-p t)
+   (path "string"
+         "File path or org-roam node ID (UUID).  Required for read, backlinks, append.")
+   (query "string"
+          "Search query string.  Required for search.")
+   (tag "string"
+        "Filter by org-roam tag.  Used with search.")
+   (title "string"
+          "Note title.  Required for create_note.")
+   (body "string"
+         "Note body content.  Used with create_note.")
+   (filetags "array"
+             "File-level tags for the new note.  Used with create_note.")
+   (root "string"
+         "Root directory for create_note or list_files.  Must be in allowed_paths.")
+   (text "string"
+         "Text to append.  Required for append.")
+   (headline "string"
+             "Headline title to append under.  Used with append.")
+   (direction "string"
+              "Link direction for backlinks: 'backlinks' (default), 'forward', 'both'."
+              :enum ("backlinks" "forward" "both"))
+   (include-raw "boolean"
+                "Include raw file text in read results.")
+   (limit "integer"
+          "Maximum results to return."
+          :default 50))
+  (handler-case
+      (cond
+        ((string-equal action "status")
+         (format nil "~S" (crichton/skills:orgmode-status)))
+        ((string-equal action "read")
+         (unless path
+           (return-from handler "Error: 'path' is required for read."))
+         (format nil "~S" (crichton/skills:orgmode-read path :include-raw include-raw)))
+        ((string-equal action "search")
+         (unless query
+           (return-from handler "Error: 'query' is required for search."))
+         (let ((results (crichton/skills:orgmode-search query :tag tag :limit limit)))
+           (format nil "~D result~:P:~%~{~S~^~%~}" (length results) results)))
+        ((string-equal action "list_tags")
+         (let ((tags (crichton/skills:orgmode-list-tags)))
+           (format nil "~D tag~:P: ~{~A~^, ~}" (length tags) tags)))
+        ((string-equal action "backlinks")
+         (unless path
+           (return-from handler "Error: 'path' is required for backlinks."))
+         (let* ((dir-kw (cond
+                          ((or (null direction) (string-equal direction "backlinks")) :backlinks)
+                          ((string-equal direction "forward") :forward)
+                          ((string-equal direction "both") :both)
+                          (t :backlinks)))
+                (results (crichton/skills:orgmode-backlinks path :direction dir-kw :limit limit)))
+           (format nil "~D link~:P:~%~{~S~^~%~}" (length results) results)))
+        ((string-equal action "create_note")
+         (unless title
+           (return-from handler "Error: 'title' is required for create_note."))
+         (let ((ft-list (when filetags (coerce filetags 'list))))
+           (let ((created-path (crichton/skills:orgmode-create-note title
+                                 :root root :body body :filetags ft-list)))
+             (format nil "Created: ~A" created-path))))
+        ((string-equal action "append")
+         (unless path
+           (return-from handler "Error: 'path' is required for append."))
+         (unless text
+           (return-from handler "Error: 'text' is required for append."))
+         (let ((result (crichton/skills:orgmode-append path text :headline headline)))
+           (format nil "Appended to: ~A" result)))
+        ((string-equal action "list_files")
+         (let ((results (crichton/skills:orgmode-list-files :root root :limit limit)))
+           (format nil "~D file~:P:~%~{~S~^~%~}" (length results) results)))
+        (t (format nil "Unknown orgmode action: ~A" action)))
+    (error (c)
+      (format nil "Orgmode error: ~A" c))))
+
 ;;; --- Registration ---
 
 (defun register-all-tools ()
@@ -918,6 +999,7 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
   (register-memory-write-tool)
   (register-memory-search-tool)
   (register-raindrop-tool)
+  (register-orgmode-tool)
   ;; Register pipeline built-in functions
   (crichton/skills:register-default-pipeline-builtins)
   (log:info "Registered ~D agent tools" (hash-table-count *agent-tools*)))

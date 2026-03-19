@@ -288,7 +288,17 @@
            #:raindrop-save-report
            #:raindrop-find-report
            #:raindrop-collections-report
-           #:raindrop-tags-report))
+           #:raindrop-tags-report
+           ;; orgmode
+           #:orgmode-enabled-p
+           #:orgmode-status
+           #:orgmode-read
+           #:orgmode-search
+           #:orgmode-list-tags
+           #:orgmode-backlinks
+           #:orgmode-create-note
+           #:orgmode-append
+           #:orgmode-list-files))
 
 (defpackage #:crichton/llm
   (:use #:cl)

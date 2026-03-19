@@ -25,7 +25,8 @@ signing. Informed by a security audit of OpenClaw."
                #:hunchentoot
                #:swank-client
                #:xmls
-               #:websocket-driver-client)
+               #:websocket-driver-client
+               #:sqlite)
   :serial t
   :components ((:file "package")
                (:module "config"
@@ -59,7 +60,8 @@ signing. Informed by a security audit of OpenClaw."
                                             (:file "battery")
                                             (:file "log-inspector")
                                             (:file "amp-orchestrator")
-                                            (:file "raindrop")))))
+                                            (:file "raindrop")
+                                            (:file "orgmode")))))
                (:module "crypto"
                 :components ((:file "wipe")
                              (:file "age")))

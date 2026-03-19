@@ -51,6 +51,14 @@ For development details, see the git commit history and BEADS issue tracker.
   - Auto-dismiss after 10 seconds, manual dismiss with Esc key
   - =:notifications= command shows notification history in chat
   - Notification history capped at 100 entries
+- *Org-mode skill*: new built-in skill for reading, searching, creating, and appending to org-mode files with org-roam integration (cricht-1gm)
+  - Parses org structure: headlines (TODO/priority/tags), property drawers, file keywords, ID links
+  - Queries org-roam SQLite database: search by title/tag, backlinks, forward links, tag listing
+  - Create org-roam notes with auto-generated timestamp filenames, UUID :ID: properties, filetags
+  - Append to existing files (at end or under a specific headline)
+  - LOCAL-ONLY: gated by =[orgmode]= config section; requires explicit =allowed_paths= (empty = deny all)
+  - All DB results filtered by allowed paths; DB opened read-only
+  - =orgmode= agent tool with actions: read, search, list_tags, backlinks, create_note, append, list_files, status
 - *RSS monitor keyword filtering*: RSS monitors now accept =keywords=, =match_mode=, and =search_fields= parameters to automatically filter new items through the rss-filter WASM skill (cricht-8u0)
   - Filter config persists to storage and survives daemon restarts
   - When keywords are set, only matching items trigger notifications
