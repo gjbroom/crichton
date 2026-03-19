@@ -351,7 +351,7 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
 ;;; --- RSS tool ---
 
 (define-tool rss
-    (:description "Fetch, check, and monitor RSS/Atom feeds.  Use 'fetch' to read all items from a feed, 'check' to see only new items since last check, 'monitor_start' to begin periodic monitoring, 'monitor_stop' to stop a monitor, or 'list_monitors' to see active monitors.")
+    (:description "Fetch, check, and monitor RSS/Atom feeds.  Use 'fetch' to read all items from a feed, 'check' to see only new items since last check, 'monitor_start' to begin periodic monitoring, 'monitor_stop' to stop a monitor, or 'list_monitors' to see active monitors.  Monitors can optionally filter items by keywords using the rss-filter WASM skill — only matching items are reported and notified.  Filter settings survive daemon restarts.")
   ((action "string"
            "The RSS action: fetch (get all items), check (get new items only), monitor_start (begin periodic monitoring), monitor_stop (stop monitoring), list_monitors (show active monitors)."
            :enum ("fetch" "check" "monitor_start" "monitor_stop" "list_monitors")
@@ -362,7 +362,14 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
          "Monitor name (for monitor_start/monitor_stop). Conventionally 'rss:something'.")
    (interval-seconds "integer"
                      "Polling interval in seconds for monitor_start. Default: 3600 (1 hour)."
-                     :default 3600))
+                     :default 3600)
+   (keywords "array"
+             "Optional list of keyword strings to filter items through the rss-filter WASM skill.  Only items matching these keywords will be reported.  Requires the rss-filter skill to be installed.")
+   (match-mode "string"
+               "Keyword matching mode: 'any' (default, match if any keyword found) or 'all' (match only if all keywords found)."
+               :enum ("any" "all"))
+   (search-fields "array"
+                  "Which item fields to search for keywords.  Default: [\"title\", \"description\"].  Valid values: title, description, content."))
   (cond
     ((string-equal action "fetch")
      (if (null url)
@@ -377,9 +384,15 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
     ((string-equal action "monitor_start")
      (if (null url)
          "Error: 'url' is required for monitor_start"
-         (let ((task-name (or name (format nil "rss:~A" url))))
-           (crichton/skills:rss-monitor-start task-name url interval-seconds)
-           (format nil "Monitor started: ~A (every ~Ds)" task-name interval-seconds))))
+         (let ((task-name (or name (format nil "rss:~A" url)))
+               (kw-list (when keywords (coerce keywords 'list)))
+               (sf-list (when search-fields (coerce search-fields 'list))))
+           (crichton/skills:rss-monitor-start task-name url interval-seconds
+                                              :keywords kw-list
+                                              :match-mode match-mode
+                                              :search-fields sf-list)
+           (format nil "Monitor started: ~A (every ~Ds~@[, filtering for: ~{~A~^, ~}~])"
+                   task-name interval-seconds kw-list))))
     ((string-equal action "monitor_stop")
      (let ((task-name (or name "?")))
        (if (crichton/skills:rss-monitor-stop task-name)

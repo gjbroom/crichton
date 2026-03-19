@@ -383,7 +383,7 @@
 
 (defvar *rss-monitors-lock* (bt:make-lock "rss-monitors"))
 (defvar *rss-monitors* (make-hash-table :test #'equal)
-  "Registry of active RSS monitors: name → plist (:url :interval-seconds).")
+  "Registry of active RSS monitors: name → plist (:url :interval-seconds :keywords :match-mode :search-fields).")
 
 (defun persist-rss-monitors ()
   "Save the monitor registry to storage so monitors survive restarts."
@@ -393,6 +393,12 @@
                  (let ((entry (make-hash-table :test #'equal)))
                    (setf (gethash "url" entry) (getf config :url)
                          (gethash "interval_seconds" entry) (getf config :interval-seconds))
+                   (when (getf config :keywords)
+                     (setf (gethash "keywords" entry) (coerce (getf config :keywords) 'vector)))
+                   (when (getf config :match-mode)
+                     (setf (gethash "match_mode" entry) (getf config :match-mode)))
+                   (when (getf config :search-fields)
+                     (setf (gethash "search_fields" entry) (coerce (getf config :search-fields) 'vector)))
                    (setf (gethash name ht) entry)))
                *rss-monitors*)
       (crichton/storage:store-set "rss" "monitors" ht)))
@@ -407,8 +413,15 @@
         (maphash (lambda (name entry)
                    (handler-case
                        (let ((url (gethash "url" entry))
-                             (interval (gethash "interval_seconds" entry)))
-                         (rss-monitor-start name url interval :persist nil)
+                             (interval (gethash "interval_seconds" entry))
+                             (keywords (gethash "keywords" entry))
+                             (match-mode (gethash "match_mode" entry))
+                             (search-fields (gethash "search_fields" entry)))
+                         (rss-monitor-start name url interval
+                                            :keywords (when keywords (coerce keywords 'list))
+                                            :match-mode match-mode
+                                            :search-fields (when search-fields (coerce search-fields 'list))
+                                            :persist nil)
                          (incf restored))
                      (error (c)
                        (log:warn "Failed to restore RSS monitor ~A: ~A" name c)
@@ -418,8 +431,39 @@
 
 ;;; --- Monitoring integration with scheduler ---
 
-(defun rss-monitor-poll (name url)
+(defun run-rss-filter (items keywords &key (match-mode "any") (search-fields '("title" "description")))
+  "Run ITEMS through the rss-filter WASM skill.
+   ITEMS is a list of plists (canonical RSS schema).
+   Returns the filter result hash-table (with \"matches\" and \"statistics\" keys),
+   or NIL if the rss-filter skill is not available."
+  (let ((entry (gethash "rss-filter" *skill-registry*)))
+    (unless entry
+      (log:warn "rss-filter WASM skill not found in registry; skipping filter")
+      (return-from run-rss-filter nil))
+    (let ((params (make-hash-table :test #'equal)))
+      ;; Convert plist items to hash-tables for JSON serialization
+      (setf (gethash "items" params)
+            (coerce
+             (mapcar (lambda (item)
+                       (let ((ht (make-hash-table :test #'equal)))
+                         (setf (gethash "id" ht) (or (getf item :id) "")
+                               (gethash "title" ht) (or (getf item :title) "")
+                               (gethash "description" ht) (or (getf item :description) "")
+                               (gethash "link" ht) (or (getf item :link) "")
+                               (gethash "published" ht) (or (getf item :published) "")
+                               (gethash "feed_name" ht) (or (getf item :feed-name) ""))
+                         ht))
+                     items)
+             'vector))
+      (setf (gethash "keywords" params) (coerce keywords 'vector))
+      (setf (gethash "match_mode" params) match-mode)
+      (setf (gethash "search_fields" params) (coerce search-fields 'vector))
+      (invoke-skill "rss-filter" :entry-point "filter_items" :params params))))
+
+(defun rss-monitor-poll (name url &key keywords match-mode search-fields)
   "Poll a single RSS feed, log new items, and post notifications.
+   When KEYWORDS is non-nil, runs new items through the rss-filter WASM
+   skill and only reports/notifies on matching items.
    Called by the scheduler callback registered via RSS-MONITOR-START.
    Retries transient failures up to 2 times via fetch-feed's :RETRY restart."
   (let ((attempts 0)
@@ -435,31 +479,62 @@
       (handler-case
           (let ((result (rss-check url)))
             (when (plusp (getf result :new-count))
-              (log:info "RSS ~A: ~D new item~:P" name (getf result :new-count))
-              (dolist (item (getf result :new-items))
-                (log:info "  ~A: ~A" name (getf item :title)))
-              (crichton/daemon:notification-post
-               "rss"
-               (format nil "~D new item~:P in ~A" (getf result :new-count) name)
-               name)))
+              (let ((report-items (getf result :new-items))
+                    (report-count (getf result :new-count)))
+                ;; Apply WASM filter if keywords configured
+                (when keywords
+                  (let ((filter-result (run-rss-filter report-items keywords
+                                                       :match-mode (or match-mode "any")
+                                                       :search-fields (or search-fields '("title" "description")))))
+                    (when filter-result
+                      (let ((matches (gethash "matches" filter-result)))
+                        (setf report-count (length matches))
+                        ;; Convert matched hash-tables back to plists for logging
+                        (setf report-items
+                              (mapcar (lambda (m)
+                                        (list :id (gethash "id" m)
+                                              :title (gethash "title" m)
+                                              :link (gethash "link" m)
+                                              :matched-keywords (gethash "matched_keywords" m)))
+                                      (coerce matches 'list)))))))
+                (when (plusp report-count)
+                  (log:info "RSS ~A: ~D ~Aitem~:P" name report-count
+                            (if keywords "matching " ""))
+                  (dolist (item report-items)
+                    (log:info "  ~A: ~A" name (getf item :title)))
+                  (crichton/daemon:notification-post
+                   "rss"
+                   (format nil "~D ~Aitem~:P in ~A" report-count
+                           (if keywords "matching " "") name)
+                   name)))))
         (error (c)
           (log:warn "RSS monitor ~A failed after ~D attempt~:P: ~A"
                     name (1+ attempts) c))))))
 
-(defun rss-monitor-start (name url interval-seconds &key (replace t) (persist t))
+(defun rss-monitor-start (name url interval-seconds &key (replace t) (persist t)
+                                                          keywords match-mode search-fields)
   "Start monitoring a feed by scheduling periodic checks.
    NAME is the task name. Results logged via log4cl.
-   When PERSIST is T (default), saves the monitor config to storage
-   so it survives daemon restarts."
+   When KEYWORDS is non-nil, new items are filtered through the rss-filter
+   WASM skill before reporting.  MATCH-MODE (\"any\"/\"all\") and SEARCH-FIELDS
+   (list of field names) control filter behaviour.
+   When PERSIST is T (default), saves the monitor config (including filter
+   settings) to storage so it survives daemon restarts."
   (schedule-every name interval-seconds
-                  (lambda () (rss-monitor-poll name url))
+                  (lambda () (rss-monitor-poll name url
+                                               :keywords keywords
+                                               :match-mode match-mode
+                                               :search-fields search-fields))
                   :replace replace)
   (bt:with-lock-held (*rss-monitors-lock*)
     (setf (gethash name *rss-monitors*)
-          (list :url url :interval-seconds interval-seconds)))
+          (list :url url :interval-seconds interval-seconds
+                :keywords keywords :match-mode match-mode
+                :search-fields search-fields)))
   (when persist
     (persist-rss-monitors))
-  (log:info "RSS monitor started: ~A → ~A (every ~Ds)" name url interval-seconds)
+  (log:info "RSS monitor started: ~A → ~A (every ~Ds~@[, keywords: ~{~A~^,~}~])"
+            name url interval-seconds keywords)
   name)
 
 (defun rss-monitor-stop (name)

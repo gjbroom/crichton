@@ -51,6 +51,11 @@ For development details, see the git commit history and BEADS issue tracker.
   - Auto-dismiss after 10 seconds, manual dismiss with Esc key
   - =:notifications= command shows notification history in chat
   - Notification history capped at 100 entries
+- *RSS monitor keyword filtering*: RSS monitors now accept =keywords=, =match_mode=, and =search_fields= parameters to automatically filter new items through the rss-filter WASM skill (cricht-8u0)
+  - Filter config persists to storage and survives daemon restarts
+  - When keywords are set, only matching items trigger notifications
+  - Available via the =rss= agent tool's =monitor_start= action
+  - No manual pipeline setup required — filtering is built into the monitor
 - Skill parameter passing: =invoke-skill= now accepts =:params= and =:abi= keywords (cricht-u1x)
   - JSON ABI auto-selected when params provided or manifest declares =abi = "json"=
   - Agent =skills= tool =invoke= action passes =params= field through to WASM skills

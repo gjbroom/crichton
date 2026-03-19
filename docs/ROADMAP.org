@@ -243,6 +243,12 @@ nts
 
    Advanced security features and production hardening.
 
+*** TODO [#A] Enforce Skill Signature Verification
+    - [ ] Verify Ed25519 signatures on external skills at load time
+    - [ ] Reject unsigned/tampered WASM bundles (configurable policy)
+    - [ ] Wire signing.lisp verification into registry load path
+    - [ ] Set :signed-p in skill-context after successful verification
+
 *** TODO [#B] Alternative Credential Backends
     - [ ] libsecret credential backend (cricht-055)
     - [ ] OS keychain integration (macOS Security.framework)

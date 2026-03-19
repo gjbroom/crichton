@@ -207,6 +207,7 @@
            #:rss-monitor-stop
            #:rss-list-monitors
            #:restore-rss-monitors
+           #:run-rss-filter
            #:clear-seen
            #:persist-rss-state
            #:load-rss-state
