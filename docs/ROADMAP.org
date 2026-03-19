@@ -203,6 +203,22 @@ nts
     - [X] Config-gated local-only access with path allowlist
     - [ ] Support for TODO lists, tables, literate programming
 
+*** TODO [#A] Emacs Client (crichton.el)
+    Bidirectional Emacs interface — both an RPC client to the daemon
+    and a tool provider that Crichton can call back into.
+    - [ ] Elisp package scaffold (crichton.el)
+    - [ ] Unix socket connection to daemon.sock (NDJSON protocol)
+    - [ ] Chat buffer with send/receive (comint or custom major mode)
+    - [ ] Streaming response display
+    - [ ] Push notification handling (subscribe op)
+    - [ ] Bidirectional RPC: daemon can invoke elisp functions via Emacs
+    - [ ] Org-roam bridge: expose org-roam elisp API as Crichton tools
+      - [ ] org-roam-db-query passthrough
+      - [ ] org-roam-node-find / org-roam-node-insert integration
+      - [ ] Buffer-aware context (send current buffer/region to Crichton)
+    - [ ] org-capture integration (AI-assisted capture templates)
+    - [ ] Emacs-side tool registry (Crichton calls back to Emacs for actions)
+
 *** TODO [#B] RSS Writing
     - [ ] RSS feed generation skill (cricht-hit)
     - [ ] Generate valid RSS 2.0 or Atom XML
