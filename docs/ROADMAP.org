@@ -201,7 +201,10 @@ nts
     - [X] Generate valid org syntax
     - [X] Org-roam integration (SQLite DB queries, backlinks, node search)
     - [X] Config-gated local-only access with path allowlist
-    - [ ] Support for TODO lists, tables, literate programming
+    - [X] TODO management (list_todos, set_todo with CLOSED timestamp)
+    - [X] Timestamp parsing (SCHEDULED, DEADLINE, CLOSED)
+    - [ ] Table parsing
+    - [ ] Source block extraction (literate programming)
 
 *** TODO [#A] Emacs Client (crichton.el)
     Bidirectional Emacs interface — both an RPC client to the daemon
