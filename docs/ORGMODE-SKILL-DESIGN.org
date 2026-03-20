@@ -1,0 +1,557 @@
+#+TITLE: Org-Mode / Org-Roam Skill — Phase 2 Design
+#+AUTHOR: Gordon J. Broom
+#+DATE: 2026-03-19
+#+STARTUP: content
+
+* Overview
+
+Phase 1 of the orgmode skill (cricht-1gm) is complete: file read/write,
+preamble/headline parsing, org-roam SQLite queries (search, backlinks,
+tags), note creation, and config-gated path security.
+
+This document designs Phase 2: deeper org-mode content support (TODOs,
+tables, source blocks) and the Emacs-side org-roam bridge that unlocks
+full bidirectional integration.
+
+* Phase 2a: Extended Org Content Support
+
+The existing parser extracts headlines with TODO keywords but doesn't
+provide dedicated TODO management, table parsing, or source block
+extraction.  These are the unchecked items from the roadmap.
+
+** TODO Management
+
+*** New Actions
+
+- =list_todos= — Query TODO items across allowed paths.
+- =set_todo= — Change a headline's TODO state (e.g. TODO → DONE).
+
+*** =list_todos= Design
+
+#+begin_src ditaa
+  +------------------+       +------------------+
+  | orgmode-list-todos|----->| org-roam DB      |
+  | :state :tag      |      | (nodes table,    |
+  | :priority :file  |      |  todo != NULL)   |
+  +--------+---------+      +------------------+
+           |
+           | fallback / supplement
+           v
+  +------------------+
+  | File scanner     |
+  | parse-org-preamble|
+  | + headline scan  |
+  +------------------+
+#+end_src
+
+Parameters:
+- =state= (string, optional): Filter by TODO keyword ("TODO", "NEXT",
+  "WAITING", etc.). Default: all non-DONE states.
+- =tag= (string, optional): Filter by org-roam tag.
+- =priority= (string, optional): Filter by priority ("A", "B", "C").
+- =file= (string, optional): Restrict to a single file.
+- =include-done= (boolean, optional): Include DONE/CANCELLED items.
+  Default: false.
+- =limit= (integer, optional): Max results. Default: 50.
+
+Returns list of plists:
+#+begin_src lisp
+((:file "/path/to/file.org"
+  :title "File Title"
+  :headline "Fix the build"
+  :level 2
+  :todo "TODO"
+  :priority "A"
+  :tags ("work" "urgent")
+  :line 42)
+ ...)
+#+end_src
+
+Strategy: Query org-roam =nodes= table first (=WHERE todo IS NOT NULL=),
+post-filter by state/priority/tag, fall back to file scanning when DB is
+unavailable or when =:file= restricts to a specific path.
+
+*** =set_todo= Design
+
+Parameters:
+- =path= (string, required): File path or node ID.
+- =headline= (string, required): Headline title to match.
+- =state= (string, required): New TODO keyword or empty string to clear.
+
+Implementation:
+1. Parse file, find matching headline.
+2. Regex-replace the TODO keyword portion of the headline line.
+3. If transitioning to DONE/CANCELLED, insert =CLOSED: [timestamp]=
+   on the line after the headline (org convention).
+4. Write back under =*orgmode-write-lock*=.
+
+** Table Parsing
+
+Org tables are pipe-delimited grids.  The parser should extract them as
+structured data for the agent to reason over.
+
+*** Data Model
+
+#+begin_src lisp
+(defclass org-table ()
+  ((header :initarg :header :initform nil :accessor table-header
+           :documentation "List of column name strings, or NIL if no hline separator.")
+   (rows :initarg :rows :initform nil :accessor table-rows
+         :documentation "List of row lists (each row is a list of cell strings).")
+   (start-line :initarg :start-line :initform 0 :accessor table-start-line)
+   (end-line :initarg :end-line :initform 0 :accessor table-end-line)
+   (parent-headline :initarg :parent-headline :initform nil
+                    :accessor table-parent-headline
+                    :documentation "Title of the containing headline, or NIL for top-level.")))
+#+end_src
+
+*** Regex Patterns
+
+#+begin_src lisp
+(defparameter *table-row-re*
+  (cl-ppcre:create-scanner "^\\s*\\|(.+)\\|\\s*$"))
+
+(defparameter *table-hline-re*
+  (cl-ppcre:create-scanner "^\\s*\\|[-+]+\\|\\s*$"))
+#+end_src
+
+*** Parse Strategy
+
+In =parse-org-file=, when a line matches =*table-row-re*=:
+1. Begin accumulating table rows.
+2. If a =*table-hline-re*= is encountered, rows above it become headers.
+3. Continue until a non-table line is reached.
+4. Store as an =org-table= instance in a new =tables= slot on =org-document=.
+
+*** API Surface
+
+- =orgmode-read= already returns the parsed document; extend its plist
+  output with a =:tables= key containing the parsed tables.
+- New action =query_table= (optional, lower priority): extract a specific
+  table by headline context and optionally filter rows.
+
+** Source Block Extraction
+
+Source blocks (=#+BEGIN_SRC ... #+END_SRC=) are relevant for literate
+programming.  The existing regex patterns are defined but unused.
+
+*** Data Model
+
+#+begin_src lisp
+(defclass org-src-block ()
+  ((language :initarg :language :initform "" :accessor src-block-language)
+   (header-args :initarg :header-args :initform nil :accessor src-block-header-args
+                :documentation "Alist of header arguments (:var, :results, etc.)")
+   (body :initarg :body :initform "" :accessor src-block-body)
+   (start-line :initarg :start-line :initform 0 :accessor src-block-start-line)
+   (end-line :initarg :end-line :initform 0 :accessor src-block-end-line)
+   (name :initarg :name :initform nil :accessor src-block-name
+         :documentation "#+NAME: value if present before the block.")
+   (parent-headline :initarg :parent-headline :initform nil
+                    :accessor src-block-parent-headline)))
+#+end_src
+
+*** Parse Strategy
+
+In =parse-org-file=, when a line matches =*src-block-begin-re*=:
+1. Extract language from capture group 1.
+2. Parse header args from the rest of the =#+BEGIN_SRC= line.
+3. Accumulate body lines until =*src-block-end-re*=.
+4. Check preceding line for =#+NAME:= to capture block name.
+5. Store in a new =src-blocks= slot on =org-document=.
+
+*** API Surface
+
+- =orgmode-read= plist output gains a =:src-blocks= key.
+- New action =list_src_blocks= (optional): list blocks by language,
+  name, or parent headline across files.
+- /No babel execution/: Crichton will not execute source blocks
+  (security boundary).  That belongs to the Emacs bridge.
+
+* Phase 2b: Emacs Client Org-Roam Bridge
+
+This is the high-value integration: the daemon calls back into a
+running Emacs to leverage the full org-roam elisp API, rather than
+querying the SQLite database directly.
+
+** Architecture
+
+#+begin_src ditaa
+  +-------------------+                      +------------------+
+  | Crichton Daemon   |     daemon.sock      | crichton.el      |
+  |                   |<--- NDJSON/UDS ----->| (Emacs client)   |
+  | Agent Loop        |                      |                  |
+  |  +-- orgmode tool |                      | org-roam.el      |
+  |  +-- emacs-bridge |                      | org-capture.el   |
+  |      tool         |                      | org-agenda.el    |
+  +-------------------+                      +------------------+
+        |        ^
+        |        | tool_result
+        v        |
+  +-------------------+
+  | LLM (Claude)      |
+  +-------------------+
+#+end_src
+
+*** Communication Flow
+
+1. Agent receives a chat message requiring org-roam operations.
+2. Agent calls the =orgmode= tool with an action that requires Emacs.
+3. Daemon detects no DB available or action requires live Emacs
+   (e.g. =org-roam-node-insert=, =org-capture=).
+4. Daemon sends an *emacs-invoke* push message to the connected
+   =crichton.el= client:
+
+   #+begin_src json
+   {
+     "type": "emacs_invoke",
+     "id": "einv-001",
+     "function": "org-roam-db-query",
+     "args": ["SELECT id, file, title FROM nodes WHERE title LIKE '%AI%'"]
+   }
+   #+end_src
+
+5. =crichton.el= evaluates the elisp, returns result:
+
+   #+begin_src json
+   {
+     "id": "einv-001",
+     "op": "emacs_result",
+     "result": [["uuid-1", "/path/file1.org", "AI Planning"],
+                ["uuid-2", "/path/file2.org", "AI Ethics"]]
+   }
+   #+end_src
+
+6. Daemon receives result, returns it to the agent tool handler.
+
+*** Timeout and Fallback
+
+- Emacs invocations have a configurable timeout (default: 10s).
+- If no Emacs client is connected, fall back to direct SQLite queries
+  (the existing Phase 1 implementation).
+- If Emacs invocation times out, return error to agent with suggestion
+  to retry via DB-only mode.
+
+** Emacs-Side Implementation (crichton.el)
+
+*** Connection Layer
+
+#+begin_src emacs-lisp
+(defcustom crichton-socket-path
+  (expand-file-name "daemon.sock" (expand-file-name ".crichton" "~"))
+  "Path to the Crichton daemon Unix socket."
+  :type 'file
+  :group 'crichton)
+
+(defvar crichton--process nil
+  "Network process connected to the Crichton daemon.")
+
+(defun crichton-connect ()
+  "Connect to the Crichton daemon."
+  (interactive)
+  (setq crichton--process
+        (make-network-process
+         :name "crichton"
+         :family 'local
+         :service crichton-socket-path
+         :filter #'crichton--filter
+         :sentinel #'crichton--sentinel
+         :coding 'utf-8-unix
+         :noquery t)))
+#+end_src
+
+*** Emacs Invoke Handler
+
+When the daemon sends an =emacs_invoke= push message, =crichton.el=
+evaluates the requested function in a safe sandbox:
+
+#+begin_src emacs-lisp
+(defvar crichton-allowed-functions
+  '(org-roam-db-query
+    org-roam-node-find
+    org-roam-node-list
+    org-roam-node-at-point
+    org-roam-tag-completions
+    org-capture
+    org-agenda-list
+    org-todo-list)
+  "Functions the daemon is allowed to invoke via emacs_invoke.
+Only allowlisted functions are executed — security boundary.")
+
+(defun crichton--handle-emacs-invoke (msg)
+  "Handle an emacs_invoke message from the daemon."
+  (let* ((id (gethash "id" msg))
+         (func-name (intern (gethash "function" msg)))
+         (args (gethash "args" msg)))
+    (if (memq func-name crichton-allowed-functions)
+        (condition-case err
+            (let ((result (apply func-name args)))
+              (crichton--send-result id result))
+          (error
+           (crichton--send-error id (error-message-string err))))
+      (crichton--send-error id (format "Function %s not in allowlist" func-name)))))
+#+end_src
+
+*** Security Model
+
+- *Allowlist only*: Only explicitly listed functions can be invoked.
+  The daemon cannot execute arbitrary elisp.
+- *No eval*: The handler calls known functions with args, never
+  =(eval)= or =(funcall (intern ...))= on unvalidated input.
+- *Rate limiting*: Optional rate limit to prevent runaway invocations
+  (default: 20 calls/minute).
+
+** Daemon-Side Implementation
+
+*** Emacs Client Tracking
+
+The RPC server already tracks connected clients for push notifications
+(=*subscribers*= list).  Extend with client-type metadata:
+
+#+begin_src lisp
+(defclass rpc-subscriber ()
+  ((stream :initarg :stream :accessor subscriber-stream)
+   (lock :initarg :lock :accessor subscriber-lock)
+   (client-type :initarg :client-type :initform :generic
+                :accessor subscriber-client-type
+                :documentation ":GENERIC, :TUI, :EMACS, :CLIENT")))
+#+end_src
+
+When a client connects, it sends a =hello= message declaring its type:
+
+#+begin_src json
+{
+  "id": 1,
+  "op": "hello",
+  "client_type": "emacs",
+  "capabilities": ["emacs_invoke"]
+}
+#+end_src
+
+*** Emacs Bridge Function
+
+#+begin_src lisp
+(defun invoke-emacs (function-name args &key (timeout 10))
+  "Send an emacs_invoke request to a connected Emacs client and wait for result.
+   Signals error if no Emacs client is connected or invocation times out."
+  (let ((emacs-sub (find :emacs *subscribers*
+                         :key #'subscriber-client-type)))
+    (unless emacs-sub
+      (error "No Emacs client connected"))
+    (let* ((inv-id (format nil "einv-~A" (incf *invocation-counter*)))
+           (msg (crichton/rpc:make-message
+                 "type" "emacs_invoke"
+                 "id" inv-id
+                 "function" function-name
+                 "args" args))
+           (result-box (make-result-box)))
+      ;; Register pending invocation
+      (setf (gethash inv-id *pending-emacs-invocations*) result-box)
+      ;; Send to Emacs
+      (bt:with-lock-held ((subscriber-lock emacs-sub))
+        (crichton/rpc:write-message (subscriber-stream emacs-sub) msg))
+      ;; Wait for result
+      (unwind-protect
+           (let ((result (wait-for-result result-box :timeout timeout)))
+             (unless result
+               (error "Emacs invocation ~A timed out after ~Ds" inv-id timeout))
+             result)
+        (remhash inv-id *pending-emacs-invocations*)))))
+#+end_src
+
+*** Integration with Orgmode Skill
+
+The orgmode tool handlers gain an Emacs-preferred path:
+
+#+begin_src lisp
+(defun orgmode-search (query &key (mode :auto) tag (limit 50))
+  "Search for notes. Prefers Emacs bridge when available."
+  (%om-validate-enabled)
+  (let ((use-emacs (and (member mode '(:auto :emacs))
+                        (emacs-client-connected-p))))
+    (cond
+      ;; Emacs bridge: full org-roam API
+      (use-emacs
+       (handler-case
+           (let ((result (invoke-emacs "org-roam-db-query"
+                           (list (if tag
+                                     (format nil "SELECT ... WHERE title LIKE '%~A%' AND tag = '~A'"
+                                             query tag)
+                                     (format nil "SELECT ... WHERE title LIKE '%~A%'"
+                                             query))))))
+             (%om-filter-by-allowed-paths result))
+         (error (c)
+           (log:warn "Emacs bridge search failed, falling back to DB: ~A" c)
+           (orgmode-search query :mode :db :tag tag :limit limit))))
+      ;; Direct DB or file scan (existing implementation)
+      (t (orgmode-search-direct query :mode mode :tag tag :limit limit)))))
+#+end_src
+
+** New Emacs-Only Actions
+
+These actions are only available when an Emacs client is connected:
+
+*** =capture=
+
+Trigger =org-capture= with a template and content:
+
+#+begin_src json
+{
+  "action": "capture",
+  "template_key": "t",
+  "content": "Review the new RSS filter implementation",
+  "tags": ["crichton", "code-review"]
+}
+#+end_src
+
+The daemon sends an =emacs_invoke= for =org-capture= with the template
+key.  Emacs opens the capture buffer (or completes non-interactively
+if =:immediate-finish= is set in the template).
+
+*** =agenda=
+
+Query org-agenda for upcoming items:
+
+#+begin_src json
+{
+  "action": "agenda",
+  "days": 7,
+  "filter": "+work"
+}
+#+end_src
+
+Returns agenda items as structured data.  Requires the Emacs bridge
+since agenda computation uses all of org's complex scheduling logic.
+
+*** =roam_insert=
+
+Insert an org-roam link into a file:
+
+#+begin_src json
+{
+  "action": "roam_insert",
+  "target_file": "/path/to/note.org",
+  "position": "end",
+  "link_to_id": "uuid-of-target-node",
+  "description": "Related: AI Planning"
+}
+#+end_src
+
+* Phase 2c: Parser Hardening
+
+** Recursive File Scan
+
+Currently =list_files= and =search= only scan =*.org= in the
+top-level of each allowed path.  Extend to recursive scanning:
+
+#+begin_src lisp
+(defun org-files-under (root &key (max-depth 5))
+  "Recursively collect .org files under ROOT, up to MAX-DEPTH levels."
+  ...)
+#+end_src
+
+** Timestamp Parsing
+
+Org timestamps (=<2026-03-19 Wed>=, =[2026-03-19 Wed]=, repeaters,
+ranges) are currently not parsed.  Add:
+
+#+begin_src lisp
+(defparameter *timestamp-re*
+  (cl-ppcre:create-scanner
+   "([<\\[])([0-9]{4})-([0-9]{2})-([0-9]{2})\\s+\\w+(?:\\s+([0-9:]+))?(?:\\s+([.+]+[0-9]+[hdwmy]))?([>\\]])"))
+
+(defclass org-timestamp ()
+  ((type :initarg :type :documentation ":ACTIVE or :INACTIVE")
+   (year :initarg :year)
+   (month :initarg :month)
+   (day :initarg :day)
+   (time :initarg :time :initform nil)
+   (repeater :initarg :repeater :initform nil)))
+#+end_src
+
+Extract timestamps from headlines (SCHEDULED, DEADLINE, CLOSED) and
+store on the =org-headline= class.
+
+** Property Inheritance
+
+Org-mode supports property inheritance (=:COLUMNS:=, inherited tags).
+This is complex and low-priority, but the design should not preclude
+it.  The =org-headline= class already stores properties as an alist;
+a future =inherited-properties= accessor could walk the headline tree.
+
+* Implementation Priority
+
+| Priority | Item                      | Dependency       | Estimate |
+|----------+---------------------------+------------------+----------|
+| P1       | TODO management actions   | None             | 1 day    |
+| P1       | Timestamp parsing         | None             | 0.5 day  |
+| P2       | Table parsing             | None             | 1 day    |
+| P2       | Source block extraction   | None             | 0.5 day  |
+| P2       | Recursive file scan       | None             | 0.5 day  |
+| P3       | Emacs bridge: crichton.el | crichton.el base | 2 days   |
+| P3       | Emacs bridge: daemon side | crichton.el base | 1 day    |
+| P3       | Emacs-only actions        | Emacs bridge     | 1 day    |
+
+P1 items can proceed immediately.  P2 items are independent of each
+other.  P3 items depend on the Emacs client scaffold (crichton.el)
+from the separate roadmap item.
+
+* Tool Registration Changes
+
+The =orgmode= tool definition in =agent/tools.lisp= gains new actions
+in the =:enum=:
+
+#+begin_src lisp
+:enum ("read" "search" "list_tags" "backlinks" "create_note" "append"
+       "list_files" "status"
+       ;; Phase 2a
+       "list_todos" "set_todo"
+       ;; Phase 2b (Emacs bridge, when connected)
+       "capture" "agenda" "roam_insert")
+#+end_src
+
+New parameters:
+- =state= (string): TODO state filter for =list_todos=.
+- =include-done= (boolean): Include completed items in =list_todos=.
+- =template-key= (string): Capture template key for =capture=.
+- =days= (integer): Lookahead days for =agenda=.
+- =link-to-id= (string): Target node ID for =roam_insert=.
+- =position= (string): Where to insert ("end", "after-headline").
+
+* Config Changes
+
+Extended =[orgmode]= section in =config.toml=:
+
+#+begin_src toml
+[orgmode]
+enable = true
+allowed_paths = ["/home/gjbroom/org/"]
+db_path = "/home/gjbroom/.emacs.d/org-roam.db"
+setupfile = "~/org/setup.org"
+
+# Phase 2 additions
+recursive_scan = true          # Scan subdirectories (default: true)
+max_scan_depth = 5             # Max directory depth for recursive scan
+emacs_invoke_timeout = 10      # Seconds to wait for Emacs response
+todo_keywords = ["TODO", "NEXT", "WAITING", "SOMEDAY"]  # Recognized active states
+done_keywords = ["DONE", "CANCELLED"]                    # Recognized done states
+#+end_src
+
+* Open Questions
+
+1. *Agenda integration scope*: Should the daemon attempt to replicate
+   any of org-agenda's scheduling logic (repeaters, habits) locally,
+   or should it be Emacs-only?  /Recommendation: Emacs-only./
+
+2. *org-roam v2 schema*: The current SQLite queries target org-roam v2's
+   schema (=nodes=, =links=, =tags= tables).  Should we detect and
+   support v1?  /Recommendation: v2 only, v1 is unmaintained./
+
+3. *Concurrent Emacs sessions*: If multiple Emacs frames are connected,
+   which one receives =emacs_invoke=?  /Recommendation: First
+   connected wins; add a =primary= flag to =hello=./
+
+4. *Capture non-interactive mode*: Should =capture= always use
+   =:immediate-finish= to avoid blocking the Emacs UI?  Or should it
+   open an interactive capture buffer and wait?  /Recommendation:
+   Configurable per-template, default to immediate-finish./
