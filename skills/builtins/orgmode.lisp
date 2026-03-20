@@ -766,12 +766,21 @@
 
 (defun org-files-under (root &key (max-depth 5) (limit 1000))
   "Recursively collect .org files under ROOT, up to MAX-DEPTH levels.
-   Returns a list of pathname objects, capped at LIMIT."
+   Returns a list of pathname objects, capped at LIMIT.
+   Tracks visited directories by truename to avoid symlink cycles."
   (let ((results nil)
-        (count 0))
+        (count 0)
+        (visited (make-hash-table :test #'equal)))
     (labels ((scan-dir (dir depth)
                (when (or (> depth max-depth) (>= count limit))
                  (return-from scan-dir))
+               (let ((truedir (handler-case
+                                  (namestring (truename dir))
+                                (error () nil))))
+                 (unless truedir (return-from scan-dir))
+                 (when (gethash truedir visited)
+                   (return-from scan-dir))
+                 (setf (gethash truedir visited) t))
                (handler-case
                    (progn
                      (dolist (file (directory (merge-pathnames "*.org" dir)))
@@ -1043,43 +1052,74 @@
         (log:warn "Org-roam TODO query failed: ~A" c)
         nil))))
 
+(defun %om-scan-file-todos (path active-kws done-kws state priority include-done)
+  "Lightweight headline-only scan of PATH for TODO items.
+   Reads line-by-line without loading the full file into memory.
+   Returns a list of TODO plists."
+  (let ((results nil)
+        (file-title nil)
+        (line-num 0))
+    (handler-case
+        (with-open-file (s path :direction :input :if-does-not-exist nil)
+          (when s
+            (loop for line = (read-line s nil nil)
+                  while line
+                  do (incf line-num)
+                  do (cond
+                       ;; Grab title from preamble
+                       ((and (null file-title)
+                             (multiple-value-bind (match regs)
+                                 (cl-ppcre:scan-to-strings *file-keyword-re* line)
+                               (when (and match
+                                          (string-equal "TITLE" (aref regs 0)))
+                                 (setf file-title (aref regs 1))
+                                 t))))
+                       ;; Match headlines with TODO keywords
+                       ((multiple-value-bind (match regs)
+                            (cl-ppcre:scan-to-strings *headline-re* line)
+                          (when (and match (aref regs 1))
+                            (let ((todo-kw (aref regs 1))
+                                  (h-priority (aref regs 2))
+                                  (h-title (aref regs 3))
+                                  (h-tags (parse-headline-tags (aref regs 4))))
+                              (when (and (or include-done
+                                             (member todo-kw active-kws
+                                                     :test #'string-equal))
+                                         (not (and (not include-done)
+                                                   (member todo-kw done-kws
+                                                           :test #'string-equal)))
+                                         (or (null state)
+                                             (string-equal state todo-kw))
+                                         (or (null priority)
+                                             (string-equal priority h-priority)))
+                                (push (list :file (namestring path)
+                                            :title (or file-title "")
+                                            :headline h-title
+                                            :level (length (aref regs 0))
+                                            :todo todo-kw
+                                            :priority h-priority
+                                            :tags h-tags
+                                            :line line-num)
+                                      results)))
+                            t)))))))
+      (error () nil))
+    (nreverse results)))
+
 (defun %om-todo-from-files (file state priority include-done limit existing-count)
   "Scan org files for TODO headlines. Returns list of plists."
   (let ((results nil)
         (remaining (- limit existing-count))
         (active-kws (%om-active-todo-keywords))
-        (done-kws (%om-done-keywords))
-        (all-kws (append (%om-active-todo-keywords) (%om-done-keywords))))
-    (declare (ignore all-kws))
+        (done-kws (%om-done-keywords)))
     (flet ((scan-file (path)
              (when (<= remaining 0) (return-from scan-file))
-             (let ((doc (handler-case (parse-org-file path)
-                          (error () nil))))
-               (when doc
-                 (dolist (h (doc-headlines doc))
-                   (when (<= remaining 0) (return))
-                   (let ((todo-kw (headline-todo h)))
-                     (when (and todo-kw
-                                (or include-done
-                                    (member todo-kw active-kws :test #'string-equal))
-                                (not (and (not include-done)
-                                          (member todo-kw done-kws :test #'string-equal)))
-                                (or (null state)
-                                    (string-equal state todo-kw))
-                                (or (null priority)
-                                    (string-equal priority (headline-priority h))))
-                       (push (list :file (doc-path doc)
-                                   :title (doc-title doc)
-                                   :headline (headline-title h)
-                                   :level (headline-level h)
-                                   :todo todo-kw
-                                   :priority (headline-priority h)
-                                   :tags (headline-tags h)
-                                   :scheduled (headline-scheduled h)
-                                   :deadline (headline-deadline h)
-                                   :line (headline-start-line h))
-                             results)
-                       (decf remaining))))))))
+             (let ((todos (%om-scan-file-todos
+                           path active-kws done-kws
+                           state priority include-done)))
+               (dolist (todo todos)
+                 (when (<= remaining 0) (return))
+                 (push todo results)
+                 (decf remaining)))))
       (if file
           ;; Single file mode
           (let ((canonical (%om-validate-path file)))
