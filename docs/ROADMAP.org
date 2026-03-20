@@ -203,8 +203,9 @@ nts
     - [X] Config-gated local-only access with path allowlist
     - [X] TODO management (list_todos, set_todo with CLOSED timestamp)
     - [X] Timestamp parsing (SCHEDULED, DEADLINE, CLOSED)
-    - [ ] Table parsing
-    - [ ] Source block extraction (literate programming)
+    - [X] Table parsing (header/rows, hline separator)
+    - [X] Source block extraction (language, #+NAME:, body)
+    - [X] Recursive file scanning (configurable depth)
 
 *** TODO [#A] Emacs Client (crichton.el)
     Bidirectional Emacs interface — both an RPC client to the daemon
