@@ -1177,6 +1177,59 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
       (format nil "~4,'0D-~2,'0D-~2,'0D ~A ~2,'0D:~2,'0D"
               yr mon day day-name hr min))))
 
+(defun orgmode-set-filetags (path-or-id tags)
+  "Set the file-level tags of an org file.
+   PATH-OR-ID: file path or org-roam node ID.
+   TAGS: list of tag strings (replaces all existing filetags).
+   An empty list removes the #+FILETAGS line entirely.
+   Returns the canonical path of the modified file."
+  (%om-validate-enabled)
+  (let ((path (if (and (= (length path-or-id) 36)
+                       (cl-ppcre:scan "^[0-9a-f-]+$" path-or-id))
+                  (let ((node (org-roam-node-by-id path-or-id)))
+                    (unless node
+                      (error "Node ~A not found in org-roam database" path-or-id))
+                    (getf node :file))
+                  path-or-id)))
+    (let ((canonical (%om-validate-path path)))
+      (bt:with-lock-held (*orgmode-write-lock*)
+        (let* ((text (uiop:read-file-string canonical))
+               (lines (cl-ppcre:split "\\n" text))
+               (filetags-idx nil)
+               (title-idx nil))
+          ;; Find #+FILETAGS and #+TITLE lines in the preamble
+          (loop for line in lines
+                for idx from 0
+                when (and (plusp (length line)) (char= (char line 0) #\*))
+                  do (return)
+                do (multiple-value-bind (match regs)
+                       (cl-ppcre:scan-to-strings *file-keyword-re* line)
+                     (when match
+                       (let ((key (string-upcase (aref regs 0))))
+                         (cond
+                           ((string= key "FILETAGS") (setf filetags-idx idx))
+                           ((string= key "TITLE") (setf title-idx idx)))))))
+          (cond
+            ;; Replace existing #+FILETAGS line
+            ((and filetags-idx tags)
+             (setf (nth filetags-idx lines)
+                   (format nil "#+FILETAGS: ~{:~A~}:" tags)))
+            ;; Remove existing #+FILETAGS line (empty tag list)
+            ((and filetags-idx (null tags))
+             (setf lines (append (subseq lines 0 filetags-idx)
+                                 (subseq lines (1+ filetags-idx)))))
+            ;; Insert new #+FILETAGS line after #+TITLE
+            ((and (null filetags-idx) tags)
+             (let ((insert-at (if title-idx (1+ title-idx) 0)))
+               (setf lines (append (subseq lines 0 insert-at)
+                                   (list (format nil "#+FILETAGS: ~{:~A~}:" tags))
+                                   (subseq lines insert-at))))))
+          ;; Write back
+          (with-open-file (s canonical :direction :output :if-exists :supersede)
+            (format s "~{~A~^~%~}" lines))))
+      (log:info "Set filetags to ~S in ~A" tags canonical)
+      canonical)))
+
 (defun orgmode-set-todo (path-or-id headline new-state)
   "Change a headline's TODO state in an org file.
    PATH-OR-ID: file path or org-roam node ID.

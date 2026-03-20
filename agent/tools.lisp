@@ -898,10 +898,10 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
 ;;; --- Org-mode tool ---
 
 (define-tool orgmode
-    (:description "Read, search, create, and manage org-mode files and org-roam notes.  LOCAL-ONLY: requires [orgmode] config.  Actions: 'read' (parse a file), 'search' (find notes by title/tag), 'list_tags' (org-roam tags), 'backlinks' (graph links), 'create_note' (new org-roam note), 'append' (add text to a file), 'list_files' (enumerate org files), 'list_todos' (query TODO items), 'set_todo' (change TODO state), 'status' (skill config).")
+    (:description "Read, search, create, and manage org-mode files and org-roam notes.  LOCAL-ONLY: requires [orgmode] config.  Actions: 'read' (parse a file), 'search' (find notes by title/tag), 'list_tags' (org-roam tags), 'backlinks' (graph links), 'create_note' (new org-roam note), 'append' (add text to a file), 'list_files' (enumerate org files), 'list_todos' (query TODO items), 'set_todo' (change TODO state), 'set_filetags' (replace file-level tags), 'status' (skill config).")
   ((action "string"
            "The orgmode action to perform."
-           :enum ("read" "search" "list_tags" "backlinks" "create_note" "append" "list_files" "list_todos" "set_todo" "status")
+           :enum ("read" "search" "list_tags" "backlinks" "create_note" "append" "list_files" "list_todos" "set_todo" "set_filetags" "status")
            :required-p t)
    (path "string"
          "File path or org-roam node ID (UUID).  Required for read, backlinks, append, set_todo.")
@@ -991,6 +991,12 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
            (return-from handler "Error: 'headline' is required for set_todo."))
          (let ((result (crichton/skills:orgmode-set-todo path headline state)))
            (format nil "Updated: ~A (headline ~S → ~A)" result headline (or state "cleared"))))
+        ((string-equal action "set_filetags")
+         (unless path
+           (return-from handler "Error: 'path' is required for set_filetags."))
+         (let* ((ft-list (if filetags (coerce filetags 'list) nil))
+                (result (crichton/skills:orgmode-set-filetags path ft-list)))
+           (format nil "Updated filetags: ~A → ~{:~A~}:" result ft-list)))
         (t (format nil "Unknown orgmode action: ~A" action)))
     (error (c)
       (format nil "Orgmode error: ~A" c))))

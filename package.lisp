@@ -300,7 +300,8 @@
            #:orgmode-append
            #:orgmode-list-files
            #:orgmode-list-todos
-           #:orgmode-set-todo))
+           #:orgmode-set-todo
+           #:orgmode-set-filetags))
 
 (defpackage #:crichton/llm
   (:use #:cl)
