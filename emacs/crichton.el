@@ -82,6 +82,10 @@ sent by the daemon."
 (defvar crichton--thinking-overlay nil
   "Overlay showing the [thinking…] indicator in the chat buffer.")
 
+(defvar crichton--streaming-done nil
+  "Non-nil after chat_done has delivered the response.
+Prevents the ok response from duplicating output.")
+
 ;;;; NDJSON protocol
 
 (defun crichton--next-id ()
@@ -340,6 +344,7 @@ Built on `comint-mode' — use \\[comint-send-input] to send,
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert (format "--- Query: %s ---\n" input))))
+    (setq crichton--streaming-done nil)
     (crichton--show-thinking)
     (crichton--send-request "chat"
                             'text input
@@ -378,11 +383,13 @@ shows only a [thinking…] indicator (like SLIME's inferior-lisp)."
       (when text
         (crichton--output text))
       (crichton--output "\n\n❯ "))
-    (setq crichton--streaming-buffer nil)))
+    (setq crichton--streaming-buffer nil)
+    (setq crichton--streaming-done t)))
 
 (defun crichton--handle-response (msg)
   "Handle a generic ok/error response (non-streaming fallback)."
   (when (and (not crichton--streaming-buffer)
+             (not crichton--streaming-done)
              (eq (alist-get 'ok msg) t))
     (let* ((result (alist-get 'result msg))
            (text (and (listp result) (alist-get 'text result)))
