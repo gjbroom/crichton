@@ -284,8 +284,9 @@ Built on `comint-mode' — use \\[comint-send-input] to send,
 
 (defun crichton--output (text)
   "Insert TEXT into the chat buffer as process output."
-  (let ((proc (get-buffer-process (crichton--chat-buffer))))
-    (when proc
+  (let* ((buf (crichton--chat-buffer))
+         (proc (get-buffer-process buf)))
+    (when (and proc (process-mark proc))
       (comint-output-filter proc text))))
 
 (defun crichton--input-sender (_proc input)
