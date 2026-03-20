@@ -338,7 +338,6 @@ Built on `comint-mode' — use \\[comint-send-input] to send,
   "Send INPUT to the Crichton daemon.  Called by comint on \\[comint-send-input]."
   (if (not (crichton-connected-p))
       (crichton--output "\n[Not connected — M-x crichton-connect]\n\n❯ ")
-    (crichton--output "\n")
     ;; Clear the process buffer for a fresh stream trace
     (with-current-buffer (crichton--process-buffer)
       (let ((inhibit-read-only t))
