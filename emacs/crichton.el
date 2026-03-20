@@ -79,6 +79,9 @@ sent by the daemon."
 (defvar crichton--last-response nil
   "Text of the most recent complete assistant response.")
 
+(defvar crichton--thinking-overlay nil
+  "Overlay showing the [thinking…] indicator in the chat buffer.")
+
 ;;;; NDJSON protocol
 
 (defun crichton--next-id ()
@@ -238,6 +241,47 @@ Returns the correlation ID."
          (message "Crichton status: %s" (alist-get 'result resp))
        (message "Crichton: status request failed")))))
 
+;;;; Process buffer (hidden raw stream — like SLIME's inferior-lisp)
+
+(defun crichton--process-buffer ()
+  "Return the hidden process buffer, creating it if needed.
+This buffer captures all raw streaming deltas from the daemon,
+analogous to SLIME's *inferior-lisp* buffer."
+  (get-buffer-create " *crichton-process*"))
+
+(defun crichton--process-output (text)
+  "Append TEXT to the hidden process buffer."
+  (with-current-buffer (crichton--process-buffer)
+    (goto-char (point-max))
+    (let ((inhibit-read-only t))
+      (insert text))))
+
+(defun crichton-show-process-buffer ()
+  "Display the hidden process buffer (raw LLM stream).
+Like `slime-switch-to-output-buffer' for the inferior process."
+  (interactive)
+  (display-buffer (crichton--process-buffer)))
+
+;;;; Thinking indicator
+
+(defun crichton--show-thinking ()
+  "Show a [thinking…] indicator at point in the chat buffer."
+  (crichton--remove-thinking)
+  (let* ((buf (get-buffer "*crichton-chat*"))
+         (proc (and buf (get-buffer-process buf))))
+    (when (and proc (process-mark proc))
+      (with-current-buffer buf
+        (let ((ov (make-overlay (process-mark proc) (process-mark proc))))
+          (overlay-put ov 'after-string
+                       (propertize "[thinking…]" 'face 'shadow))
+          (setq crichton--thinking-overlay ov))))))
+
+(defun crichton--remove-thinking ()
+  "Remove the [thinking…] indicator if present."
+  (when crichton--thinking-overlay
+    (delete-overlay crichton--thinking-overlay)
+    (setq crichton--thinking-overlay nil)))
+
 ;;;; Chat buffer (comint-based)
 
 (require 'comint)
@@ -246,6 +290,7 @@ Returns the correlation ID."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-k") #'crichton-disconnect)
     (define-key map (kbd "C-c C-o") #'crichton-last-response-to-buffer)
+    (define-key map (kbd "C-c C-p") #'crichton-show-process-buffer)
     map)
   "Keymap for `crichton-chat-mode'.
 Inherits from `comint-mode-map' via `define-derived-mode'.")
@@ -290,6 +335,12 @@ Built on `comint-mode' — use \\[comint-send-input] to send,
   (if (not (crichton-connected-p))
       (crichton--output "\n[Not connected — M-x crichton-connect]\n\n❯ ")
     (crichton--output "\n")
+    ;; Clear the process buffer for a fresh stream trace
+    (with-current-buffer (crichton--process-buffer)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "--- Query: %s ---\n" input))))
+    (crichton--show-thinking)
     (crichton--send-request "chat"
                             'text input
                             'session_id crichton--session-id
@@ -307,21 +358,25 @@ Built on `comint-mode' — use \\[comint-send-input] to send,
 ;;;; Streaming response handlers
 
 (defun crichton--handle-chat-delta (msg)
-  "Handle an incremental chat_delta push message."
+  "Handle an incremental chat_delta push message.
+Deltas stream into the hidden process buffer; the chat buffer
+shows only a [thinking…] indicator (like SLIME's inferior-lisp)."
   (let ((text (alist-get 'text msg)))
-    (when (and text crichton--streaming-buffer
-               (get-buffer crichton--streaming-buffer))
-      (crichton--output text))))
+    (when (and text crichton--streaming-buffer)
+      (crichton--process-output text))))
 
 (defun crichton--handle-chat-done (msg)
-  "Handle a chat_done push message — finalize streaming response."
+  "Handle a chat_done push message — show final response in chat buffer."
   (let ((text (alist-get 'text msg))
         (session (alist-get 'session_id msg)))
     (when session
       (setq crichton--session-id session))
     (when text
       (setq crichton--last-response text))
+    (crichton--remove-thinking)
     (when crichton--streaming-buffer
+      (when text
+        (crichton--output text))
       (crichton--output "\n\n❯ "))
     (setq crichton--streaming-buffer nil)))
 
