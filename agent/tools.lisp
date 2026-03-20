@@ -898,17 +898,17 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
 ;;; --- Org-mode tool ---
 
 (define-tool orgmode
-    (:description "Read, search, create, and manage org-mode files and org-roam notes.  LOCAL-ONLY: requires [orgmode] config.  Actions: 'read' (parse a file), 'search' (find notes by title/tag), 'list_tags' (org-roam tags), 'backlinks' (graph links), 'create_note' (new org-roam note), 'append' (add text to a file), 'list_files' (enumerate org files), 'status' (skill config).")
+    (:description "Read, search, create, and manage org-mode files and org-roam notes.  LOCAL-ONLY: requires [orgmode] config.  Actions: 'read' (parse a file), 'search' (find notes by title/tag), 'list_tags' (org-roam tags), 'backlinks' (graph links), 'create_note' (new org-roam note), 'append' (add text to a file), 'list_files' (enumerate org files), 'list_todos' (query TODO items), 'set_todo' (change TODO state), 'status' (skill config).")
   ((action "string"
            "The orgmode action to perform."
-           :enum ("read" "search" "list_tags" "backlinks" "create_note" "append" "list_files" "status")
+           :enum ("read" "search" "list_tags" "backlinks" "create_note" "append" "list_files" "list_todos" "set_todo" "status")
            :required-p t)
    (path "string"
-         "File path or org-roam node ID (UUID).  Required for read, backlinks, append.")
+         "File path or org-roam node ID (UUID).  Required for read, backlinks, append, set_todo.")
    (query "string"
           "Search query string.  Required for search.")
    (tag "string"
-        "Filter by org-roam tag.  Used with search.")
+        "Filter by org-roam tag.  Used with search, list_todos.")
    (title "string"
           "Note title.  Required for create_note.")
    (body "string"
@@ -920,12 +920,19 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
    (text "string"
          "Text to append.  Required for append.")
    (headline "string"
-             "Headline title to append under.  Used with append.")
+             "Headline title.  Used with append, set_todo.")
    (direction "string"
               "Link direction for backlinks: 'backlinks' (default), 'forward', 'both'."
               :enum ("backlinks" "forward" "both"))
    (include-raw "boolean"
                 "Include raw file text in read results.")
+   (state "string"
+          "TODO state filter for list_todos, or new state for set_todo.")
+   (priority "string"
+             "Priority filter ('A', 'B', 'C') for list_todos."
+             :enum ("A" "B" "C"))
+   (include-done "boolean"
+                 "Include DONE/CANCELLED items in list_todos.")
    (limit "integer"
           "Maximum results to return."
           :default 50))
@@ -972,6 +979,18 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
         ((string-equal action "list_files")
          (let ((results (crichton/skills:orgmode-list-files :root root :limit limit)))
            (format nil "~D file~:P:~%~{~S~^~%~}" (length results) results)))
+        ((string-equal action "list_todos")
+         (let ((results (crichton/skills:orgmode-list-todos
+                         :state state :priority priority :tag tag
+                         :file path :include-done include-done :limit limit)))
+           (format nil "~D TODO~:P:~%~{~S~^~%~}" (length results) results)))
+        ((string-equal action "set_todo")
+         (unless path
+           (return-from handler "Error: 'path' is required for set_todo."))
+         (unless headline
+           (return-from handler "Error: 'headline' is required for set_todo."))
+         (let ((result (crichton/skills:orgmode-set-todo path headline state)))
+           (format nil "Updated: ~A (headline ~S → ~A)" result headline (or state "cleared"))))
         (t (format nil "Unknown orgmode action: ~A" action)))
     (error (c)
       (format nil "Orgmode error: ~A" c))))

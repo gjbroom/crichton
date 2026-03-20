@@ -115,6 +115,12 @@
    (title :initarg :title :initform "" :accessor headline-title)
    (tags :initarg :tags :initform nil :accessor headline-tags)
    (properties :initarg :properties :initform nil :accessor headline-properties)
+   (scheduled :initarg :scheduled :initform nil :accessor headline-scheduled
+              :documentation "SCHEDULED timestamp plist, or NIL.")
+   (deadline :initarg :deadline :initform nil :accessor headline-deadline
+             :documentation "DEADLINE timestamp plist, or NIL.")
+   (closed :initarg :closed :initform nil :accessor headline-closed
+           :documentation "CLOSED timestamp plist, or NIL.")
    (start-line :initarg :start-line :initform 0 :accessor headline-start-line)
    (end-line :initarg :end-line :initform 0 :accessor headline-end-line)))
 
@@ -159,6 +165,46 @@
 
 (defparameter *src-block-end-re*
   (cl-ppcre:create-scanner "^\\s*#\\+END_SRC" :case-insensitive-mode t))
+
+(defparameter *timestamp-re*
+  (cl-ppcre:create-scanner
+   "([<\\[])([0-9]{4})-([0-9]{2})-([0-9]{2})\\s+\\w+(?:\\s+([0-9]{1,2}:[0-9]{2}))?(?:\\s+([.+]+[0-9]+[hdwmy]))?([>\\]])")
+  "Match an org timestamp: <2026-03-19 Wed 10:30 +1w> or [2026-03-19 Wed].")
+
+;;; --- Timestamp parser ---
+
+(defun parse-org-timestamp (ts-string)
+  "Parse an org timestamp string into a plist.
+   Returns (:type :ACTIVE/:INACTIVE :date \"YYYY-MM-DD\" :time \"HH:MM\" :repeater \"+1w\")
+   or NIL if not a valid timestamp."
+  (when (and ts-string (plusp (length ts-string)))
+    (multiple-value-bind (match regs)
+        (cl-ppcre:scan-to-strings *timestamp-re* ts-string)
+      (when match
+        (let ((type (if (string= (aref regs 0) "<") :active :inactive))
+              (date (format nil "~A-~A-~A" (aref regs 1) (aref regs 2) (aref regs 3)))
+              (time (aref regs 4))
+              (repeater (aref regs 5)))
+          (list :type type :date date :time time :repeater repeater))))))
+
+(defun parse-planning-line (line)
+  "Parse a planning line for SCHEDULED/DEADLINE/CLOSED timestamps.
+   Returns (values scheduled deadline closed) as timestamp plists or NIL."
+  (let ((scheduled nil) (deadline nil) (closed nil))
+    ;; Extract each keyword individually for robustness
+    (cl-ppcre:do-matches-as-strings
+        (m "(?:SCHEDULED|DEADLINE|CLOSED):\\s*[<\\[][^>\\]]+[>\\]]" line)
+      (cond
+        ((cl-ppcre:scan "^SCHEDULED:" m)
+         (let ((ts (cl-ppcre:scan-to-strings "[<\\[][^>\\]]+[>\\]]" m)))
+           (when ts (setf scheduled (parse-org-timestamp ts)))))
+        ((cl-ppcre:scan "^DEADLINE:" m)
+         (let ((ts (cl-ppcre:scan-to-strings "[<\\[][^>\\]]+[>\\]]" m)))
+           (when ts (setf deadline (parse-org-timestamp ts)))))
+        ((cl-ppcre:scan "^CLOSED:" m)
+         (let ((ts (cl-ppcre:scan-to-strings "[<\\[][^>\\]]+[>\\]]" m)))
+           (when ts (setf closed (parse-org-timestamp ts)))))))
+    (values scheduled deadline closed)))
 
 ;;; --- Tag parser ---
 
@@ -281,6 +327,14 @@
                              ((string= key "FILETAGS")
                               (setf filetags (parse-headline-tags val)))))
                          t))))
+               ;; Planning lines (SCHEDULED/DEADLINE/CLOSED after a headline)
+               ((and current-headline
+                     (cl-ppcre:scan "^\\s*(?:SCHEDULED|DEADLINE|CLOSED):" line))
+                (multiple-value-bind (sched dead clos)
+                    (parse-planning-line line)
+                  (when sched (setf (headline-scheduled current-headline) sched))
+                  (when dead (setf (headline-deadline current-headline) dead))
+                  (when clos (setf (headline-closed current-headline) clos))))
                ;; Headlines
                ((multiple-value-bind (match regs)
                     (cl-ppcre:scan-to-strings *headline-re* line)
@@ -323,14 +377,21 @@
 
 (defun headline-to-plist (h)
   "Convert an org-headline to a plist."
-  (list :level (headline-level h)
-        :todo (headline-todo h)
-        :priority (headline-priority h)
-        :title (headline-title h)
-        :tags (headline-tags h)
-        :properties (headline-properties h)
-        :start-line (headline-start-line h)
-        :end-line (headline-end-line h)))
+  (let ((result (list :level (headline-level h)
+                      :todo (headline-todo h)
+                      :priority (headline-priority h)
+                      :title (headline-title h)
+                      :tags (headline-tags h)
+                      :properties (headline-properties h)
+                      :start-line (headline-start-line h)
+                      :end-line (headline-end-line h))))
+    (when (headline-scheduled h)
+      (setf (getf result :scheduled) (headline-scheduled h)))
+    (when (headline-deadline h)
+      (setf (getf result :deadline) (headline-deadline h)))
+    (when (headline-closed h)
+      (setf (getf result :closed) (headline-closed h)))
+    result))
 
 (defun document-to-plist (doc &key include-raw)
   "Convert an org-document to a plist."
@@ -710,3 +771,238 @@
         :allowed-paths (orgmode-allowed-paths)
         :db-path (orgmode-db-path)
         :db-available (org-roam-db-available-p)))
+
+;;; ====================================================================
+;;; TODO management
+;;; ====================================================================
+
+(defun %om-active-todo-keywords ()
+  "Return active (non-done) TODO keywords from config or defaults."
+  (or (let ((val (crichton/config:config-section-get :orgmode :todo-keywords)))
+        (when (listp val) val))
+      '("TODO" "NEXT" "WAITING" "SOMEDAY")))
+
+(defun %om-done-keywords ()
+  "Return done TODO keywords from config or defaults."
+  (or (let ((val (crichton/config:config-section-get :orgmode :done-keywords)))
+        (when (listp val) val))
+      '("DONE" "CANCELLED")))
+
+(defun %om-todo-from-db (state priority tag limit include-done)
+  "Query org-roam DB for TODO headlines, filtered by allowed paths."
+  (when (org-roam-db-available-p)
+    (handler-case
+        (with-org-roam-db (db)
+          (let* ((conditions (list "n.todo IS NOT NULL"))
+                 (params nil)
+                 (param-idx 0))
+            (unless include-done
+              (let ((done (%om-done-keywords)))
+                (push (format nil "n.todo NOT IN (~{?~^, ~})"
+                              (make-list (length done) :initial-element nil))
+                      conditions)
+                (dolist (d done) (push d params))))
+            (when state
+              (push (format nil "n.todo = ?") conditions)
+              (push state params))
+            (when priority
+              (push (format nil "n.priority = ?") conditions)
+              (push priority params))
+            (let* ((where (format nil "~{~A~^ AND ~}" (nreverse conditions)))
+                   (sql (if tag
+                            (format nil "SELECT DISTINCT n.id, n.file, n.title, n.level, n.todo, n.priority ~
+                                         FROM nodes n JOIN tags t ON t.node_id = n.id ~
+                                         WHERE ~A AND t.tag = ? LIMIT ?" where)
+                            (format nil "SELECT n.id, n.file, n.title, n.level, n.todo, n.priority ~
+                                         FROM nodes n WHERE ~A LIMIT ?" where)))
+                   (stmt (sqlite:prepare-statement db sql))
+                   (bind-params (nreverse params)))
+              (unwind-protect
+                   (progn
+                     (loop for p in bind-params
+                           do (sqlite:bind-parameter stmt (incf param-idx) p))
+                     (when tag
+                       (sqlite:bind-parameter stmt (incf param-idx) tag))
+                     (sqlite:bind-parameter stmt (incf param-idx) limit)
+                     (%om-filter-by-allowed-paths
+                      (%om-sql-rows-to-plists
+                       stmt '("id" "file" "title" "level" "todo" "priority"))))
+                (sqlite:finalize-statement stmt)))))
+      (error (c)
+        (log:warn "Org-roam TODO query failed: ~A" c)
+        nil))))
+
+(defun %om-todo-from-files (file state priority include-done limit existing-count)
+  "Scan org files for TODO headlines. Returns list of plists."
+  (let ((results nil)
+        (remaining (- limit existing-count))
+        (active-kws (%om-active-todo-keywords))
+        (done-kws (%om-done-keywords))
+        (all-kws (append (%om-active-todo-keywords) (%om-done-keywords))))
+    (declare (ignore all-kws))
+    (flet ((scan-file (path)
+             (when (<= remaining 0) (return-from scan-file))
+             (let ((doc (handler-case (parse-org-file path)
+                          (error () nil))))
+               (when doc
+                 (dolist (h (doc-headlines doc))
+                   (when (<= remaining 0) (return))
+                   (let ((todo-kw (headline-todo h)))
+                     (when (and todo-kw
+                                (or include-done
+                                    (member todo-kw active-kws :test #'string-equal))
+                                (not (and (not include-done)
+                                          (member todo-kw done-kws :test #'string-equal)))
+                                (or (null state)
+                                    (string-equal state todo-kw))
+                                (or (null priority)
+                                    (string-equal priority (headline-priority h))))
+                       (push (list :file (doc-path doc)
+                                   :title (doc-title doc)
+                                   :headline (headline-title h)
+                                   :level (headline-level h)
+                                   :todo todo-kw
+                                   :priority (headline-priority h)
+                                   :tags (headline-tags h)
+                                   :scheduled (headline-scheduled h)
+                                   :deadline (headline-deadline h)
+                                   :line (headline-start-line h))
+                             results)
+                       (decf remaining))))))))
+      (if file
+          ;; Single file mode
+          (let ((canonical (%om-validate-path file)))
+            (scan-file canonical))
+          ;; Scan all allowed paths
+          (dolist (root (orgmode-allowed-paths))
+            (when (<= remaining 0) (return))
+            (let ((dir (%om-canonical-dir root)))
+              (when dir
+                (dolist (f (directory (merge-pathnames "*.org" dir)))
+                  (when (<= remaining 0) (return))
+                  (scan-file (namestring f))))))))
+    (nreverse results)))
+
+(defun orgmode-list-todos (&key state priority tag file include-done (limit 50))
+  "List TODO items across allowed paths.
+   STATE: filter by specific keyword (\"TODO\", \"NEXT\", etc.).
+   PRIORITY: filter by priority (\"A\", \"B\", \"C\").
+   TAG: filter by org-roam tag (DB mode only).
+   FILE: restrict to a single file path.
+   INCLUDE-DONE: include DONE/CANCELLED items.
+   Returns list of TODO item plists."
+  (%om-validate-enabled)
+  (let ((db-results (unless file
+                      (%om-todo-from-db state priority tag limit include-done))))
+    (if (and db-results (>= (length db-results) limit))
+        db-results
+        ;; Supplement with file scanning when DB results are insufficient
+        (let ((file-results (%om-todo-from-files
+                             file state priority include-done limit
+                             (length db-results))))
+          (if db-results
+              ;; Merge, dedup by file+headline
+              (let ((seen (make-hash-table :test #'equal)))
+                (dolist (r db-results)
+                  (setf (gethash (cons (getf r :file) (getf r :title)) seen) t))
+                (append db-results
+                        (remove-if (lambda (r)
+                                     (gethash (cons (getf r :file) (getf r :headline))
+                                              seen))
+                                   file-results)))
+              file-results)))))
+
+(defun orgmode-set-todo (path-or-id headline new-state)
+  "Change a headline's TODO state in an org file.
+   PATH-OR-ID: file path or org-roam node ID.
+   HEADLINE: title of the headline to modify.
+   NEW-STATE: new TODO keyword (e.g. \"DONE\") or NIL/empty string to clear.
+   Returns the canonical path of the modified file."
+  (%om-validate-enabled)
+  (let ((path (if (and (= (length path-or-id) 36)
+                       (cl-ppcre:scan "^[0-9a-f-]+$" path-or-id))
+                  (let ((node (org-roam-node-by-id path-or-id)))
+                    (unless node
+                      (error "Node ~A not found in org-roam database" path-or-id))
+                    (getf node :file))
+                  path-or-id)))
+    (let ((canonical (%om-validate-path path)))
+      (bt:with-lock-held (*orgmode-write-lock*)
+        (let* ((text (uiop:read-file-string canonical))
+               (lines (cl-ppcre:split "\\n" text))
+               (lines-vec (coerce lines 'vector))
+               (doc (parse-org-file canonical))
+               (target (find headline (doc-headlines doc)
+                             :key #'headline-title
+                             :test #'string-equal)))
+          (unless target
+            (error "Headline ~S not found in ~A" headline canonical))
+          (let* ((line-idx (headline-start-line target))
+                 (old-line (aref lines-vec line-idx))
+                 (old-todo (headline-todo target))
+                 (new-state (if (and new-state (plusp (length new-state)))
+                                new-state
+                                nil))
+                 (new-line (cond
+                             ;; Replace existing TODO keyword
+                             ((and old-todo new-state)
+                              (cl-ppcre:regex-replace
+                               (format nil "\\b~A\\b" (cl-ppcre:quote-meta-chars old-todo))
+                               old-line new-state))
+                             ;; Add TODO keyword (none existed)
+                             ((and (null old-todo) new-state)
+                              (cl-ppcre:regex-replace
+                               "^(\\*+\\s+)" old-line
+                               (format nil "\\1~A " new-state)))
+                             ;; Remove TODO keyword
+                             ((and old-todo (null new-state))
+                              (cl-ppcre:regex-replace
+                               (format nil "\\b~A\\s+" (cl-ppcre:quote-meta-chars old-todo))
+                               old-line ""))
+                             (t old-line)))
+                 (result-lines (coerce lines-vec 'list)))
+            ;; Replace the headline line
+            (setf (nth line-idx result-lines) new-line)
+            ;; Handle CLOSED timestamp for done transitions
+            (let ((done-kws (%om-done-keywords)))
+              (when (and new-state (member new-state done-kws :test #'string-equal))
+                ;; Add CLOSED timestamp if transitioning to a done state
+                (unless (headline-closed target)
+                  (let ((closed-line (format nil "    CLOSED: [~A]"
+                                            (%om-format-timestamp))))
+                    ;; Insert after headline (and after property drawer if present)
+                    (let ((insert-at (1+ line-idx)))
+                      ;; Skip property drawer if present
+                      (when (and (< insert-at (length result-lines))
+                                 (cl-ppcre:scan *property-drawer-start-re*
+                                                (nth insert-at result-lines)))
+                        (loop for j from insert-at below (length result-lines)
+                              when (cl-ppcre:scan *property-drawer-end-re*
+                                                  (nth j result-lines))
+                              do (setf insert-at (1+ j)) (return)))
+                      ;; Skip existing planning line if present
+                      (when (and (< insert-at (length result-lines))
+                                 (cl-ppcre:scan "^\\s*(?:SCHEDULED|DEADLINE):" (nth insert-at result-lines)))
+                        ;; Prepend CLOSED to existing planning line
+                        (setf (nth insert-at result-lines)
+                              (format nil "~A ~A" closed-line (string-left-trim " " (nth insert-at result-lines))))
+                        (setf closed-line nil)))
+                      (when closed-line
+                        (setf result-lines
+                              (append (subseq result-lines 0 insert-at)
+                                      (list closed-line)
+                                      (subseq result-lines insert-at)))))))))
+            ;; Write back
+            (with-open-file (s canonical :direction :output :if-exists :supersede)
+              (format s "~{~A~^~%~}" result-lines)))))
+      (log:info "Set TODO state to ~A for ~S in ~A" new-state headline canonical)
+      canonical)))
+
+(defun %om-format-timestamp ()
+  "Format current time as an org-mode inactive timestamp: YYYY-MM-DD Day HH:MM."
+  (multiple-value-bind (sec min hr day mon yr dow)
+      (get-decoded-time)
+    (declare (ignore sec))
+    (let ((day-name (nth dow '("Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat"))))
+      (format nil "~4,'0D-~2,'0D-~2,'0D ~A ~2,'0D:~2,'0D"
+              yr mon day day-name hr min))))

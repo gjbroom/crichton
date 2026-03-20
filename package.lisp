@@ -298,7 +298,9 @@
            #:orgmode-backlinks
            #:orgmode-create-note
            #:orgmode-append
-           #:orgmode-list-files))
+           #:orgmode-list-files
+           #:orgmode-list-todos
+           #:orgmode-set-todo))
 
 (defpackage #:crichton/llm
   (:use #:cl)
