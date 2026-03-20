@@ -83,9 +83,6 @@ sent by the daemon."
 (defvar crichton--last-response nil
   "Text of the most recent complete assistant response.")
 
-(defvar-local crichton--chat-input-start nil
-  "Marker for the start of the input area in the chat buffer.")
-
 ;;;; NDJSON protocol
 
 (defun crichton--next-id ()
@@ -245,88 +242,62 @@ Returns the correlation ID."
          (message "Crichton status: %s" (alist-get 'result resp))
        (message "Crichton: status request failed")))))
 
-;;;; Chat buffer
+;;;; Chat buffer (comint-based)
+
+(require 'comint)
 
 (defvar crichton-chat-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "RET") #'crichton-chat-send)
     (define-key map (kbd "C-c C-k") #'crichton-disconnect)
+    (define-key map (kbd "C-c C-o") #'crichton-last-response-to-buffer)
     map)
   "Keymap for `crichton-chat-mode'.
-Parent keymap is set by `define-derived-mode' from `text-mode'.")
+Inherits from `comint-mode-map' via `define-derived-mode'.")
 
-(define-derived-mode crichton-chat-mode text-mode "Crichton Chat"
+(define-derived-mode crichton-chat-mode comint-mode "Crichton Chat"
   "Major mode for chatting with the Crichton AI daemon.
-The buffer has a read-only history area and a writable input area
-below the prompt."
-  ;; Force correct parent in case of stale keymap from prior mode derivation
-  (set-keymap-parent crichton-chat-mode-map text-mode-map)
+Built on `comint-mode' — use \\[comint-send-input] to send,
+\\[comint-previous-input] / \\[comint-next-input] for history."
+  (setq comint-prompt-regexp "^❯ "
+        comint-input-sender #'crichton--input-sender
+        comint-prompt-read-only t
+        comint-process-echoes nil)
+  (setq-local comint-input-ring-size 200)
   (setq-local header-line-format
               '(:eval (if (crichton-connected-p) "Connected" "Disconnected"))))
 
 (defun crichton--chat-buffer ()
   "Return the chat buffer, creating it if needed."
   (let ((buf (get-buffer-create "*crichton-chat*")))
-    (with-current-buffer buf
-      (unless (eq major-mode 'crichton-chat-mode)
+    (unless (comint-check-proc buf)
+      (with-current-buffer buf
         (crichton-chat-mode)
-        (let ((inhibit-read-only t))
-          (insert (propertize "— Crichton Chat —\n\n"
-                              'face 'bold
-                              'read-only t
-                              'rear-nonsticky t)))
-        (setq crichton--chat-input-start (point-marker))
-        (set-marker-insertion-type crichton--chat-input-start nil)
-        (insert (propertize "❯ " 'face 'minibuffer-prompt
-                            'read-only t 'rear-nonsticky t))))
+        ;; comint needs a process associated with the buffer.
+        ;; Use a dummy `cat' — we never write to its stdin since
+        ;; comint-input-sender routes input to the daemon instead.
+        (let ((proc (start-process "crichton-chat" buf "cat")))
+          (set-process-query-on-exit-flag proc nil)
+          (set-process-filter proc #'comint-output-filter))
+        (crichton--output "— Crichton Chat —\n")
+        (crichton--output "\n❯ ")))
     buf))
 
-(defun crichton--delete-prompt ()
-  "Delete the input prompt and any user input after the marker."
-  (let ((inhibit-read-only t))
-    (delete-region (marker-position crichton--chat-input-start) (point-max))))
+(defun crichton--output (text)
+  "Insert TEXT into the chat buffer as process output."
+  (let ((proc (get-buffer-process (crichton--chat-buffer))))
+    (when proc
+      (comint-output-filter proc text))))
 
-(defun crichton--insert-prompt ()
-  "Insert the input prompt at point and update the marker."
-  (set-marker crichton--chat-input-start (point))
-  (insert (propertize "❯ " 'face 'minibuffer-prompt
-                      'read-only t 'rear-nonsticky t)))
-
-(defun crichton--chat-insert (role text)
-  "Insert a chat message with ROLE and TEXT into the chat buffer."
-  (let ((buf (crichton--chat-buffer)))
-    (with-current-buffer buf
-      (let ((inhibit-read-only t)
-            (at-end (>= (point) (marker-position crichton--chat-input-start))))
-        (save-excursion
-          ;; Remove prompt and any pending input
-          (let ((saved-input (buffer-substring-no-properties
-                              (crichton--input-start) (point-max))))
-            (crichton--delete-prompt)
-            (goto-char (marker-position crichton--chat-input-start))
-            (let ((face (pcase role
-                          ("user" 'font-lock-keyword-face)
-                          ("assistant" 'font-lock-string-face)
-                          ("error" 'error)
-                          ("notification" 'font-lock-comment-face)
-                          (_ 'default)))
-                  (prefix (pcase role
-                            ("user" "You")
-                            ("assistant" "Crichton")
-                            ("error" "Error")
-                            ("notification" "Notice")
-                            (_ role))))
-              (insert (propertize (format "%s: " prefix)
-                                  'face (list face 'bold)
-                                  'read-only t 'rear-nonsticky t)
-                      (propertize (concat text "\n\n")
-                                  'read-only t 'rear-nonsticky t)))
-            (crichton--insert-prompt)
-            ;; Restore any pending input
-            (when (> (length saved-input) 0)
-              (insert saved-input))))
-        (when at-end
-          (goto-char (point-max)))))))
+(defun crichton--input-sender (_proc input)
+  "Send INPUT to the Crichton daemon.  Called by comint on \\[comint-send-input]."
+  (if (not (crichton-connected-p))
+      (crichton--output "\n[Not connected — M-x crichton-connect]\n\n❯ ")
+    (crichton--output "\n")
+    (crichton--send-request "chat"
+                            'text input
+                            'session_id crichton--session-id
+                            'stream t)
+    (setq crichton--streaming-buffer "*crichton-chat*")))
 
 ;;;###autoload
 (defun crichton-chat ()
@@ -336,101 +307,39 @@ below the prompt."
     (crichton-connect))
   (pop-to-buffer (crichton--chat-buffer)))
 
-(defun crichton--input-start ()
-  "Return the position where user input begins (after the prompt)."
-  (let ((m (marker-position crichton--chat-input-start)))
-    (or (next-single-property-change m 'read-only) (point-max))))
-
-(defun crichton-chat-send ()
-  "Send the current input line to the daemon."
-  (interactive)
-  (unless (crichton-connected-p)
-    (user-error "Not connected — run M-x crichton-connect"))
-  (let ((text (string-trim (buffer-substring-no-properties
-                            (crichton--input-start)
-                            (point-max)))))
-    (when (string-empty-p text)
-      (user-error "Nothing to send"))
-    ;; Clear input area
-    (let ((inhibit-read-only t))
-      (crichton--delete-prompt))
-    ;; Show user message
-    (crichton--chat-insert "user" text)
-    ;; Send to daemon with streaming
-    (let ((id (crichton--send-request "chat"
-                                      'text text
-                                      'session_id crichton--session-id
-                                      'stream t)))
-      (setq crichton--streaming-buffer "*crichton-chat*")
-      ;; Insert streaming placeholder (between history and prompt)
-      (with-current-buffer (crichton--chat-buffer)
-        (let ((inhibit-read-only t))
-          (save-excursion
-            (crichton--delete-prompt)
-            (goto-char (marker-position crichton--chat-input-start))
-            (insert (propertize "Crichton: " 'face '(font-lock-string-face bold)
-                                'read-only t 'rear-nonsticky t)
-                    (propertize "..." 'face 'font-lock-comment-face
-                                'crichton-streaming-id id)
-                    (propertize "\n\n" 'read-only t 'rear-nonsticky t))
-            (crichton--insert-prompt))))))
-  (goto-char (point-max)))
-
 ;;;; Streaming response handlers
 
 (defun crichton--handle-chat-delta (msg)
   "Handle an incremental chat_delta push message."
-  (let ((text (alist-get 'text msg))
-        (id (alist-get 'id msg)))
-    (when (and text crichton--streaming-buffer)
-      (let ((buf (get-buffer crichton--streaming-buffer)))
-        (when buf
-          (with-current-buffer buf
-            (let ((inhibit-read-only t))
-              (save-excursion
-                ;; Find the streaming placeholder and replace/extend
-                (goto-char (point-min))
-                (when (text-property-search-forward
-                       'crichton-streaming-id id #'equal)
-                  (let ((prop-end (point))
-                        (prop-start (previous-single-property-change
-                                     (point) 'crichton-streaming-id)))
-                    (when prop-start
-                      (delete-region prop-start prop-end)
-                      (goto-char prop-start)
-                      (insert (propertize text 'crichton-streaming-id id)))))))))))))
+  (let ((text (alist-get 'text msg)))
+    (when (and text crichton--streaming-buffer
+               (get-buffer crichton--streaming-buffer))
+      (crichton--output text))))
 
 (defun crichton--handle-chat-done (msg)
   "Handle a chat_done push message — finalize streaming response."
   (let ((text (alist-get 'text msg))
-        (id (alist-get 'id msg))
         (session (alist-get 'session_id msg)))
     (when session
       (setq crichton--session-id session))
     (when text
       (setq crichton--last-response text))
-    (when (and text crichton--streaming-buffer)
-      (let ((buf (get-buffer crichton--streaming-buffer)))
-        (when buf
-          (with-current-buffer buf
-            (let ((inhibit-read-only t))
-              (save-excursion
-                (goto-char (point-min))
-                (when (text-property-search-forward
-                       'crichton-streaming-id id #'equal)
-                  (let ((prop-end (point))
-                        (prop-start (previous-single-property-change
-                                     (point) 'crichton-streaming-id)))
-                    (when prop-start
-                      (delete-region prop-start prop-end)
-                      (goto-char prop-start)
-                      ;; Insert final text without the streaming property
-                      (insert text))))))))))
+    (when crichton--streaming-buffer
+      (crichton--output "\n\n❯ "))
     (setq crichton--streaming-buffer nil)))
 
-(defun crichton--handle-response (_msg)
-  "Handle a generic response. Currently a no-op; callbacks handle responses."
-  nil)
+(defun crichton--handle-response (msg)
+  "Handle a generic ok/error response (non-streaming fallback)."
+  (when (and (not crichton--streaming-buffer)
+             (eq (alist-get 'ok msg) t))
+    (let* ((result (alist-get 'result msg))
+           (text (and (listp result) (alist-get 'text result)))
+           (session (and (listp result) (alist-get 'session_id result))))
+      (when session
+        (setq crichton--session-id session))
+      (when text
+        (setq crichton--last-response text)
+        (crichton--output (format "\n%s\n\n❯ " text))))))
 
 ;;;; Notification handler
 
@@ -441,11 +350,10 @@ below the prompt."
         (source (alist-get 'source msg)))
     (message "Crichton [%s/%s]: %s" (or source "?") (or kind "?") text)
     (when (get-buffer "*crichton-chat*")
-      (crichton--chat-insert "notification"
-                             (format "[%s/%s] %s"
-                                     (or source "?")
-                                     (or kind "?")
-                                     text)))))
+      (crichton--output (format "\n[%s/%s] %s\n\n❯ "
+                                (or source "?")
+                                (or kind "?")
+                                text)))))
 
 ;;;; Emacs invoke handler (daemon → Emacs RPC)
 
@@ -475,25 +383,23 @@ then send the result back."
 
 ;;;; Convenience commands
 
-(defun crichton-send (text)
-  "Send TEXT to the Crichton daemon and display the response in the chat buffer.
-When called interactively, prompts for input."
-  (interactive "sMessage: ")
-  (unless (crichton-connected-p)
-    (crichton-connect))
-  (crichton--chat-insert "user" text)
-  (crichton--send-request "chat"
-                          'text text
-                          'session_id crichton--session-id
-                          'stream t)
-  (setq crichton--streaming-buffer "*crichton-chat*")
-  (pop-to-buffer (crichton--chat-buffer)))
-
 (defun crichton-new-session ()
   "Start a new chat session."
   (interactive)
   (setq crichton--session-id nil)
   (message "Crichton: new session started"))
+
+(defun crichton-last-response-to-buffer ()
+  "Pop the last assistant response into a new org-mode buffer."
+  (interactive)
+  (unless crichton--last-response
+    (user-error "No response to display"))
+  (let ((buf (generate-new-buffer "*crichton-result*")))
+    (with-current-buffer buf
+      (org-mode)
+      (insert crichton--last-response)
+      (goto-char (point-min)))
+    (pop-to-buffer buf)))
 
 (provide 'crichton)
 ;;; crichton.el ends here
