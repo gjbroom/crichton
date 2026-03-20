@@ -537,21 +537,15 @@ todo_keywords = ["TODO", "NEXT", "WAITING", "SOMEDAY"]  # Recognized active stat
 done_keywords = ["DONE", "CANCELLED"]                    # Recognized done states
 #+end_src
 
-* Open Questions
+* Resolved Questions
 
-1. *Agenda integration scope*: Should the daemon attempt to replicate
-   any of org-agenda's scheduling logic (repeaters, habits) locally,
-   or should it be Emacs-only?  /Recommendation: Emacs-only./
+1. *Agenda*: Emacs-only.  Don't reinvent what Emacs already does.
+   The =agenda= action requires the Emacs bridge; no local fallback.
 
-2. *org-roam v2 schema*: The current SQLite queries target org-roam v2's
-   schema (=nodes=, =links=, =tags= tables).  Should we detect and
-   support v1?  /Recommendation: v2 only, v1 is unmaintained./
+2. *org-roam schema*: v2 only.  No v1 support.
 
-3. *Concurrent Emacs sessions*: If multiple Emacs frames are connected,
-   which one receives =emacs_invoke=?  /Recommendation: First
-   connected wins; add a =primary= flag to =hello=./
+3. *Concurrent Emacs sessions*: First connected wins; add a =primary=
+   flag to =hello= so a later connection can claim primary.
 
-4. *Capture non-interactive mode*: Should =capture= always use
-   =:immediate-finish= to avoid blocking the Emacs UI?  Or should it
-   open an interactive capture buffer and wait?  /Recommendation:
-   Configurable per-template, default to immediate-finish./
+4. *Capture non-interactive mode*: Configurable per-template, default
+   to =:immediate-finish=.
