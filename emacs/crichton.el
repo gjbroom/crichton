@@ -256,6 +256,8 @@ Parent keymap is set by `define-derived-mode' from `text-mode'.")
   "Major mode for chatting with the Crichton AI daemon.
 The buffer has a read-only history area and a writable input area
 below the prompt."
+  ;; Force correct parent in case of stale keymap from prior mode derivation
+  (set-keymap-parent crichton-chat-mode-map text-mode-map)
   (setq-local header-line-format
               '(:eval (if (crichton-connected-p) "Connected" "Disconnected"))))
 
