@@ -80,6 +80,9 @@ sent by the daemon."
 (defvar crichton--streaming-buffer nil
   "Buffer name currently receiving streaming chat deltas.")
 
+(defvar crichton--last-response nil
+  "Text of the most recent complete assistant response.")
+
 (defvar-local crichton--chat-input-start nil
   "Marker for the start of the input area in the chat buffer.")
 
@@ -278,6 +281,17 @@ below the prompt."
                             'read-only t 'rear-nonsticky t))))
     buf))
 
+(defun crichton--delete-prompt ()
+  "Delete the input prompt and any user input after the marker."
+  (let ((inhibit-read-only t))
+    (delete-region (marker-position crichton--chat-input-start) (point-max))))
+
+(defun crichton--insert-prompt ()
+  "Insert the input prompt at point and update the marker."
+  (set-marker crichton--chat-input-start (point))
+  (insert (propertize "❯ " 'face 'minibuffer-prompt
+                      'read-only t 'rear-nonsticky t)))
+
 (defun crichton--chat-insert (role text)
   "Insert a chat message with ROLE and TEXT into the chat buffer."
   (let ((buf (crichton--chat-buffer)))
@@ -285,28 +299,32 @@ below the prompt."
       (let ((inhibit-read-only t)
             (at-end (>= (point) (marker-position crichton--chat-input-start))))
         (save-excursion
-          (goto-char (marker-position crichton--chat-input-start))
-          (let ((face (pcase role
-                        ("user" 'font-lock-keyword-face)
-                        ("assistant" 'font-lock-string-face)
-                        ("error" 'error)
-                        ("notification" 'font-lock-comment-face)
-                        (_ 'default)))
-                (prefix (pcase role
-                          ("user" "You")
-                          ("assistant" "Crichton")
-                          ("error" "Error")
-                          ("notification" "Notice")
-                          (_ role))))
-            (insert (propertize (format "%s: " prefix)
-                                'face (list face 'bold)
-                                'read-only t 'rear-nonsticky t)
-                    (propertize (concat text "\n\n")
-                                'read-only t 'rear-nonsticky t))
-            (set-marker crichton--chat-input-start (point))
-            ;; Re-insert the prompt
-            (insert (propertize "❯ " 'face 'minibuffer-prompt
-                                'read-only t 'rear-nonsticky t))))
+          ;; Remove prompt and any pending input
+          (let ((saved-input (buffer-substring-no-properties
+                              (crichton--input-start) (point-max))))
+            (crichton--delete-prompt)
+            (goto-char (marker-position crichton--chat-input-start))
+            (let ((face (pcase role
+                          ("user" 'font-lock-keyword-face)
+                          ("assistant" 'font-lock-string-face)
+                          ("error" 'error)
+                          ("notification" 'font-lock-comment-face)
+                          (_ 'default)))
+                  (prefix (pcase role
+                            ("user" "You")
+                            ("assistant" "Crichton")
+                            ("error" "Error")
+                            ("notification" "Notice")
+                            (_ role))))
+              (insert (propertize (format "%s: " prefix)
+                                  'face (list face 'bold)
+                                  'read-only t 'rear-nonsticky t)
+                      (propertize (concat text "\n\n")
+                                  'read-only t 'rear-nonsticky t)))
+            (crichton--insert-prompt)
+            ;; Restore any pending input
+            (when (> (length saved-input) 0)
+              (insert saved-input))))
         (when at-end
           (goto-char (point-max)))))))
 
@@ -333,9 +351,9 @@ below the prompt."
                             (point-max)))))
     (when (string-empty-p text)
       (user-error "Nothing to send"))
-    ;; Clear input area (keep the prompt)
+    ;; Clear input area
     (let ((inhibit-read-only t))
-      (delete-region (crichton--input-start) (point-max)))
+      (crichton--delete-prompt))
     ;; Show user message
     (crichton--chat-insert "user" text)
     ;; Send to daemon with streaming
@@ -344,19 +362,18 @@ below the prompt."
                                       'session_id crichton--session-id
                                       'stream t)))
       (setq crichton--streaming-buffer "*crichton-chat*")
-      ;; Insert placeholder for streaming response
+      ;; Insert streaming placeholder (between history and prompt)
       (with-current-buffer (crichton--chat-buffer)
         (let ((inhibit-read-only t))
           (save-excursion
+            (crichton--delete-prompt)
             (goto-char (marker-position crichton--chat-input-start))
             (insert (propertize "Crichton: " 'face '(font-lock-string-face bold)
                                 'read-only t 'rear-nonsticky t)
                     (propertize "..." 'face 'font-lock-comment-face
                                 'crichton-streaming-id id)
                     (propertize "\n\n" 'read-only t 'rear-nonsticky t))
-            (set-marker crichton--chat-input-start (point))
-            (insert (propertize "❯ " 'face 'minibuffer-prompt
-                                'read-only t 'rear-nonsticky t)))))))
+            (crichton--insert-prompt))))))
   (goto-char (point-max)))
 
 ;;;; Streaming response handlers
@@ -390,6 +407,8 @@ below the prompt."
         (session (alist-get 'session_id msg)))
     (when session
       (setq crichton--session-id session))
+    (when text
+      (setq crichton--last-response text))
     (when (and text crichton--streaming-buffer)
       (let ((buf (get-buffer crichton--streaming-buffer)))
         (when buf
