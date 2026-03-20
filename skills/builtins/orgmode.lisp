@@ -130,8 +130,32 @@
    (filetags :initarg :filetags :initform nil :accessor doc-filetags)
    (file-id :initarg :file-id :initform nil :accessor doc-file-id)
    (headlines :initarg :headlines :initform nil :accessor doc-headlines)
+   (tables :initarg :tables :initform nil :accessor doc-tables)
+   (src-blocks :initarg :src-blocks :initform nil :accessor doc-src-blocks)
    (links :initarg :links :initform nil :accessor doc-links)
    (raw-text :initarg :raw-text :initform nil :accessor doc-raw-text)))
+
+(defclass org-table ()
+  ((header :initarg :header :initform nil :accessor table-header
+           :documentation "List of column name strings, or NIL if no hline separator.")
+   (rows :initarg :rows :initform nil :accessor table-rows
+         :documentation "List of row lists (each row is a list of cell strings).")
+   (start-line :initarg :start-line :initform 0 :accessor table-start-line)
+   (end-line :initarg :end-line :initform 0 :accessor table-end-line)
+   (parent-headline :initarg :parent-headline :initform nil
+                    :accessor table-parent-headline
+                    :documentation "Title of the containing headline, or NIL.")))
+
+(defclass org-src-block ()
+  ((language :initarg :language :initform "" :accessor src-block-language)
+   (body :initarg :body :initform "" :accessor src-block-body)
+   (start-line :initarg :start-line :initform 0 :accessor src-block-start-line)
+   (end-line :initarg :end-line :initform 0 :accessor src-block-end-line)
+   (name :initarg :name :initform nil :accessor src-block-name
+         :documentation "#+NAME: value if present before the block.")
+   (parent-headline :initarg :parent-headline :initform nil
+                    :accessor src-block-parent-headline
+                    :documentation "Title of the containing headline, or NIL.")))
 
 ;;; --- Regex patterns ---
 
@@ -161,10 +185,19 @@
                            :case-insensitive-mode t))
 
 (defparameter *src-block-begin-re*
-  (cl-ppcre:create-scanner "^\\s*#\\+BEGIN_SRC\\s*(\\S*)" :case-insensitive-mode t))
+  (cl-ppcre:create-scanner "^\\s*#\\+BEGIN_SRC\\s*(.*?)\\s*$" :case-insensitive-mode t))
 
 (defparameter *src-block-end-re*
   (cl-ppcre:create-scanner "^\\s*#\\+END_SRC" :case-insensitive-mode t))
+
+(defparameter *name-keyword-re*
+  (cl-ppcre:create-scanner "^\\s*#\\+NAME:\\s*(.*?)\\s*$" :case-insensitive-mode t))
+
+(defparameter *table-row-re*
+  (cl-ppcre:create-scanner "^\\s*\\|(.+)\\|\\s*$"))
+
+(defparameter *table-hline-re*
+  (cl-ppcre:create-scanner "^\\s*\\|[-+]+\\|\\s*$"))
 
 (defparameter *timestamp-re*
   (cl-ppcre:create-scanner
@@ -235,6 +268,63 @@
           do (incf i))
     (values (nreverse props) i)))
 
+;;; --- Table parser ---
+
+(defun parse-table-row-cells (line)
+  "Parse a table row line into a list of trimmed cell strings.
+   Input: '| col1 | col2 | col3 |'  Output: (\"col1\" \"col2\" \"col3\")"
+  (multiple-value-bind (match regs)
+      (cl-ppcre:scan-to-strings *table-row-re* line)
+    (when match
+      (mapcar (lambda (s) (string-trim " " s))
+              (cl-ppcre:split "\\|" (aref regs 0))))))
+
+(defun parse-table-at (lines start)
+  "Parse a table starting at line index START in the LINES vector.
+   Returns (values org-table end-index)."
+  (let ((rows-before-hline nil)
+        (rows-after-hline nil)
+        (found-hline nil)
+        (i start))
+    (loop while (< i (length lines))
+          for line = (aref lines i)
+          do (cond
+               ((cl-ppcre:scan *table-hline-re* line)
+                (setf found-hline t))
+               ((cl-ppcre:scan *table-row-re* line)
+                (let ((cells (parse-table-row-cells line)))
+                  (if found-hline
+                      (push cells rows-after-hline)
+                      (push cells rows-before-hline))))
+               (t (return)))
+          do (incf i))
+    (let ((header (when found-hline (nreverse rows-before-hline)))
+          (data-rows (if found-hline
+                        (nreverse rows-after-hline)
+                        (nreverse rows-before-hline))))
+      ;; When header is a single row, flatten to just that row
+      (values (make-instance 'org-table
+                :header (when (and header (= (length header) 1))
+                          (first header))
+                :rows data-rows
+                :start-line start
+                :end-line (1- i))
+              (1- i)))))
+
+;;; --- Source block parser ---
+
+(defun parse-src-block-header (header-text)
+  "Parse the text after #+BEGIN_SRC into (values language remaining-text).
+   E.g. 'lisp :var x=5' => (values \"lisp\" \":var x=5\")"
+  (let ((trimmed (string-trim " " header-text)))
+    (if (zerop (length trimmed))
+        (values "" "")
+        (let ((space-pos (position #\Space trimmed)))
+          (if space-pos
+              (values (subseq trimmed 0 space-pos)
+                      (string-trim " " (subseq trimmed space-pos)))
+              (values trimmed ""))))))
+
 ;;; --- Preamble-only parse (fast) ---
 
 (defun parse-org-preamble (path)
@@ -289,9 +379,10 @@
   (let* ((text (uiop:read-file-string path))
          (lines (coerce (cl-ppcre:split "\\n" text) 'vector))
          (title nil) (file-id nil) (filetags nil)
-         (headlines nil) (links nil)
+         (headlines nil) (links nil) (tables nil) (src-blocks nil)
          (current-headline nil)
-         (in-preamble-drawer nil))
+         (in-preamble-drawer nil)
+         (pending-name nil))
     ;; Scan all lines
     (loop for i from 0 below (length lines)
           for line = (aref lines i)
@@ -315,6 +406,50 @@
                        (when (and match (string-equal "ID" (aref regs 0)))
                          (setf file-id (aref regs 1))
                          t))))
+               ;; #+NAME: keyword (captured for next src block)
+               ((multiple-value-bind (match regs)
+                    (cl-ppcre:scan-to-strings *name-keyword-re* line)
+                  (when match
+                    (setf pending-name (aref regs 0))
+                    t)))
+               ;; Source blocks
+               ((multiple-value-bind (match regs)
+                    (cl-ppcre:scan-to-strings *src-block-begin-re* line)
+                  (when match
+                    (let ((header-text (aref regs 0)))
+                      (multiple-value-bind (language _rest)
+                          (parse-src-block-header header-text)
+                        (declare (ignore _rest))
+                        (let ((body-lines nil)
+                              (start-line i)
+                              (j (1+ i)))
+                          (loop while (< j (length lines))
+                                for bline = (aref lines j)
+                                do (if (cl-ppcre:scan *src-block-end-re* bline)
+                                       (return)
+                                       (push bline body-lines))
+                                do (incf j))
+                          (push (make-instance 'org-src-block
+                                  :language language
+                                  :body (format nil "~{~A~^~%~}" (nreverse body-lines))
+                                  :start-line start-line
+                                  :end-line j
+                                  :name pending-name
+                                  :parent-headline (when current-headline
+                                                     (headline-title current-headline)))
+                                src-blocks)
+                          (setf pending-name nil)
+                          (setf i j))))
+                    t)))
+               ;; Tables
+               ((cl-ppcre:scan *table-row-re* line)
+                (multiple-value-bind (tbl end-idx)
+                    (parse-table-at lines i)
+                  (setf (table-parent-headline tbl)
+                        (when current-headline
+                          (headline-title current-headline)))
+                  (push tbl tables)
+                  (setf i end-idx)))
                ;; File keywords
                ((and (null current-headline)
                      (multiple-value-bind (match regs)
@@ -351,6 +486,7 @@
                             :title (aref regs 3)
                             :tags (parse-headline-tags (aref regs 4))
                             :start-line i))
+                    (setf pending-name nil)
                     t)))))
     ;; Close last headline
     (when current-headline
@@ -370,6 +506,8 @@
       :file-id file-id
       :filetags filetags
       :headlines (nreverse headlines)
+      :tables (nreverse tables)
+      :src-blocks (nreverse src-blocks)
       :links (nreverse links)
       :raw-text text)))
 
@@ -393,6 +531,24 @@
       (setf (getf result :closed) (headline-closed h)))
     result))
 
+(defun table-to-plist (tbl)
+  "Convert an org-table to a plist."
+  (list :header (table-header tbl)
+        :rows (table-rows tbl)
+        :row-count (length (table-rows tbl))
+        :start-line (table-start-line tbl)
+        :end-line (table-end-line tbl)
+        :parent-headline (table-parent-headline tbl)))
+
+(defun src-block-to-plist (blk)
+  "Convert an org-src-block to a plist."
+  (list :language (src-block-language blk)
+        :name (src-block-name blk)
+        :body (src-block-body blk)
+        :start-line (src-block-start-line blk)
+        :end-line (src-block-end-line blk)
+        :parent-headline (src-block-parent-headline blk)))
+
 (defun document-to-plist (doc &key include-raw)
   "Convert an org-document to a plist."
   (let ((result (list :path (doc-path doc)
@@ -402,6 +558,12 @@
                       :headline-count (length (doc-headlines doc))
                       :headlines (mapcar #'headline-to-plist (doc-headlines doc))
                       :links (doc-links doc))))
+    (when (doc-tables doc)
+      (setf (getf result :tables)
+            (mapcar #'table-to-plist (doc-tables doc))))
+    (when (doc-src-blocks doc)
+      (setf (getf result :src-blocks)
+            (mapcar #'src-block-to-plist (doc-src-blocks doc))))
     (when include-raw
       (setf (getf result :raw-text) (doc-raw-text doc)))
     result))
@@ -581,6 +743,59 @@
     (format s "#+TITLE: ~A~%~%" title)))
 
 ;;; ====================================================================
+;;; Recursive file scanning
+;;; ====================================================================
+
+(defun %om-recursive-scan-p ()
+  "Return T if recursive scanning is enabled (default: T)."
+  (let ((val (crichton/config:config-section-get :orgmode :recursive-scan)))
+    (cond
+      ((null val) t)
+      ((eq val t) t)
+      ((and (stringp val) (string-equal val "true")) t)
+      ((and (stringp val) (string-equal val "false")) nil)
+      (t t))))
+
+(defun %om-max-scan-depth ()
+  "Return max directory depth for recursive scan (default: 5)."
+  (let ((val (crichton/config:config-section-get :orgmode :max-scan-depth)))
+    (cond
+      ((integerp val) val)
+      ((stringp val) (handler-case (parse-integer val) (error () 5)))
+      (t 5))))
+
+(defun org-files-under (root &key (max-depth 5) (limit 1000))
+  "Recursively collect .org files under ROOT, up to MAX-DEPTH levels.
+   Returns a list of pathname objects, capped at LIMIT."
+  (let ((results nil)
+        (count 0))
+    (labels ((scan-dir (dir depth)
+               (when (or (> depth max-depth) (>= count limit))
+                 (return-from scan-dir))
+               (handler-case
+                   (progn
+                     (dolist (file (directory (merge-pathnames "*.org" dir)))
+                       (when (>= count limit) (return))
+                       (push file results)
+                       (incf count))
+                     (dolist (subdir (uiop:subdirectories dir))
+                       (when (>= count limit) (return))
+                       (scan-dir subdir (1+ depth))))
+                 (error () nil))))
+      (let ((canonical (%om-canonical-dir root)))
+        (when canonical
+          (scan-dir (parse-namestring canonical) 0))))
+    (nreverse results)))
+
+(defun %om-collect-org-files (root)
+  "Collect .org files under ROOT, respecting recursive_scan config."
+  (if (%om-recursive-scan-p)
+      (org-files-under root :max-depth (%om-max-scan-depth))
+      (directory (merge-pathnames "*.org"
+                                 (parse-namestring
+                                  (%om-ensure-trailing-slash root))))))
+
+;;; ====================================================================
 ;;; Public API
 ;;; ====================================================================
 
@@ -628,19 +843,17 @@
         ;; Scan allowed paths
         (dolist (root (orgmode-allowed-paths))
           (when (<= remaining 0) (return))
-          (let ((dir (%om-canonical-dir root)))
-            (when dir
-              (dolist (file (directory (merge-pathnames "*.org" dir)))
-                (when (<= remaining 0) (return))
-                (let ((fpath (namestring file)))
-                  (unless (gethash fpath seen-files)
-                    (let ((preamble (parse-org-preamble file)))
-                      (when (or (search query (getf preamble :title)
-                                        :test #'char-equal)
-                                (search query (namestring file)
-                                        :test #'char-equal))
-                        (push preamble file-results)
-                        (decf remaining)))))))))))
+          (dolist (file (%om-collect-org-files root))
+            (when (<= remaining 0) (return))
+            (let ((fpath (namestring file)))
+              (unless (gethash fpath seen-files)
+                (let ((preamble (parse-org-preamble file)))
+                  (when (or (search query (getf preamble :title)
+                                    :test #'char-equal)
+                            (search query (namestring file)
+                                    :test #'char-equal))
+                    (push preamble file-results)
+                    (decf remaining)))))))))
     (append db-results (nreverse file-results))))
 
 (defun orgmode-list-tags ()
@@ -757,12 +970,10 @@
         (count 0))
     (dolist (r roots)
       (when (>= count limit) (return))
-      (let ((dir (%om-canonical-dir r)))
-        (when dir
-          (dolist (file (directory (merge-pathnames "*.org" dir)))
-            (when (>= count limit) (return))
-            (push (parse-org-preamble file) results)
-            (incf count)))))
+      (dolist (file (%om-collect-org-files r))
+        (when (>= count limit) (return))
+        (push (parse-org-preamble file) results)
+        (incf count)))
     (nreverse results)))
 
 (defun orgmode-status ()
@@ -876,11 +1087,9 @@
           ;; Scan all allowed paths
           (dolist (root (orgmode-allowed-paths))
             (when (<= remaining 0) (return))
-            (let ((dir (%om-canonical-dir root)))
-              (when dir
-                (dolist (f (directory (merge-pathnames "*.org" dir)))
-                  (when (<= remaining 0) (return))
-                  (scan-file (namestring f))))))))
+            (dolist (f (%om-collect-org-files root))
+              (when (<= remaining 0) (return))
+              (scan-file (namestring f))))))
     (nreverse results)))
 
 (defun orgmode-list-todos (&key state priority tag file include-done (limit 50))
@@ -911,6 +1120,15 @@
                                               seen))
                                    file-results)))
               file-results)))))
+
+(defun %om-format-timestamp ()
+  "Format current time as an org-mode inactive timestamp: YYYY-MM-DD Day HH:MM."
+  (multiple-value-bind (sec min hr day mon yr dow)
+      (get-decoded-time)
+    (declare (ignore sec))
+    (let ((day-name (nth dow '("Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat"))))
+      (format nil "~4,'0D-~2,'0D-~2,'0D ~A ~2,'0D:~2,'0D"
+              yr mon day day-name hr min))))
 
 (defun orgmode-set-todo (path-or-id headline new-state)
   "Change a headline's TODO state in an org file.
@@ -964,45 +1182,35 @@
             ;; Replace the headline line
             (setf (nth line-idx result-lines) new-line)
             ;; Handle CLOSED timestamp for done transitions
-            (let ((done-kws (%om-done-keywords)))
-              (when (and new-state (member new-state done-kws :test #'string-equal))
-                ;; Add CLOSED timestamp if transitioning to a done state
-                (unless (headline-closed target)
-                  (let ((closed-line (format nil "    CLOSED: [~A]"
-                                            (%om-format-timestamp))))
-                    ;; Insert after headline (and after property drawer if present)
-                    (let ((insert-at (1+ line-idx)))
-                      ;; Skip property drawer if present
-                      (when (and (< insert-at (length result-lines))
-                                 (cl-ppcre:scan *property-drawer-start-re*
-                                                (nth insert-at result-lines)))
-                        (loop for j from insert-at below (length result-lines)
-                              when (cl-ppcre:scan *property-drawer-end-re*
-                                                  (nth j result-lines))
-                              do (setf insert-at (1+ j)) (return)))
-                      ;; Skip existing planning line if present
-                      (when (and (< insert-at (length result-lines))
-                                 (cl-ppcre:scan "^\\s*(?:SCHEDULED|DEADLINE):" (nth insert-at result-lines)))
-                        ;; Prepend CLOSED to existing planning line
-                        (setf (nth insert-at result-lines)
-                              (format nil "~A ~A" closed-line (string-left-trim " " (nth insert-at result-lines))))
-                        (setf closed-line nil)))
-                      (when closed-line
-                        (setf result-lines
-                              (append (subseq result-lines 0 insert-at)
-                                      (list closed-line)
-                                      (subseq result-lines insert-at)))))))))
+            (when (and new-state
+                       (member new-state (%om-done-keywords) :test #'string-equal)
+                       (not (headline-closed target)))
+              (let ((closed-line (format nil "    CLOSED: [~A]"
+                                        (%om-format-timestamp)))
+                    (insert-at (1+ line-idx)))
+                ;; Skip property drawer if present
+                (when (and (< insert-at (length result-lines))
+                           (cl-ppcre:scan *property-drawer-start-re*
+                                          (nth insert-at result-lines)))
+                  (loop for j from insert-at below (length result-lines)
+                        when (cl-ppcre:scan *property-drawer-end-re*
+                                            (nth j result-lines))
+                        do (setf insert-at (1+ j)) (return)))
+                ;; Skip existing planning line if present
+                (when (and (< insert-at (length result-lines))
+                           (cl-ppcre:scan "^\\s*(?:SCHEDULED|DEADLINE):"
+                                          (nth insert-at result-lines)))
+                  (setf (nth insert-at result-lines)
+                        (format nil "~A ~A" closed-line
+                                (string-left-trim " " (nth insert-at result-lines))))
+                  (setf closed-line nil))
+                (when closed-line
+                  (setf result-lines
+                        (append (subseq result-lines 0 insert-at)
+                                (list closed-line)
+                                (subseq result-lines insert-at))))))
             ;; Write back
             (with-open-file (s canonical :direction :output :if-exists :supersede)
               (format s "~{~A~^~%~}" result-lines)))))
       (log:info "Set TODO state to ~A for ~S in ~A" new-state headline canonical)
       canonical)))
-
-(defun %om-format-timestamp ()
-  "Format current time as an org-mode inactive timestamp: YYYY-MM-DD Day HH:MM."
-  (multiple-value-bind (sec min hr day mon yr dow)
-      (get-decoded-time)
-    (declare (ignore sec))
-    (let ((day-name (nth dow '("Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat"))))
-      (format nil "~4,'0D-~2,'0D-~2,'0D ~A ~2,'0D:~2,'0D"
-              yr mon day day-name hr min))))
