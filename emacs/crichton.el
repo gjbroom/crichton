@@ -246,11 +246,11 @@ Returns the correlation ID."
 
 (defvar crichton-chat-mode-map
   (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map text-mode-map)
     (define-key map (kbd "RET") #'crichton-chat-send)
     (define-key map (kbd "C-c C-k") #'crichton-disconnect)
     map)
-  "Keymap for `crichton-chat-mode'.")
+  "Keymap for `crichton-chat-mode'.
+Parent keymap is set by `define-derived-mode' from `text-mode'.")
 
 (define-derived-mode crichton-chat-mode text-mode "Crichton Chat"
   "Major mode for chatting with the Crichton AI daemon.
