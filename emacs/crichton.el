@@ -131,8 +131,8 @@ Returns the correlation ID."
               (let ((msg (json-read-from-string line)))
                 (crichton--dispatch msg))
             (error
-             (message "Crichton: JSON parse error: %s" (error-message-string err))))))
-      (setq crichton--input-buffer (substring crichton--input-buffer start)))))
+             (message "Crichton: JSON parse error: %s" (error-message-string err)))))))
+    (setq crichton--input-buffer (substring crichton--input-buffer start))))
 
 (defun crichton--dispatch (msg)
   "Route a parsed NDJSON message to the appropriate handler."
@@ -178,34 +178,33 @@ Returns the correlation ID."
 (defun crichton-connect ()
   "Connect to the Crichton daemon."
   (interactive)
-  (when (and crichton--process (process-live-p crichton--process))
-    (message "Already connected to Crichton daemon")
-    (cl-return-from crichton-connect))
-  (unless (file-exists-p crichton-socket-path)
-    (user-error "Daemon socket not found at %s — is the daemon running?"
-                crichton-socket-path))
-  (setq crichton--input-buffer "")
-  (condition-case err
-      (progn
-        (setq crichton--process
-              (make-network-process
-               :name "crichton"
-               :family 'local
-               :service crichton-socket-path
-               :filter #'crichton--process-filter
-               :sentinel #'crichton--sentinel
-               :coding 'utf-8-unix
-               :noquery t))
-        ;; Announce ourselves as an Emacs client
-        (crichton--send `((id . ,(crichton--next-id))
-                          (op . "hello")
-                          (client_type . "emacs")
-                          (capabilities . ("emacs_invoke"))))
-        ;; Subscribe to push notifications
-        (crichton--send-request "subscribe")
-        (message "Connected to Crichton daemon"))
-    (error
-     (user-error "Cannot connect to Crichton: %s" (error-message-string err)))))
+  (if (and crichton--process (process-live-p crichton--process))
+      (message "Already connected to Crichton daemon")
+    (unless (file-exists-p crichton-socket-path)
+      (user-error "Daemon socket not found at %s — is the daemon running?"
+                  crichton-socket-path))
+    (setq crichton--input-buffer "")
+    (condition-case err
+        (progn
+          (setq crichton--process
+                (make-network-process
+                 :name "crichton"
+                 :family 'local
+                 :service crichton-socket-path
+                 :filter #'crichton--process-filter
+                 :sentinel #'crichton--sentinel
+                 :coding 'utf-8-unix
+                 :noquery t))
+          ;; Announce ourselves as an Emacs client
+          (crichton--send `((id . ,(crichton--next-id))
+                            (op . "hello")
+                            (client_type . "emacs")
+                            (capabilities . ("emacs_invoke"))))
+          ;; Subscribe to push notifications
+          (crichton--send-request "subscribe")
+          (message "Connected to Crichton daemon"))
+      (error
+       (user-error "Cannot connect to Crichton: %s" (error-message-string err))))))
 
 (defun crichton-disconnect ()
   "Disconnect from the Crichton daemon."
@@ -247,14 +246,18 @@ Returns the correlation ID."
 
 (defvar crichton-chat-mode-map
   (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map text-mode-map)
     (define-key map (kbd "RET") #'crichton-chat-send)
     (define-key map (kbd "C-c C-k") #'crichton-disconnect)
     map)
   "Keymap for `crichton-chat-mode'.")
 
-(define-derived-mode crichton-chat-mode special-mode "Crichton Chat"
-  "Major mode for chatting with the Crichton AI daemon."
-  nil)
+(define-derived-mode crichton-chat-mode text-mode "Crichton Chat"
+  "Major mode for chatting with the Crichton AI daemon.
+The buffer has a read-only history area and a writable input area
+below the prompt."
+  (setq-local header-line-format
+              '(:eval (if (crichton-connected-p) "Connected" "Disconnected"))))
 
 (defun crichton--chat-buffer ()
   "Return the chat buffer, creating it if needed."
@@ -263,9 +266,14 @@ Returns the correlation ID."
       (unless (eq major-mode 'crichton-chat-mode)
         (crichton-chat-mode)
         (let ((inhibit-read-only t))
-          (insert (propertize "— Crichton Chat —\n\n" 'face 'bold))
-          (setq-local crichton--chat-input-start (point-marker))
-          (set-marker-insertion-type crichton--chat-input-start nil))))
+          (insert (propertize "— Crichton Chat —\n\n"
+                              'face 'bold
+                              'read-only t
+                              'rear-nonsticky t)))
+        (setq crichton--chat-input-start (point-marker))
+        (set-marker-insertion-type crichton--chat-input-start nil)
+        (insert (propertize "❯ " 'face 'minibuffer-prompt
+                            'read-only t 'rear-nonsticky t))))
     buf))
 
 (defun crichton--chat-insert (role text)
@@ -273,7 +281,7 @@ Returns the correlation ID."
   (let ((buf (crichton--chat-buffer)))
     (with-current-buffer buf
       (let ((inhibit-read-only t)
-            (at-end (= (point) (point-max))))
+            (at-end (>= (point) (marker-position crichton--chat-input-start))))
         (save-excursion
           (goto-char (marker-position crichton--chat-input-start))
           (let ((face (pcase role
@@ -288,9 +296,15 @@ Returns the correlation ID."
                           ("error" "Error")
                           ("notification" "Notice")
                           (_ role))))
-            (insert (propertize (format "%s: " prefix) 'face (list face 'bold))
-                    text "\n\n")
-            (set-marker crichton--chat-input-start (point))))
+            (insert (propertize (format "%s: " prefix)
+                                'face (list face 'bold)
+                                'read-only t 'rear-nonsticky t)
+                    (propertize (concat text "\n\n")
+                                'read-only t 'rear-nonsticky t))
+            (set-marker crichton--chat-input-start (point))
+            ;; Re-insert the prompt
+            (insert (propertize "❯ " 'face 'minibuffer-prompt
+                                'read-only t 'rear-nonsticky t))))
         (when at-end
           (goto-char (point-max)))))))
 
@@ -302,17 +316,24 @@ Returns the correlation ID."
     (crichton-connect))
   (pop-to-buffer (crichton--chat-buffer)))
 
+(defun crichton--input-start ()
+  "Return the position where user input begins (after the prompt)."
+  (let ((m (marker-position crichton--chat-input-start)))
+    (or (next-single-property-change m 'read-only) (point-max))))
+
 (defun crichton-chat-send ()
   "Send the current input line to the daemon."
   (interactive)
+  (unless (crichton-connected-p)
+    (user-error "Not connected — run M-x crichton-connect"))
   (let ((text (string-trim (buffer-substring-no-properties
-                            (marker-position crichton--chat-input-start)
+                            (crichton--input-start)
                             (point-max)))))
     (when (string-empty-p text)
       (user-error "Nothing to send"))
-    ;; Clear input area
+    ;; Clear input area (keep the prompt)
     (let ((inhibit-read-only t))
-      (delete-region (marker-position crichton--chat-input-start) (point-max)))
+      (delete-region (crichton--input-start) (point-max)))
     ;; Show user message
     (crichton--chat-insert "user" text)
     ;; Send to daemon with streaming
@@ -326,11 +347,15 @@ Returns the correlation ID."
         (let ((inhibit-read-only t))
           (save-excursion
             (goto-char (marker-position crichton--chat-input-start))
-            (insert (propertize "Crichton: " 'face '(font-lock-string-face bold))
+            (insert (propertize "Crichton: " 'face '(font-lock-string-face bold)
+                                'read-only t 'rear-nonsticky t)
                     (propertize "..." 'face 'font-lock-comment-face
                                 'crichton-streaming-id id)
-                    "\n\n")
-            (set-marker crichton--chat-input-start (point))))))))
+                    (propertize "\n\n" 'read-only t 'rear-nonsticky t))
+            (set-marker crichton--chat-input-start (point))
+            (insert (propertize "❯ " 'face 'minibuffer-prompt
+                                'read-only t 'rear-nonsticky t)))))))
+  (goto-char (point-max)))
 
 ;;;; Streaming response handlers
 
