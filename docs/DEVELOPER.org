@@ -139,6 +139,19 @@ is standard CL practice.
   - Sixel graphics infrastructure (detection, =img2sixel= integration)
   - Local commands: =:quit=, =:clear=, =:new=, =:session=, =:status=, =:notifications=, =:sixel on/off=, =:img=
 
+*** Emacs Client (~emacs/crichton.el~)
+- *Purpose*: Native Emacs interface for chatting with the daemon
+- *Dependencies*: Emacs 28.1+ (built-in =json=, =comint=, =cl-lib= only)
+- *Protocol*: NDJSON over =daemon.sock= (same as other clients)
+- *Features*:
+  - Comint-based chat buffer (=*crichton-chat*=) with input history
+  - Hidden process buffer (=*crichton-process*=) captures raw LLM streaming deltas, like SLIME's =*inferior-lisp*=
+  - =[thinking…]= overlay while LLM is working; final response appears on =chat_done=
+  - =C-c C-p=: peek at raw stream; =C-c C-o=: pop last response into org-mode buffer; =C-c C-k=: disconnect
+  - Bidirectional RPC: daemon can invoke allowlisted Emacs functions via =emacs_invoke= (org-roam queries, org-agenda, etc.)
+  - Push notification display in chat buffer
+- *Entry points*: =M-x crichton-connect=, =M-x crichton-chat=
+
 *** Runner Process
 - *Purpose*: Isolated WASM execution environment
 - *Spawned by*: Daemon on-demand
@@ -1468,6 +1481,77 @@ the JSON-through-memory ABI.  This is required for pure-function skills such as
   }
 }
 #+end_src
+
+*** =orgmode= Tool
+
+The =orgmode= tool provides org-mode file and org-roam integration.
+Gated by =[orgmode] enable = true= in =config.toml=.
+
+| Parameter      | Type    | Required         | Description                                                   |
+|----------------+---------+------------------+---------------------------------------------------------------|
+| =action=       | string  | yes              | Action to perform (see enum below)                            |
+| =path=         | string  | for most actions | File path or org-roam node ID (UUID)                          |
+| =query=        | string  | for search       | Search query string                                           |
+| =tag=          | string  | no               | Filter by org-roam tag (search, list_todos)                   |
+| =title=        | string  | for create_note  | Note title                                                    |
+| =body=         | string  | no               | Note body content (create_note)                               |
+| =filetags=     | array   | no               | File-level tags (create_note, set_filetags)                   |
+| =root=         | string  | no               | Root directory (must be in =allowed_paths=)                   |
+| =text=         | string  | for append       | Text to append                                                |
+| =headline=     | string  | no               | Headline title (append, set_todo)                             |
+| =direction=    | string  | no               | Backlink direction: =backlinks=, =forward=, =both=           |
+| =include-raw=  | boolean | no               | Include raw file text in read results                         |
+| =state=        | string  | no               | TODO state filter (list_todos) or new state (set_todo)        |
+| =priority=     | string  | no               | Priority filter: =A=, =B=, =C= (list_todos)                 |
+| =include-done= | boolean | no               | Include DONE/CANCELLED in list_todos                          |
+| =limit=        | integer | no               | Maximum results (default 50)                                  |
+
+*Actions:*
+- =read= — parse an org file into structured data (headlines, tags, properties)
+- =search= — find notes by title/tag via org-roam database
+- =list_tags= — list all tags in the org-roam database
+- =backlinks= — query org-roam link graph (backlinks, forward, or both)
+- =create_note= — create a new org-roam note with UUID, timestamp filename, filetags
+- =append= — add text to an org file (at end or under a specific headline)
+- =list_files= — enumerate org files under an allowed root
+- =list_todos= — query TODO items with state/priority/tag filtering
+- =set_todo= — change a headline's TODO state (adds CLOSED timestamp for done states)
+- =set_filetags= — replace file-level =#+FILETAGS:= (handles insert, replace, and removal; case-insensitive matching)
+- =status= — report skill configuration and allowed paths
+
+*** Amp Orchestrator Tools (~skills/builtins/amp-orchestrator.lisp~)
+
+Delegate coding and testing tasks to the Amp CLI agent.
+Gated by =[amp] enable = true= in =config.toml=.
+
+*Configuration:*
+#+begin_src toml
+[amp]
+enable = true
+allowed_repo_roots = ["/home/user/devel/myproject"]
+#+end_src
+
+- =allowed_repo_roots= restricts which directories Amp may operate in (empty = unrestricted)
+- API key resolved from credential store (=amp-api= credential, field =:api-key=)
+- Subprocess environment is minimal (HOME, PATH, AMP_API_KEY only)
+- All invocations use direct argv (no shell execution)
+
+*Tools:*
+
+| Tool              | Description                                                      |
+|-------------------+------------------------------------------------------------------|
+| =amp_check=       | Verify Amp CLI availability and config                           |
+| =amp_code=        | Delegate coding tasks with structured prompts, file focus        |
+| =amp_test=        | Run test suites with optional iterative failure fixing           |
+| =amp_check_json=  | JSON-output variant of =amp_check=                               |
+| =amp_code_json=   | JSON-output variant of =amp_code=                                |
+| =amp_test_json=   | JSON-output variant of =amp_test=                                |
+
+*Security properties:*
+- Structured audit logging for every invocation (repo, sanitized argv, exit code, elapsed time, changed files)
+- Credential mediation: API key never visible to the LLM
+- Output caps: stdout and stderr truncated to prevent context overflow
+- Named restarts for interactive debugging (=use-different-repo=, =retry-with-longer-timeout=, =return-partial-result=)
 
 ** Channel Protocol API (~channels/protocol.lisp~)
 

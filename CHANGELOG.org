@@ -56,9 +56,10 @@ For development details, see the git commit history and BEADS issue tracker.
   - Queries org-roam SQLite database: search by title/tag, backlinks, forward links, tag listing
   - Create org-roam notes with auto-generated timestamp filenames, UUID :ID: properties, filetags
   - Append to existing files (at end or under a specific headline)
+  - =set_filetags= action: replace, add, or remove file-level tags on existing org files (accepts path or org-roam node ID)
   - LOCAL-ONLY: gated by =[orgmode]= config section; requires explicit =allowed_paths= (empty = deny all)
   - All DB results filtered by allowed paths; DB opened read-only
-  - =orgmode= agent tool with actions: read, search, list_tags, backlinks, create_note, append, list_files, status
+  - =orgmode= agent tool with actions: read, search, list_tags, backlinks, create_note, append, list_files, set_filetags, status
 - *RSS monitor keyword filtering*: RSS monitors now accept =keywords=, =match_mode=, and =search_fields= parameters to automatically filter new items through the rss-filter WASM skill (cricht-8u0)
   - Filter config persists to storage and survives daemon restarts
   - When keywords are set, only matching items trigger notifications
@@ -95,6 +96,14 @@ For development details, see the git commit history and BEADS issue tracker.
   - Markdown image reference extraction (=![alt](path)=)
   - =:sixel on/off= toggle command
   - =:img path= command to display images in chat (placeholder mode; full sixel rendering in Phase 4)
+- *Emacs client* (=emacs/crichton.el=): Emacs interface for the Crichton daemon
+  - Comint-based chat buffer (=*crichton-chat*=) with input history, prompt read-only protection
+  - Hidden process buffer (=*crichton-process*=) captures raw LLM streaming deltas, like SLIME's =*inferior-lisp*=
+  - =[thinking…]= overlay indicator while LLM is working; final response appears cleanly on completion
+  - =C-c C-p= to peek at raw stream; =C-c C-o= to pop last response into an org-mode buffer
+  - Bidirectional RPC: daemon can invoke allowlisted Emacs functions (org-roam queries, org-agenda, etc.)
+  - Push notification display in chat buffer
+  - Connects via Unix domain socket using NDJSON protocol
 - *Raindrop.io bookmark management*: new built-in skill and =raindrop= agent tool for managing bookmarks via the Raindrop.io API
   - =save=: create bookmarks with title, tags, description, and target collection
   - =search=: full-text search across all bookmarks with pagination
