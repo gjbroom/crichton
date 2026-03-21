@@ -61,7 +61,10 @@ signing. Informed by a security audit of OpenClaw."
                                             (:file "log-inspector")
                                             (:file "amp-orchestrator")
                                             (:file "raindrop")
-                                            (:file "orgmode")))))
+                                            (:file "orgmode")
+                                            (:file "pushover")
+                                            (:file "github")
+                                            (:file "hoobs")))))
                (:module "crypto"
                 :components ((:file "wipe")
                              (:file "age")))

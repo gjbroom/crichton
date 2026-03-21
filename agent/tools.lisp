@@ -1002,6 +1002,133 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
     (error (c)
       (format nil "Orgmode error: ~A" c))))
 
+;;; --- Pushover notification tool ---
+
+(define-tool pushover
+    (:description "Send a push notification via Pushover.net to iOS, Android, or desktop devices.  Requires 'pushover' credential with :token and :user fields.  Priority: -2 lowest, -1 low, 0 normal (default), 1 high, 2 emergency.")
+  ((message "string"
+            "The notification message body."
+            :required-p t)
+   (title "string"
+          "Notification title.  Defaults to the app name.")
+   (priority "integer"
+             "Notification priority: -2 (lowest) to 2 (emergency).  Default: 0 (normal).")
+   (url "string"
+        "Supplementary URL to attach to the notification.")
+   (url-title "string"
+              "Title for the supplementary URL.")
+   (device "string"
+           "Target device name.  Omit to send to all devices.")
+   (sound "string"
+          "Notification sound name (e.g. 'pushover', 'magic', 'alien')."))
+  (crichton/skills:pushover-report message
+                                   :title title
+                                   :priority priority
+                                   :url url
+                                   :url-title url-title
+                                   :device device
+                                   :sound sound))
+
+;;; --- GitHub tool ---
+
+(define-tool github
+    (:description "Interact with the GitHub API.  Actions: 'repos' (list your repos), 'repo' (get a repo's details), 'issues' (list issues), 'create_issue' (open a new issue), 'prs' (list pull requests), 'ci' (workflow runs), 'releases' (list releases), 'search_code' (code search).  Requires 'github-api-key' credential with :token field (personal access token).")
+  ((action "string"
+           "The GitHub action to perform."
+           :enum ("repos" "repo" "issues" "create_issue" "prs" "ci" "releases" "search_code")
+           :required-p t)
+   (owner-repo "string"
+               "Repository as 'owner/repo'.  Required for repo, issues, create_issue, prs, ci, releases.  For search_code, used as the query if 'query' is omitted.")
+   (state "string"
+          "Issue/PR state filter: 'open', 'closed', 'all'.  Default: open."
+          :enum ("open" "closed" "all"))
+   (per-page "integer"
+             "Max results per page.  Default: 20."
+             :default 20)
+   (branch "string"
+           "Branch filter for 'ci' action.")
+   (query "string"
+          "Code search query string (e.g. 'foo repo:owner/repo').  For 'search_code' action.")
+   (title "string"
+          "Issue title.  Required for 'create_issue'.")
+   (body "string"
+         "Issue body markdown.  Optional for 'create_issue'.")
+   (labels "string"
+           "Comma-separated labels to apply.  Optional for 'create_issue'."))
+  (cond
+    ((string-equal action "create_issue")
+     (unless owner-repo
+       (return-from handler "Error: 'owner_repo' is required for create_issue."))
+     (unless title
+       (return-from handler "Error: 'title' is required for create_issue."))
+     (let* ((parts (cl-ppcre:split "/" owner-repo :limit 2))
+            (owner (first parts))
+            (repo  (second parts))
+            (label-list (when labels
+                          (mapcar (lambda (s) (string-trim '(#\Space) s))
+                                  (cl-ppcre:split "," labels))))
+            (result (crichton/skills:github-create-issue
+                     owner repo title :body body :labels label-list)))
+       (format nil "Created issue #~D: ~A~%  ~A"
+               (getf result :number) (getf result :title) (getf result :url))))
+    (t
+     (with-output-to-string (s)
+       (crichton/skills:github-report
+        action owner-repo
+        :state state
+        :per-page per-page
+        :branch branch
+        :query query
+        :stream s)))))
+
+;;; --- HOOBS home automation tool ---
+
+(define-tool hoobs
+    (:description "Control HomeKit accessories via a HOOBS hub.  Actions: 'status' (hub status), 'rooms' (list rooms), 'accessories' (list all accessories by room), 'get_accessory' (details for one accessory), 'set_accessory' (set characteristic values — requires [hoobs] allow_control = true in config).  Requires 'hoobs' credential with :host, :username, :password and optionally :port.")
+  ((action "string"
+           "The HOOBS action to perform."
+           :enum ("status" "rooms" "accessories" "get_accessory" "set_accessory")
+           :required-p t)
+   (accessory-id "string"
+                 "Accessory identifier.  Required for get_accessory and set_accessory.")
+   (characteristics "object"
+                    "Hash of characteristic-name → value to set.  Required for set_accessory (e.g., {\"on\": true})."))
+  (cond
+    ((string-equal action "status")
+     (with-output-to-string (s)
+       (crichton/skills:hoobs-report :stream s)))
+    ((string-equal action "rooms")
+     (let ((rooms (crichton/skills:hoobs-rooms)))
+       (if rooms
+           (format nil "~{~A (id: ~A)~^~%~}"
+                   (loop for r in rooms
+                         collect (getf r :name)
+                         collect (getf r :id)))
+           "No rooms found.")))
+    ((string-equal action "accessories")
+     (with-output-to-string (s)
+       (crichton/skills:hoobs-report :stream s)))
+    ((string-equal action "get_accessory")
+     (unless accessory-id
+       (return-from handler "Error: 'accessory_id' is required for get_accessory."))
+     (let ((data (crichton/skills:hoobs-get-accessory accessory-id)))
+       (if data
+           (format nil "~S" data)
+           (format nil "Accessory '~A' not found." accessory-id))))
+    ((string-equal action "set_accessory")
+     (unless accessory-id
+       (return-from handler "Error: 'accessory_id' is required for set_accessory."))
+     (unless characteristics
+       (return-from handler "Error: 'characteristics' is required for set_accessory."))
+     (handler-case
+         (progn
+           (crichton/skills:hoobs-set-accessory accessory-id characteristics)
+           (format nil "Accessory '~A' updated." accessory-id))
+       (error (c)
+         (format nil "Error: ~A" c))))
+    (t
+     (format nil "Unknown HOOBS action: ~A" action))))
+
 ;;; --- Registration ---
 
 (defun register-all-tools ()
@@ -1026,6 +1153,9 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
   (register-memory-search-tool)
   (register-raindrop-tool)
   (register-orgmode-tool)
+  (register-pushover-tool)
+  (register-github-tool)
+  (register-hoobs-tool)
   ;; Register pipeline built-in functions
   (crichton/skills:register-default-pipeline-builtins)
   (log:info "Registered ~D agent tools" (hash-table-count *agent-tools*)))

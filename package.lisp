@@ -303,7 +303,27 @@
            #:orgmode-list-files
            #:orgmode-list-todos
            #:orgmode-set-todo
-           #:orgmode-set-filetags))
+           #:orgmode-set-filetags
+           ;; pushover
+           #:pushover-send
+           #:pushover-report
+           ;; github
+           #:github-list-repos
+           #:github-get-repo
+           #:github-list-issues
+           #:github-create-issue
+           #:github-list-prs
+           #:github-list-workflow-runs
+           #:github-list-releases
+           #:github-search-code
+           #:github-report
+           ;; hoobs
+           #:hoobs-accessories
+           #:hoobs-get-accessory
+           #:hoobs-set-accessory
+           #:hoobs-rooms
+           #:hoobs-service-status
+           #:hoobs-report))
 
 (defpackage #:crichton/llm
   (:use #:cl)
