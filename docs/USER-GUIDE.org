@@ -410,6 +410,18 @@ max_file_chars = 20000
 # Maximum total characters across all state files.
 # Default: 150000
 max_total_chars = 150000
+
+# -----------------------------------------------------------------------
+# [agent] — Agent loop settings
+# -----------------------------------------------------------------------
+[agent]
+# Tools available to external channel sessions (Discord, etc.).
+# Defaults to a safe read-only subset: weather, time, ephemeris,
+# system_info, rss, battery, resource_usage.
+# Privileged tools (amp_code, amp_test, orgmode, raindrop, github,
+# pushover, hoobs) are excluded by default for external channels.
+# Override with a complete list to customise:
+# channel_allowed_tools = ["weather", "time", "rss", "system_info"]
 #+end_src
 
 ** Hot-reloading configuration
@@ -1078,6 +1090,13 @@ Use Amp to add docstrings to all public functions in src/parser.py.
 Run the test suite in ~/devel/myproject and fix any failures.
 Check if Amp is available on this system.
 #+end_example
+
+*Security*: All text embedded into Amp prompts (task descriptions, context
+strings, and test output from the fix loop) is sanitised before it reaches the
+Amp CLI — control characters are stripped, length is capped, and potential
+prompt injection patterns are detected and audit-logged.  The =allowed_repo_roots=
+restriction is strongly recommended; without it, Amp may operate on any
+directory the daemon can read.
 
 * WASM Skills
 

@@ -1454,6 +1454,28 @@ Retrieve a registered tool.
 ;; => #<AGENT-TOOL "weather">
 #+end_src
 
+**** =channel-safe-tool-defs ()=
+
+Return the restricted tool list for external channel sessions.  Reads
+=[agent] channel_allowed_tools= from config; falls back to the default safe
+set (=weather=, =time=, =ephemeris=, =system_info=, =rss=, =battery=,
+=resource_usage=).  Called automatically by =run-agent= when
+=:session-type :channel=.
+
+**** =sanitize-user-input (text &key max-length source)=
+
+Sanitise user input before it enters the agent loop:
+- Strips control characters (preserves LF, TAB, CR).
+- Truncates to =max-length= (warns if truncated).
+- Detects injection markers; writes =agent.input.injection_markers= audit event if found.
+- Returns the sanitised string or =NIL=.
+
+=max-length= defaults to =+max-channel-input-length+= (8 000).  Use
+=+max-direct-input-length+= (32 000) for trusted local clients.  =source= is
+a label string for log/audit messages.
+
+Called automatically by =run-agent= / =run-agent/stream= for all sessions.
+
 *** =skills= Tool
 
 The =skills= tool exposes WASM skill management to the LLM agent.
@@ -2334,6 +2356,11 @@ AC adapter status is detected via =ac-adapter-online-p= (reads
 
 - =enabled= (boolean): Enable Discord channel adapter
 - =bot_token_credential= (string): Name of credential containing bot token
+- =allowed_user_ids= (list of strings): Discord user IDs allowed to use the bot.  Empty list means all users are allowed (open access).
+
+**** =[agent]=
+
+- =channel_allowed_tools= (list of strings): Tool names available to external channel sessions (Discord, etc.).  Defaults to the read-only safe set: =weather=, =time=, =ephemeris=, =system_info=, =rss=, =battery=, =resource_usage=.  Override to customise.
 
 ** Credential Store Setup
 
@@ -2499,6 +2526,8 @@ JSON array of messages:
 - **Credential theft**: Encrypted at rest, mediated access
 - **Session snooping**: Optional encryption, file permissions
 - **Privilege escalation**: WASM has no syscall access
+- **Prompt injection via external channels**: Input sanitisation layer strips control chars, enforces length limits, detects and audit-logs injection markers; Discord sessions use a restricted tool allowlist excluding privileged operations
+- **Secret leakage via channel responses**: LLM responses are redacted of known secret patterns before being sent to external channels (Discord etc.)
 
 *** Threats NOT Mitigated
 
@@ -2506,6 +2535,7 @@ JSON array of messages:
 - **Memory forensics**: Keys briefly in RAM during encryption/decryption
 - **Side-channel attacks**: Not hardened against timing attacks
 - **Denial of service**: No rate limiting on local socket
+- **Sophisticated LLM jailbreaks**: Injection marker detection is heuristic, not a complete defence against determined adversarial prompts
 
 ** Sandboxing
 
@@ -2611,6 +2641,65 @@ Sensitive buffers are zeroed before deallocation:
 ;; Buffer zeroed on exit
 #+end_src
 
+** Prompt Injection Mitigations
+
+External inputs (Discord messages, RSS feed content, tool results) flow into
+LLM prompts.  A malicious input could attempt to override the system prompt
+or cause the agent to invoke dangerous tools.  Defence-in-depth is applied at
+several layers.
+
+*** Input Sanitisation (~agent/sanitize.lisp~)
+
+Applied to all user input before it enters the agent loop:
+
+- *Control character stripping*: null bytes and non-printable characters removed
+  (LF, TAB, CR preserved).
+- *Length limits*: channel sessions capped at 8 000 chars; direct local clients
+  capped at 32 000 chars.  Operator is warned when truncation occurs.
+- *Injection marker detection*: heuristic regex scan for patterns such as
+  "ignore previous instructions", =[INST]=, =<|system|>=, etc.  Matches write
+  an =agent.input.injection_markers= audit event and a WARN-level log entry.
+  Input is still processed — the operator is informed, not the attacker.
+
+#+begin_src lisp
+;; Applied automatically in run-agent / run-agent/stream
+(sanitize-user-input text :max-length +max-channel-input-length+ :source "discord")
+#+end_src
+
+*** Per-Channel Tool Allowlist
+
+When =run-agent= is called with =:session-type :channel= (set automatically for
+all RPC requests that carry =channel_type=channel=), the tool list is restricted
+to a safe subset via =channel-safe-tool-defs=:
+
+Default allowed set: =weather=, =time=, =ephemeris=, =system_info=, =rss=,
+=battery=, =resource_usage=.
+
+Excluded by default: =amp_code=, =amp_test=, =amp_check=, =orgmode=,
+=raindrop=, =github=, =pushover=, =hoobs=, =scheduler= write operations.
+
+Configurable via =[agent] channel_allowed_tools= in =config.toml=.
+
+*** Amp Prompt Sanitisation (~skills/builtins/amp-orchestrator.lisp~)
+
+Text embedded in Amp CLI prompts (task descriptions, context, test output) is
+sanitised via =sanitize-for-amp-prompt= before the Amp subprocess is invoked:
+
+- Control characters stripped.
+- Length caps: 10 000 chars for description, 5 000 for context, 8 000 for
+  embedded test output.
+- Injection markers detected and audit-logged as =amp.prompt.injection_markers=.
+
+This specifically prevents a malicious test failure output (e.g. from an RSS
+item routed to =amp_test=) from injecting instructions into Amp.
+
+*** Outbound Channel Response Filtering
+
+Before a response is sent to an external channel, =redact-channel-output=
+applies the same redaction patterns used for log sanitisation.  If any
+redaction fires, a WARN entry is written so the operator knows the LLM
+generated a potentially sensitive response.
+
 ** Audit Logging
 
 All agent interactions logged to =~/.crichton/logs/daemon.jsonl=:
@@ -2621,6 +2710,17 @@ All agent interactions logged to =~/.crichton/logs/daemon.jsonl=:
 - Skill executions
 - Errors and exceptions
 
+Structured audit events (level =AUDIT=) emitted for security-relevant
+operations:
+
+| Event type                        | When emitted                                             |
+|-----------------------------------+----------------------------------------------------------|
+| =agent.input.injection_markers=   | Injection patterns detected in user input                |
+| =agent.tool.call=                 | Every tool invoked by the agent loop                     |
+| =amp.invoke=                      | Amp CLI invoked (includes policy, exit code, changed files) |
+| =amp.invoke.denied=               | Amp invocation blocked by policy                         |
+| =amp.prompt.injection_markers=    | Injection patterns in Amp prompt inputs                  |
+
 Log format (JSON Lines):
 #+begin_src json
 {
@@ -2628,6 +2728,18 @@ Log format (JSON Lines):
   "level": "INFO",
   "logger": "crichton/agent",
   "message": "Invoking tool: weather"
+}
+#+end_src
+
+Audit event example:
+#+begin_src json
+{
+  "timestamp": "2026-03-21T10:15:00Z",
+  "level": "AUDIT",
+  "event": "agent.input.injection_markers",
+  "source": "channel",
+  "marker_count": 1,
+  "input_length": 142
 }
 #+end_src
 
