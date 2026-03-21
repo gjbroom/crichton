@@ -37,6 +37,16 @@ For development details, see the git commit history and BEADS issue tracker.
 
 ** Security
 
+- *Prompt injection mitigations across all LLM surfaces* (cricht-g7r)
+  - New input sanitization layer: strips null bytes and control characters, enforces per-session length limits (8 KB for external channels, 32 KB for local clients), detects and audit-logs suspected injection markers
+  - Per-channel tool allowlist: Discord and other external channels receive a restricted tool set (weather, time, system-info, RSS, battery, ephemeris, usage) — privileged tools (Amp, org-mode, Raindrop, GitHub, Pushover) are unavailable to external callers by default; configurable via =[agent] channel_allowed_tools=
+  - Tool-call audit logging: every tool invocation now writes a structured =agent.tool.call= audit event to the JSON log
+  - Output secret filtering: LLM responses are redacted of known secret patterns (API keys, bearer tokens, passwords) before being sent to external channels; a warning is logged if redaction occurs
+  - Channel RPC tagging: channel manager now tags all daemon requests with =channel_type=channel= so the daemon can enforce channel-specific policies end-to-end
+- *Amp orchestrator prompt injection mitigations* (cricht-ex8)
+  - Task descriptions and context strings are sanitised before being embedded in Amp prompts: control characters stripped, length capped (10 KB description / 5 KB context), injection markers detected and audit-logged
+  - Test output embedded in Amp fix prompts is also sanitised (8 KB cap), preventing maliciously crafted test stdout/stderr from injecting instructions into the Amp agent
+
 * v0.3.0 "Skills & Integrations" (2026-03-21)
 
 ** Added
