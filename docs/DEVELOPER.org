@@ -2508,6 +2508,159 @@ JSON array of messages:
 ]
 #+end_src
 
+** Scheduled Task Persistence (~skills/builtins/task-store.lisp~)
+
+Age-encrypted persistence for user-defined scheduled tasks.  Allows tasks
+scheduled via the agent (=schedule_every=, =schedule_daily=, =schedule_once=)
+to survive daemon restarts.
+
+*** What Persists
+
+- Tasks whose names begin with =user:= (user-defined tasks).
+- The scheduler tool auto-prefixes names with =user:= when scheduling via
+  the agent.
+
+System tasks (battery monitor, RSS monitors) are re-registered from config
+at startup and do not use this store.
+
+*** Location
+
+=~/.crichton/tasks/user-tasks.age= — age-encrypted JSON.
+
+*** File Format
+
+A versioned JSON envelope wrapping an array of task records:
+
+#+begin_src json
+{
+  "version": 1,
+  "saved_at": "2026-03-21 10:00:00",
+  "tasks": [
+    {
+      "name": "user:rss:lobsters",
+      "kind": "every",
+      "action_name": "skill:rss-monitor:rss:lobsters",
+      "interval_seconds": 1800,
+      "daily_hour": null,
+      "daily_minute": null,
+      "next_ut": 4070908800
+    }
+  ]
+}
+#+end_src
+
+Note: =next_ut= is a Common Lisp universal-time integer (seconds since
+1900-01-01), not a Unix timestamp.
+
+*** Daemon Lifecycle Integration
+
+| Phase        | Call                                             |
+|--------------+--------------------------------------------------|
+| Startup      | =restore-user-tasks= after scheduler starts     |
+| Shutdown     | =persist-user-tasks= in =persist-all-storage=   |
+| Agent tool   | Automatic: every =schedule-every/daily/at= call via the scheduler tool triggers a =persist-user-tasks= |
+
+The startup integration is in =daemon/lifecycle.lisp=.
+
+*** Restore Behaviour
+
+During =restore-user-tasks=:
+
+1. Loads task plists from the encrypted file.
+2. For each task, looks up the action by =action-name= in =*schedulable-actions*=.
+3. *Missing action* → logs a WARN-level message, task is skipped.
+4. *Past one-shot task* → logged at INFO, silently skipped.
+5. *Recurring tasks* (=:every=, =:daily=) → rescheduled from their stored =next-ut=
+   (which may be in the past; the scheduler will fire them on the next tick).
+
+*** API Reference
+
+**** =user-task-p (task)= → boolean
+
+Returns T if =task= has a name beginning with ="user:"=.
+
+**** =persist-user-tasks ()= → count
+
+Saves all live user tasks to =user-tasks.age=.  Returns the number of tasks
+saved.  Thread-safe (holds =*scheduler-lock*=).
+
+#+begin_src lisp
+(crichton/skills:persist-user-tasks)   ; => 3
+#+end_src
+
+**** =restore-user-tasks ()=
+
+Loads saved tasks and re-registers them with the scheduler.  Call after
+=start-scheduler= on daemon startup.  Handles missing actions and past
+one-shots gracefully.
+
+**** =load-user-tasks ()= → list of plists
+
+Low-level: reads and decrypts the task file, returns a list of raw plists.
+Returns NIL if the file does not exist.
+
+**** =save-user-tasks (tasks)= → count
+
+Low-level: encrypts and writes =tasks= (filtered to user tasks) to disk.
+
+**** =list-unrestorable-tasks ()= → list of plists
+
+Reads the persisted task file and returns tasks whose =action-name= is not
+currently registered in =*schedulable-actions*=.  These tasks would be
+silently skipped on the next daemon restart.
+
+#+begin_src lisp
+(crichton/skills:list-unrestorable-tasks)
+;; => ((NAME "user:old-rss" KIND :EVERY ACTION-NAME "skill:old-feed" ...))
+#+end_src
+
+**** =export-user-tasks ()= → JSON string
+
+Returns a human-readable (unencrypted) JSON string of all currently-scheduled
+user tasks.  Reads live from the in-memory scheduler, not from disk.  Useful
+for debugging and inspection.
+
+#+begin_src lisp
+(format t "~A" (crichton/skills:export-user-tasks))
+;; Prints prettified JSON with exported_at, task_count, and task details
+#+end_src
+
+*** Agent Tool Actions
+
+The =scheduler= tool exposes two maintenance actions:
+
+| Action               | Description                                        |
+|----------------------+----------------------------------------------------|
+| =persist=            | Manually save live user tasks to disk immediately  |
+| =list_unrestorable=  | List tasks that would be lost on restart           |
+
+Example usage from =crichton-client=:
+
+#+begin_src bash
+crichton-client --eval '(crichton/skills:list-unrestorable-tasks)'
+crichton-client --eval '(crichton/skills:persist-user-tasks)'
+crichton-client --eval '(format t "~A~%" (crichton/skills:export-user-tasks))'
+#+end_src
+
+*** Testing
+
+=tests/test-task-persistence.lisp= provides a comprehensive SLIME-loadable
+test suite covering:
+
+- =user-task-p= predicate accuracy
+- Serialization / deserialization roundtrip (plist ↔ JSON bytes)
+- Encryption roundtrip (=save-user-tasks= → =load-user-tasks=)
+- Edge cases: corrupt file, missing action, past one-shot task
+- Full persist / restart-simulation / restore cycle
+- =list-unrestorable-tasks= detection
+- =export-user-tasks= output
+
+#+begin_src lisp
+;; Load from SLIME/SLY:
+(load "tests/test-task-persistence.lisp")
+(crichton/tests/tasks:run-all)
+#+end_src
+
 * Security
 
 ** Threat Model

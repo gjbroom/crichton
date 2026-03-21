@@ -192,6 +192,8 @@
            #:restore-user-tasks
            #:save-user-tasks
            #:load-user-tasks
+           #:list-unrestorable-tasks
+           #:export-user-tasks
            ;; current time
            #:current-time-plist
            #:current-time-report

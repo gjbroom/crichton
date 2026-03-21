@@ -712,7 +712,9 @@ on a schedule.
 
 Scheduled tasks are persisted to encrypted storage and survive daemon
 restarts.  User-defined tasks (those with names starting =user:=) are
-automatically saved and restored.
+automatically saved and restored on the next startup.  System tasks (battery
+monitor, RSS monitors) are re-registered at startup from config — they do
+not need persistence.
 
 Works out of the box — no configuration required.
 
@@ -725,13 +727,57 @@ What scheduled tasks are currently running?
 Stop the RSS monitor.
 #+end_example
 
+*Persistence inspection*:
+
+#+begin_example
+Manually save my scheduled tasks to disk now.
+Which of my scheduled tasks would be lost if the daemon restarted?
+#+end_example
+
 ** Task Store
 
 Provides encrypted persistence for user-defined scheduled tasks.  Tasks are
 saved to =~/.crichton/tasks/user-tasks.age= and restored on daemon restart.
 
-This operates transparently behind the Scheduler skill — you do not interact
-with it directly.
+This operates transparently behind the Scheduler skill.  Under the hood:
+
+- *What persists*: tasks whose names begin with =user:= (set automatically
+  when you schedule via the agent tool, or manually with the =user:= prefix).
+- *What doesn't*: built-in system tasks like =battery-monitor= and RSS monitors
+  — these are re-registered from config on every start.
+- *Storage*: =~/.crichton/tasks/user-tasks.age= (age-encrypted, 0600 permissions).
+- *On restore*: past one-shot tasks are silently skipped.  Tasks whose backing
+  action is no longer registered are skipped with a warning.
+
+*Troubleshooting persistence*:
+
+If you suspect tasks are not surviving restarts, check from the REPL or
+=crichton-client --eval=:
+
+#+begin_src bash
+# See which persisted tasks would be skipped on next restart
+crichton-client --eval '(crichton/skills:list-unrestorable-tasks)'
+
+# Manually trigger a save without waiting for daemon shutdown
+crichton-client --eval '(crichton/skills:persist-user-tasks)'
+
+# Inspect the current live user tasks as readable JSON
+crichton-client --eval '(format t "~A" (crichton/skills:export-user-tasks))'
+
+# Check what's currently scheduled
+crichton-client --eval '(crichton/skills:list-tasks)'
+#+end_src
+
+*Backup and restore*:
+
+The task store is a standard age-encrypted file.  Back it up with:
+
+#+begin_src bash
+cp ~/.crichton/tasks/user-tasks.age /secure/backup/location/
+#+end_src
+
+To restore, copy it back before starting the daemon.  The age identity key
+(=~/.crichton/age-identity.txt=) must also be present to decrypt it.
 
 ** RSS Feed Monitor
 

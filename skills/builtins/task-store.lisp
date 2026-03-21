@@ -76,6 +76,50 @@
                          :next-ut (gethash "next_ut" ht))))
                tasks))))))
 
+;;; --- Inspection ---
+
+(defun list-unrestorable-tasks ()
+  "Return a list of persisted task plists whose action-name is not currently
+   registered in *schedulable-actions*.  Useful for diagnosing which tasks
+   will be skipped on the next daemon restart.
+   Returns NIL if the persistence file does not exist or is empty."
+  (let ((plists (load-user-tasks)))
+    (remove-if (lambda (plist)
+                 (let ((action-name (getf plist :action-name)))
+                   (or (null action-name)
+                       (not (null (get-schedulable-action action-name))))))
+               plists)))
+
+(defun export-user-tasks ()
+  "Return a JSON string of all currently-scheduled user tasks (unencrypted).
+   Intended for debugging and inspection from the REPL or crichton-client.
+   Does NOT read from disk — reflects the live in-memory scheduler state."
+  (let* ((tasks (bt:with-lock-held (*scheduler-lock*)
+                  (remove-if-not #'user-task-p *scheduled-tasks*)))
+         (plists (mapcar #'task-to-plist tasks)))
+    (let ((*print-pretty* t))
+      (with-output-to-string (s)
+        (shasht:write-json
+         (let ((envelope (make-hash-table :test #'equal))
+               (tasks-vec (make-array (length plists))))
+           (setf (gethash "exported_at" envelope) (format-ut (get-universal-time))
+                 (gethash "task_count" envelope) (length plists))
+           (loop for plist in plists
+                 for i from 0
+                 do (let ((ht (make-hash-table :test #'equal)))
+                      (setf (gethash "name" ht) (getf plist :name)
+                            (gethash "kind" ht) (string-downcase
+                                                 (symbol-name (getf plist :kind)))
+                            (gethash "action_name" ht) (getf plist :action-name)
+                            (gethash "interval_seconds" ht) (getf plist :interval-seconds)
+                            (gethash "daily_hour" ht) (getf plist :daily-hour)
+                            (gethash "daily_minute" ht) (getf plist :daily-minute)
+                            (gethash "next_fire" ht) (format-ut (getf plist :next-ut)))
+                      (setf (aref tasks-vec i) ht)))
+           (setf (gethash "tasks" envelope) tasks-vec)
+           envelope)
+         s)))))
+
 ;;; --- Save / Load ---
 
 (defun save-user-tasks (tasks)

@@ -287,10 +287,10 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
 ;;; --- Scheduler tool ---
 
 (define-tool scheduler
-    (:description "Manage the daemon's task scheduler.  Actions: 'status' (overview), 'list' (all tasks), 'actions' (list schedulable actions), 'schedule_every' (recurring task), 'schedule_daily' (daily at specific time), 'schedule_once' (one-shot after delay), 'cancel' (remove a task by name).")
+    (:description "Manage the daemon's task scheduler.  Actions: 'status' (overview), 'list' (all tasks), 'actions' (list schedulable actions), 'schedule_every' (recurring task), 'schedule_daily' (daily at specific time), 'schedule_once' (one-shot after delay), 'cancel' (remove a task by name), 'persist' (manually save user tasks to disk), 'list_unrestorable' (show tasks that would be lost on restart due to missing actions).")
   ((action "string"
            "The scheduler action to perform."
-           :enum ("status" "list" "actions" "schedule_every" "schedule_daily" "schedule_once" "cancel")
+           :enum ("status" "list" "actions" "schedule_every" "schedule_daily" "schedule_once" "cancel" "persist" "list_unrestorable")
            :required-p t)
    (action-name "string"
                 "Name of the schedulable action to run (use 'actions' to list available). Required for schedule_every, schedule_daily, schedule_once.")
@@ -331,6 +331,21 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
        (if (crichton/skills:cancel-task name)
            (format nil "Cancelled task '~A'." name)
            (format nil "No task found with name '~A'." name)))
+      ((string-equal action "persist")
+       (let ((count (crichton/skills:persist-user-tasks)))
+         (format nil "Persisted ~D user task~:P to encrypted storage." count)))
+      ((string-equal action "list_unrestorable")
+       (let ((tasks (crichton/skills:list-unrestorable-tasks)))
+         (if tasks
+             (with-output-to-string (s)
+               (format s "~D task~:P would be lost on restart (action not registered):~%"
+                       (length tasks))
+               (dolist (t tasks)
+                 (format s "  ~A (action: ~A, kind: ~A)~%"
+                         (getf t :name)
+                         (getf t :action-name)
+                         (getf t :kind))))
+             "All persisted user tasks have registered actions — none would be lost on restart.")))
       (t
        (format nil "Unknown scheduler action: ~A" action)))))
 
