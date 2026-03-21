@@ -23,7 +23,21 @@ This file tracks *user-visible* changes to Crichton across releases.
 
 For development details, see the git commit history and BEADS issue tracker.
 
-* Unreleased (v0.3 development)
+* Unreleased (v0.4 development)
+
+** Added
+
+** Changed
+
+** Fixed
+
+** Deprecated
+
+** Removed
+
+** Security
+
+* v0.3.0 "Skills & Integrations" (2026-03-21)
 
 ** Added
 
