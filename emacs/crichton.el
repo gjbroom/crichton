@@ -55,10 +55,6 @@ sent by the daemon."
   :type 'integer
   :group 'crichton)
 
-(defcustom crichton-reconnect-delay 5
-  "Seconds to wait before attempting reconnection."
-  :type 'integer
-  :group 'crichton)
 
 ;;;; Internal state
 
@@ -103,10 +99,10 @@ sent by the daemon."
   "Send a request with OP and additional FIELDS (plist).
 Returns the correlation ID."
   (let* ((id (crichton--next-id))
-         (msg `((id . ,id) (op . ,op))))
+         (extra nil))
     (while fields
-      (push (cons (pop fields) (pop fields)) msg))
-    (crichton--send (nreverse msg))
+      (push (cons (pop fields) (pop fields)) extra))
+    (crichton--send `((id . ,id) (op . ,op) ,@(nreverse extra)))
     id))
 
 (defun crichton--send-request-with-callback (op callback &rest fields)
@@ -363,24 +359,30 @@ Built on `comint-mode' — use \\[comint-send-input] to send,
 Execute the requested function if it is in `crichton-allowed-functions',
 then send the result back."
   (let* ((id (alist-get 'id msg))
-         (func-name (intern (alist-get 'function msg)))
+         (func-sym (alist-get 'function msg))
          (args (alist-get 'args msg)))
-    (if (memq func-name crichton-allowed-functions)
-        (condition-case err
-            (let ((result (apply func-name (append args nil))))
-              (crichton--send `((id . ,id)
-                                (op . "emacs_result")
-                                (result . ,result))))
-          (error
-           (crichton--send `((id . ,id)
-                              (op . "emacs_result")
-                              (error . ((code . "elisp_error")
-                                        (message . ,(error-message-string err))))))))
-      (crichton--send `((id . ,id)
-                         (op . "emacs_result")
-                         (error . ((code . "not_allowed")
-                                   (message . ,(format "Function %s not in allowlist"
-                                                       func-name)))))))))
+    (if (null func-sym)
+        (crichton--send `((id . ,id)
+                           (op . "emacs_result")
+                           (error . ((code . "bad_request")
+                                     (message . "Missing function field")))))
+      (let ((func-name (intern func-sym)))
+        (if (memq func-name crichton-allowed-functions)
+            (condition-case err
+                (let ((result (apply func-name (append args nil))))
+                  (crichton--send `((id . ,id)
+                                    (op . "emacs_result")
+                                    (result . ,result))))
+              (error
+               (crichton--send `((id . ,id)
+                                  (op . "emacs_result")
+                                  (error . ((code . "elisp_error")
+                                            (message . ,(error-message-string err))))))))
+          (crichton--send `((id . ,id)
+                             (op . "emacs_result")
+                             (error . ((code . "not_allowed")
+                                       (message . ,(format "Function %s not in allowlist"
+                                                           func-name)))))))))))))
 
 ;;;; Convenience commands
 
