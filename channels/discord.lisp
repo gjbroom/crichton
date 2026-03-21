@@ -176,12 +176,23 @@ Store it with: (crichton/credentials:store-credential \"discord-bot-token\" '(:t
 
 ;;; --- MESSAGE_CREATE predicates ---
 
+(defun discord-user-authorized-p (author-id)
+  "Return T if AUTHOR-ID is authorized to use the bot.
+   Reads [discord] allowed_user_ids from config.  An empty or absent list
+   means all users are allowed (open access, default)."
+  (let ((allowed (crichton/config:config-section-get :discord :allowed-user-ids)))
+    (or (null allowed)
+        (zerop (length allowed))
+        (member author-id allowed :test #'string=))))
+
 (defun ignore-message-p (data channel)
-  "Return T if the message should be silently ignored (bot or self)."
+  "Return T if the message should be silently ignored (bot, self, or unauthorized)."
   (let* ((author (hg data "author"))
          (is-bot (when author (gethash "bot" author)))
          (author-id (when author (gethash "id" author))))
-    (or is-bot (equal author-id (bot-user-id channel)))))
+    (or is-bot
+        (equal author-id (bot-user-id channel))
+        (and author-id (not (discord-user-authorized-p author-id))))))
 
 (defun should-respond-p (data channel)
   "Return T if the bot should respond: DM or @mention in a guild channel."

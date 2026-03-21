@@ -109,6 +109,7 @@
         :credentials (list :backend :auto)
         :network (list :egress-policy :deny-all)
         :weather (list :city "Victoria")
+        :discord (list :allowed-user-ids nil)
         :amp (list :enable nil
                    :allowed-repo-roots nil)
         :state (list :enabled t
