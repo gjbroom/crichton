@@ -1,0 +1,344 @@
+#+TITLE: Code Review: Org-Mode Skill and Emacs Integration
+#+DATE: 2026-03-21
+#+AUTHOR: Claude Code
+#+STARTUP: content
+
+* Overview
+
+Review of the org-mode skill (~skills/builtins/orgmode.lisp~) and the Emacs
+client integration (~emacs/crichton.el~), added across commits ~7cc05dd~
+through ~687e475~.  The implementation is substantial and generally
+well-structured, with good security fundamentals (path allowlist, write lock,
+SQL parameterisation, Emacs function allowlist).  Several correctness bugs were
+found, along with style issues worth addressing.
+
+Severity levels: *BUG* (incorrect behaviour), *STYLE* (maintainability /
+code-quality), *SECURITY* (information-exposure or safety concern).
+
+* Bugs
+
+** BUG: ~org-roam-list-tags~ leaks tags from outside allowed paths
+
+~skills/builtins/orgmode.lisp:676~
+
+The function fetches all distinct tags from the database and then collects
+them into a flat list of tag name strings — without ever filtering by allowed
+paths.  The comment /"Filter: only include tags from nodes under allowed
+paths"/ is aspirational but the implementation does not perform this check.
+
+#+begin_src lisp
+(defun org-roam-list-tags ()
+  (with-org-roam-db (db)
+    (let* ((sql "SELECT DISTINCT t.tag FROM tags t JOIN nodes n ON ...")
+           ...)
+      (unwind-protect
+           (let ((all-tags (%om-sql-rows-to-plists stmt '("tag"))))
+             (let ((tag-names nil))
+               (dolist (row all-tags)
+                 (pushnew (getf row :tag) tag-names :test #'string-equal))
+               ;; ← no path check here; all tags leak through
+               (sort tag-names #'string<)))))))
+#+end_src
+
+If the org-roam database contains notes from directories /outside/ the
+configured ~allowed_paths~, their tags are still exposed.  A user could infer
+the existence and topic of private notes from tag names alone.
+
+*Fix*: join ~nodes~ to ~files~ and filter on path before collecting tags, or
+reuse ~%om-filter-by-allowed-paths~ on the full node+tag rows.
+
+** BUG: Dedup key mismatch in ~orgmode-list-todos~
+
+~skills/builtins/orgmode.lisp:1154~
+
+When merging DB results with file-scan results, the seen-set is populated with
+DB result keys ~(cons :file :title)~, but checked against file-scan result
+keys ~(cons :file :headline)~.
+
+#+begin_src lisp
+;; Building seen set from DB results:
+(dolist (r db-results)
+  (setf (gethash (cons (getf r :file) (getf r :title)) seen) t))
+
+;; Checking file-scan results (uses :headline, not :title):
+(remove-if (lambda (r)
+             (gethash (cons (getf r :file) (getf r :headline)) seen))
+           file-results)
+#+end_src
+
+DB rows use ~:title~ (the org-roam node title), while file-scan rows use
+~:headline~ (the specific headline text).  For file-level nodes these may
+coincide, but for headline-level nodes they differ.  The dedup hash table
+therefore never suppresses a file-scan duplicate: every file-scan result
+passes through, potentially duplicating DB results.
+
+*Fix*: normalise the key on both sides, or always use the headline text as the
+dedup key.
+
+** BUG: Trailing newline stripped on write-back
+
+~skills/builtins/orgmode.lisp:957, 1254~
+
+Both ~orgmode-append~ (headline mode) and ~orgmode-set-todo~ reconstruct the
+file using:
+
+#+begin_src lisp
+(format s "~{~A~^~%~}" lines)
+#+end_src
+
+The ~^~ conditional suppresses the separator /after the last element/, so no
+newline is written at end-of-file.  Well-formed text files end with a newline;
+this silently strips it.  Repeated edits to a file will accumulate this
+corruption, and tools like ~git diff~ will flag the missing newline.
+
+*Fix*: use ~(format s "~{~A~%~}" lines)~ (always emit newline after each
+line), or append ~(terpri s)~ after the loop.
+
+** BUG: Timestamp regex accepts mismatched brackets
+
+~skills/builtins/orgmode.lisp:202~
+
+#+begin_src lisp
+(defparameter *timestamp-re*
+  "([<\\[])([0-9]{4})-...-([0-9]{2})...([>\\]])")
+#+end_src
+
+The opening and closing bracket captures are independent: ~<2026-03-21 Sat]~
+would match as an active timestamp, and ~[2026-03-21 Sat>~ as an inactive one.
+Org-mode requires ~<...>~ for active and ~[...]~ for inactive timestamps.
+
+*Fix*: use two alternations:
+
+#+begin_src lisp
+"(?:<([0-9]{4}-[0-9]{2}-[0-9]{2})\\s+\\w+(?:\\s+[0-9]{1,2}:[0-9]{2})?(?:\\s+[.+]+[0-9]+[hdwmy])?>|\\[([0-9]{4}-[0-9]{2}-[0-9]{2})\\s+\\w+(?:\\s+[0-9]{1,2}:[0-9]{2})?(?:\\s+[.+]+[0-9]+[hdwmy])?\\])"
+#+end_src
+
+Or simplify by using two separate scanners.
+
+** BUG: ID link extraction double-scans each match
+
+~skills/builtins/orgmode.lisp:496~
+
+#+begin_src lisp
+(cl-ppcre:do-matches-as-strings (match *id-link-re* text)
+  (multiple-value-bind (m regs)
+      (cl-ppcre:scan-to-strings *id-link-re* match)
+    ...))
+#+end_src
+
+~do-matches-as-strings~ already gives the full match string; ~scan-to-strings~
+then re-runs the same regex on that string to capture groups.  This scans
+every link twice and is unnecessary complexity.
+
+*Fix*: use ~cl-ppcre:do-scans~ to capture group positions in a single pass,
+or restructure with ~cl-ppcre:all-matches-as-strings~ paired with a
+group-capturing alternative.
+
+** BUG: ~orgmode-list-files~ doesn't guard ~truename~ call
+
+~skills/builtins/orgmode.lisp:973~
+
+#+begin_src lisp
+(defun orgmode-list-files (&key root (limit 200))
+  (let ((roots (if root
+                   (if (orgmode-path-allowed-p
+                        (namestring (truename root)))  ; ← can signal error
+                       ...))))
+#+end_src
+
+If ~root~ is supplied as a config-provided string that no longer exists,
+~truename~ signals a ~file-error~ rather than returning ~nil~.  All other path
+validation helpers (~%om-validate-path~, ~%om-canonical-dir~) wrap ~truename~
+in ~handler-case~, but this call site does not.
+
+*Fix*: wrap in ~handler-case~ as done elsewhere, or call ~%om-canonical-dir~
+instead.
+
+* Security
+
+** SECURITY: ~org-roam-list-tags~ tag-name leakage (see Bugs section)
+
+Covered above.  File this as a security finding as well as a correctness bug
+because it is a deliberate security boundary violation: the allowlist is meant
+to limit what information is exposed, and this function bypasses that
+constraint.
+
+* Style / Code Quality
+
+** STYLE: ~*todo-keywords*~ defparameter is never used
+
+~skills/builtins/orgmode.lisp:167~
+
+#+begin_src lisp
+(defparameter *todo-keywords*
+  '("TODO" "DONE" "NEXT" "WAITING" "CANCELLED" "SOMEDAY")
+  "Recognised TODO keywords.")
+#+end_src
+
+This is defined but referenced nowhere.  The headline regex hardcodes the same
+list as a literal alternation; ~%om-active-todo-keywords~ and
+~%om-done-keywords~ each define their own lists from config.  The three
+keyword sources can easily diverge.
+
+*Fix*: either remove the dead parameter, or use it as the source of truth to
+generate the regex alternation and the default config fallback lists.
+
+** STYLE: ~orgmode-set-todo~ reads the file twice under the lock
+
+~skills/builtins/orgmode.lisp:1189~
+
+#+begin_src lisp
+(bt:with-lock-held (*orgmode-write-lock*)
+  (let* ((text (uiop:read-file-string canonical))          ; ← read 1
+         (lines (cl-ppcre:split "\\n" text))
+         ...
+         (doc (parse-org-file canonical))                   ; ← read 2 (inside parse-org-file)
+#+end_src
+
+~parse-org-file~ opens and reads the file itself (~uiop:read-file-string~
+internally).  The ~text~ and ~lines~ bindings above are redundant: ~doc~ holds
+~:raw-text~ already (the same content), and the lines vector can be derived
+from it.
+
+*Fix*: call ~(parse-org-file canonical)~ first and derive lines from
+~(doc-raw-text doc)~, eliminating the separate ~uiop:read-file-string~ call.
+
+** STYLE: Loop counter mutation inside ~loop for i~
+
+~skills/builtins/orgmode.lisp:387, 426, 447~
+
+#+begin_src lisp
+(loop for i from 0 below (length lines)
+      for line = (aref lines i)
+      do (cond
+           ...
+           ((multiple-value-bind (match regs) (cl-ppcre:scan-to-strings *src-block-begin-re* line)
+              (when match
+                ...
+                (setf i j)   ; ← mutates loop counter
+                t)))
+           ((cl-ppcre:scan *table-row-re* line)
+            ...
+            (setf i end-idx))))
+#+end_src
+
+Mutating a ~loop for~ iteration variable is legal in SBCL (the incremented
+value feeds the next iteration) but is unusual, hard to reason about, and not
+portable across all CL implementations.
+
+*Fix*: replace with a ~do~ loop or a labelled ~loop~ that advances ~i~
+explicitly:
+
+#+begin_src lisp
+(let ((i 0))
+  (loop while (< i (length lines))
+        for line = (aref lines i)
+        do ...
+        do (incf i)))
+#+end_src
+
+** STYLE: ~crichton--dispatch~ double-dispatches responses
+
+~emacs/crichton.el:144~
+
+#+begin_src elisp
+;; Response to a request we made (has 'ok' field)
+((and id (not (eq ok :json-null)) (not (null (assq 'ok msg))))
+ (let ((callback (gethash id crichton--pending-requests)))
+   (when callback
+     (remhash id crichton--pending-requests)
+     (funcall callback msg))
+   ;; Also route to streaming handlers
+   (crichton--handle-response msg)))   ; ← always called even when callback ran
+#+end_src
+
+~crichton--handle-response~ is called unconditionally after the registered
+callback.  The fallback handler guards on ~(not crichton--streaming-buffer)~,
+but it also inserts text into the chat buffer for any response that has a
+~:text~ result field.  Non-chat requests (ping, status) don't have such
+fields, so in practice it's benign; but any future request that returns a
+~:text~ field would produce spurious chat output.
+
+*Fix*: call ~crichton--handle-response~ only when no callback was registered,
+or remove it from this branch and route explicitly.
+
+** STYLE: ~crichton-new-session~ is client-only
+
+~emacs/crichton.el:387~
+
+#+begin_src elisp
+(defun crichton-new-session ()
+  "Start a new chat session."
+  (interactive)
+  (setq crichton--session-id nil)
+  (message "Crichton: new session started"))
+#+end_src
+
+This clears the local session ID but sends nothing to the daemon.  The next
+chat message will carry a nil ~session_id~; whether the daemon treats that as
+"new session" or as an error is not documented here.  If nil is not a valid
+session ID sentinel in the RPC protocol, this will silently fail.
+
+*Fix*: either send an explicit ~"new_session"~ op, or at minimum add a docstring
+clarification about the nil-session-ID contract.
+
+** STYLE: Planning line fires inside code blocks
+
+~skills/builtins/orgmode.lisp:466~
+
+The planning line check runs for every line in the document:
+
+#+begin_src lisp
+((and current-headline
+      (cl-ppcre:scan "^\\s*(?:SCHEDULED|DEADLINE|CLOSED):" line))
+ ...)
+#+end_src
+
+It does not check whether we are currently inside a ~#+BEGIN_SRC~ / ~#+END_SRC~
+block.  A code listing that contains the string ~SCHEDULED: <...>~ would
+incorrectly populate the enclosing headline's ~:scheduled~ slot.
+
+The source block parser does set ~i~ to skip to ~END_SRC~, but the planning
+check runs in the ~do~ clause of the same ~cond~ (before the ~setf i j~
+happens) only if no earlier ~cond~ clause matched.  Because ~*src-block-begin-re*~
+is checked before the planning-line branch, the /begin/ line itself is handled
+correctly.  However, once inside a src block the inner loop at line 426-430
+consumes lines until ~END_SRC~, so content lines do not reach the outer ~cond~.
+The bug only fires on the ~END_SRC~ line and any line /between/ src blocks that
+happens to look like a planning line — an edge case, but worth noting.
+
+*Fix*: track a boolean ~in-src-block~ and guard the planning-line branch.
+
+* Summary Table
+
+| # | File                         | Line | Severity | Title                                              |
+|---+------------------------------+------+----------+----------------------------------------------------|
+| 1 | skills/builtins/orgmode.lisp |  676 | BUG+SEC  | ~org-roam-list-tags~ leaks tags outside allowlist |
+| 2 | skills/builtins/orgmode.lisp | 1154 | BUG      | Dedup key mismatch in ~orgmode-list-todos~         |
+| 3 | skills/builtins/orgmode.lisp |  957 | BUG      | Trailing newline stripped on write-back            |
+| 4 | skills/builtins/orgmode.lisp |  202 | BUG      | Timestamp regex accepts mismatched brackets        |
+| 5 | skills/builtins/orgmode.lisp |  496 | BUG      | ID link extraction double-scans each match         |
+| 6 | skills/builtins/orgmode.lisp |  973 | BUG      | ~orgmode-list-files~ unguarded ~truename~ call     |
+| 7 | skills/builtins/orgmode.lisp |  167 | STYLE    | ~*todo-keywords*~ defparameter is never used       |
+| 8 | skills/builtins/orgmode.lisp | 1189 | STYLE    | ~orgmode-set-todo~ reads file twice under lock     |
+| 9 | skills/builtins/orgmode.lisp |  387 | STYLE    | Loop counter mutation inside ~loop for~            |
+|10 | emacs/crichton.el            |  144 | STYLE    | Dispatch double-routes responses                   |
+|11 | emacs/crichton.el            |  387 | STYLE    | ~crichton-new-session~ is client-only              |
+|12 | skills/builtins/orgmode.lisp |  466 | STYLE    | Planning-line check can fire inside code blocks    |
+
+* Positive Notes
+
+- Path allowlist enforcement is thorough and consistently applied: every public
+  function calls ~%om-validate-enabled~ and ~%om-validate-path~ or
+  ~%om-validate-new-path~; new-file creation validates the parent directory.
+- Write operations are serialised with ~*orgmode-write-lock*~.
+- All SQL queries use prepared statements with parameter binding — no
+  string-interpolated SQL.
+- The Emacs client uses a strict function allowlist for ~emacs_invoke~ with no
+  ~eval~ path.
+- ~org-files-under~ tracks visited directories via truename to avoid infinite
+  loops from symlink cycles.
+- ~parse-org-preamble~ caps at 50 lines to avoid reading large files for
+  metadata-only queries.
+- The ~unwind-protect~ pattern is consistently used around SQLite statement
+  finalisation.
