@@ -337,8 +337,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
     (with-open-file (s path :direction :input :if-does-not-exist nil)
       (when s
         (loop for line = (read-line s nil nil)
-              for line-num from 1
-              while (and line (< line-num 50))
+              while line
               do (cond
                    ;; Property drawer
                    ((cl-ppcre:scan *property-drawer-start-re* line)
@@ -375,10 +374,11 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
 
 ;;; --- Full parse ---
 
-(defun parse-org-file (path)
+(defun parse-org-file (path &key text)
   "Parse an org file into an org-document instance.
-   Returns the org-document."
-  (let* ((text (uiop:read-file-string path))
+   TEXT may be supplied to avoid a second disk read when the caller
+   already holds the file contents.  Returns the org-document."
+  (let* ((text (or text (uiop:read-file-string path)))
          (lines (coerce (cl-ppcre:split "\\n" text) 'vector))
          (title nil) (file-id nil) (filetags nil)
          (headlines nil) (links nil) (tables nil) (src-blocks nil)
@@ -1016,7 +1016,10 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
           (let* ((conditions (list "n.todo IS NOT NULL"))
                  (params nil)
                  (param-idx 0))
-            (unless include-done
+            (unless (or include-done state)
+              ;; Skip the exclusion when state is explicit — the equality
+              ;; filter below is already restrictive, and combining both
+              ;; would produce a contradiction for done-state queries.
               (let ((done (%om-done-keywords)))
                 (push (format nil "n.todo NOT IN (~{?~^, ~})"
                               (make-list (length done) :initial-element nil))
@@ -1189,7 +1192,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
         (let* ((text (uiop:read-file-string canonical))
                (lines (cl-ppcre:split "\\n" text))
                (lines-vec (coerce lines 'vector))
-               (doc (parse-org-file canonical))
+               (doc (parse-org-file canonical :text text))
                (target (find headline (doc-headlines doc)
                              :key #'headline-title
                              :test #'string-equal)))
