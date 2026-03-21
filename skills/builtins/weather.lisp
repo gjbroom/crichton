@@ -17,8 +17,22 @@
   "https://api.weather.gc.ca/collections/citypageweather-realtime/items"
   "Base URL for the MSC citypageweather-realtime OGC API.")
 
+(defparameter *weather-api-host* "api.weather.gc.ca"
+  "Host for egress policy checking.")
+
 (defparameter *weather-default-city* "Victoria"
   "Default city for weather queries. Override via config [weather] city.")
+
+(defun check-weather-egress ()
+  "Signal an error if the network egress policy prohibits the weather API host.
+   Checks [network] allowed_builtin_http_domains in config.  If the list is absent,
+   no restriction applies (built-ins are TCB-trusted).  If set, the weather host
+   must appear in it."
+  (let ((allowed (crichton/config:config-section-get :network :allowed-builtin-http-domains)))
+    (when (and allowed
+               (not (member *weather-api-host* allowed :test #'string-equal)))
+      (error "Egress denied: ~A not in [network] allowed_builtin_http_domains"
+             *weather-api-host*))))
 
 ;;; --- API access ---
 
@@ -43,6 +57,7 @@
 (defun fetch-weather-json (city-query)
   "Fetch weather data for CITY-QUERY from api.weather.gc.ca.
    Returns the parsed JSON as nested hash-tables/vectors, or signals an error."
+  (check-weather-egress)
   (let ((url (weather-api-url city-query)))
     (log:info "Fetching weather for ~S from ~A" city-query *weather-api-base*)
     (handler-case
