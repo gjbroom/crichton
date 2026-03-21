@@ -676,20 +676,18 @@
 (defun org-roam-list-tags ()
   "Return all distinct tags from nodes under allowed paths."
   (with-org-roam-db (db)
-    (let* ((sql "SELECT DISTINCT t.tag
+    (let* ((sql "SELECT DISTINCT t.tag, n.file
                  FROM tags t
                  JOIN nodes n ON n.id = t.node_id
                  ORDER BY t.tag")
            (stmt (sqlite:prepare-statement db sql)))
       (unwind-protect
-           (let ((all-tags (%om-sql-rows-to-plists stmt '("tag"))))
-             ;; Filter: only include tags from nodes under allowed paths
-             ;; For efficiency, get the full node+tag list
-             (let ((tag-names nil))
-               (dolist (row all-tags)
-                 (pushnew (getf row :tag) tag-names :test #'string-equal))
-               ;; Return as simple list of strings
-               (sort tag-names #'string<)))
+           (let* ((rows (%om-sql-rows-to-plists stmt '("tag" "file")))
+                  (allowed (%om-filter-by-allowed-paths rows))
+                  (tag-names nil))
+             (dolist (row allowed)
+               (pushnew (getf row :tag) tag-names :test #'string-equal))
+             (sort tag-names #'string<))
         (sqlite:finalize-statement stmt)))))
 
 (defun org-roam-node-by-id (node-id)
