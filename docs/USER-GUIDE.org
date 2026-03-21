@@ -1,0 +1,1287 @@
+#+TITLE: Crichton User Guide
+#+AUTHOR: Gordon J. Broom
+#+DATE: 2026-03-21
+#+STARTUP: content
+#+TOC: headlines 2
+#+OPTIONS: ':t
+
+* Introduction
+
+Crichton is a personal AI agent daemon that runs quietly in the background on
+your Linux machine.  You chat with it through a terminal, a TUI client, or
+Emacs; it answers questions, monitors your environment, manages bookmarks, and
+can delegate coding tasks to the Amp CLI agent.
+
+What makes Crichton different from a simple chatbot wrapper:
+
+- *Skills* — built-in and third-party capabilities wired directly into the LLM
+  conversation (weather, RSS feeds, battery monitoring, home automation, etc.)
+- *Encrypted credentials* — API keys stored on disk using =age= encryption, never
+  in plain text
+- *WASM sandbox* — third-party skill code runs in a WebAssembly sandbox with no
+  network or filesystem access unless explicitly granted
+- *Persistent memory* — sessions, scheduled tasks, and feed monitors survive
+  daemon restarts
+- *Streaming responses* — the TUI and Emacs client show the LLM response as it
+  arrives, word by word
+
+This guide is for someone comfortable at the Linux terminal who wants to install
+and use Crichton.  You do not need to know Common Lisp to use it.
+
+* Prerequisites
+
+Before installing Crichton, you need the following on your system.
+
+** Required
+
+- *SBCL* (Steel Bank Common Lisp) — the Lisp runtime Crichton runs on.
+
+  #+begin_src bash
+  # Debian/Ubuntu
+  sudo apt install sbcl
+
+  # Fedora/RHEL
+  sudo dnf install sbcl
+
+  # Arch
+  sudo pacman -S sbcl
+  #+end_src
+
+- *age* — the encryption tool used to protect credentials and sessions.
+
+  #+begin_src bash
+  # Debian/Ubuntu (Debian 12+, Ubuntu 22.04+)
+  sudo apt install age
+
+  # Or install from source / GitHub releases:
+  # https://github.com/FiloSottile/age/releases
+  #+end_src
+
+- *systemd* (user session) — Crichton runs as a systemd user service.  This is
+  standard on most modern Linux desktops and servers.
+
+- *An Anthropic API key* — Crichton uses Claude as its LLM.  Sign up at
+  https://console.anthropic.com/ and create an API key.
+
+** Optional (for specific skills)
+
+- A *Pushover* account and app token (for push notifications)
+- A *GitHub* personal access token (for GitHub integration)
+- A *Raindrop.io* OAuth2 test token (for bookmark management)
+- A *HOOBS* hub on your local network (for home automation)
+- *Amp CLI* installed and on =PATH= (for coding orchestration)
+
+* Installation
+
+** 1. Get the code
+
+#+begin_src bash
+git clone https://github.com/gjbroom/crichton.git ~/devel/crichton
+#+end_src
+
+** 2. Build the client binary
+
+The daemon itself is loaded fresh by systemd on each start — no binary needed
+for the daemon.  But the command-line and TUI clients are compiled to standalone
+executables so they start instantly.
+
+Build the CLI client:
+
+#+begin_src bash
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/home/YOUR_USERNAME/devel/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton-client)' \
+  --eval "(sb-ext:save-lisp-and-die \"/home/YOUR_USERNAME/devel/crichton/crichton-client\" \
+            :toplevel #'crichton-client:main :executable t :compression t)"
+#+end_src
+
+Replace =YOUR_USERNAME= with your actual username.
+
+Build the TUI client:
+
+#+begin_src bash
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/home/YOUR_USERNAME/devel/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton-tui)' \
+  --eval "(sb-ext:save-lisp-and-die \"/home/YOUR_USERNAME/devel/crichton/crichton-tui\" \
+            :toplevel #'crichton-tui:main :executable t :compression t)"
+#+end_src
+
+Each build takes a few minutes the first time while SBCL compiles dependencies.
+
+** 3. Symlink the binaries
+
+Put the binaries on your PATH:
+
+#+begin_src bash
+mkdir -p ~/bin
+ln -sf ~/devel/crichton/crichton-client ~/bin/crichton-client
+ln -sf ~/devel/crichton/crichton-tui    ~/bin/crichton-tui
+#+end_src
+
+Make sure =~/bin= is on your =PATH=.  Add this to your =~/.bashrc= or
+=~/.zshrc= if needed:
+
+#+begin_src bash
+export PATH="$HOME/bin:$PATH"
+#+end_src
+
+** 4. Create the config directory
+
+#+begin_src bash
+mkdir -p ~/.crichton/logs
+mkdir -p ~/.crichton/credentials
+mkdir -p ~/.crichton/sessions
+mkdir -p ~/.crichton/skills
+#+end_src
+
+** 5. Write a minimal config.toml
+
+Create =~/.crichton/config.toml= with your basic settings:
+
+#+begin_src toml
+[llm]
+provider = "anthropic"
+model = "claude-sonnet-4-20250514"
+api_key_credential = "anthropic-api-key"
+
+[weather]
+city = "Victoria"
+
+[network]
+egress_policy = "deny-all"
+#+end_src
+
+The =api_key_credential= value is the name of the credential entry you will
+store in the next step.  You can leave it as =anthropic-api-key=.
+
+** 6. Store your Anthropic API key
+
+Crichton stores secrets using =age= encryption — your API key is never saved
+in plain text.  To store it, you use the Lisp REPL directly:
+
+#+begin_src bash
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/home/YOUR_USERNAME/devel/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton)' \
+  --eval "(crichton/credentials:store-credential
+           \"anthropic-api-key\"
+           (list :key \"sk-ant-YOUR-KEY-HERE\"))" \
+  --eval '(sb-ext:exit)'
+#+end_src
+
+Replace =sk-ant-YOUR-KEY-HERE= with your actual Anthropic API key.
+
+To verify the credential was stored:
+
+#+begin_src bash
+ls ~/.crichton/credentials/
+# Should show: anthropic-api-key.age
+#+end_src
+
+** 7. Install the systemd service
+
+Edit =assets/crichton.service= to use your actual home directory and crichton
+source path:
+
+#+begin_src bash
+cp ~/devel/crichton/assets/crichton.service ~/.config/systemd/user/
+#+end_src
+
+Open =~/.config/systemd/user/crichton.service= in your editor and update:
+
+- =Environment=HOME==  — change to your actual home directory
+- The path in =--eval "(push #p\"/home/gjbroom/devel/crichton/\" ..."= —
+  change to your actual crichton source path
+
+The file should look like this after editing (with your paths):
+
+#+begin_src ini
+[Unit]
+Description=Crichton AI Agent Daemon
+After=network.target
+
+[Service]
+Type=simple
+Environment=HOME=/home/YOUR_USERNAME
+ExecStart=/usr/bin/sbcl --noinform --non-interactive \
+  --eval "(require :asdf)" \
+  --eval "(push #p\"/home/YOUR_USERNAME/devel/crichton/\" asdf:*central-registry*)" \
+  --eval "(asdf:load-system :crichton)" \
+  --eval "(crichton/daemon:start-daemon :foreground t)"
+ExecStop=/bin/kill -SIGTERM $MAINPID
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+#+end_src
+
+Enable and start the daemon:
+
+#+begin_src bash
+systemctl --user daemon-reload
+systemctl --user enable crichton
+systemctl --user start crichton
+#+end_src
+
+The first start takes a minute or two while SBCL compiles the system.
+Subsequent starts are faster.
+
+** 8. Verify the installation
+
+#+begin_src bash
+# Check daemon status
+systemctl --user status crichton
+
+# Send a test message
+crichton-client "Hello, are you there?"
+#+end_src
+
+You should see a response from the AI in a few seconds.
+
+If something goes wrong, check the logs:
+
+#+begin_src bash
+journalctl --user -u crichton -f
+#+end_src
+
+* Configuration
+
+All configuration lives in =~/.crichton/config.toml=.  The daemon reads it at
+startup.  Most settings can be changed without restarting by asking the agent:
+"Please reload your configuration."
+
+** Complete config.toml reference
+
+#+begin_src toml
+# -----------------------------------------------------------------------
+# [llm] — Language model settings
+# -----------------------------------------------------------------------
+[llm]
+# LLM provider. Currently only "anthropic" is supported.
+# Default: "anthropic"
+provider = "anthropic"
+
+# Model to use. See Anthropic docs for available models.
+# Default: "claude-sonnet-4-20250514"
+model = "claude-sonnet-4-20250514"
+
+# Name of the credential entry holding the API key.
+# The credential must be stored separately (see Storing Credentials).
+# Default: "anthropic-api-key"
+api_key_credential = "anthropic-api-key"
+
+# -----------------------------------------------------------------------
+# [daemon] — Daemon process settings
+# -----------------------------------------------------------------------
+[daemon]
+# Port for the SLIME/SLY Lisp debugger. Developers only.
+# Default: 4005
+swank_port = 4005
+
+# -----------------------------------------------------------------------
+# [sessions] — Chat session storage
+# -----------------------------------------------------------------------
+[sessions]
+# How many days to retain old sessions before purging.
+# Default: 30
+retention_days = 30
+
+# Whether to encrypt session files on disk.
+# Default: true
+encrypt = true
+
+# -----------------------------------------------------------------------
+# [credentials] — Credential store backend
+# -----------------------------------------------------------------------
+[credentials]
+# Storage backend. "auto" uses age-encrypted files (works everywhere).
+# Default: "auto"
+backend = "auto"
+
+# -----------------------------------------------------------------------
+# [network] — Network egress policy
+# -----------------------------------------------------------------------
+[network]
+# Controls outbound HTTP from built-in skills.
+# "deny-all" blocks all built-in HTTP (you must list domains explicitly).
+# "allow-all" allows all built-in HTTP (use with care).
+# Default: "deny-all"
+egress_policy = "deny-all"
+
+# Specific domains that built-in skills may contact.
+# Only needed if egress_policy = "deny-all".
+# Examples:
+# allowed_builtin_http_domains = ["api.weather.gc.ca", "api.pushover.net"]
+
+# -----------------------------------------------------------------------
+# [logging] — Log output settings
+# -----------------------------------------------------------------------
+[logging]
+# Log level: "debug", "info", "warn", "error"
+# Default: "info"
+level = "info"
+
+# Log format: "json" (structured JSONL)
+# Default: "json"
+format = "json"
+
+# -----------------------------------------------------------------------
+# [weather] — Weather skill settings
+# -----------------------------------------------------------------------
+[weather]
+# Default city for weather queries (Canada only — uses Environment Canada API).
+# Override per-query by asking "What's the weather in Ottawa?"
+# Default: "Victoria"
+city = "Victoria"
+
+# -----------------------------------------------------------------------
+# [battery] — Battery monitoring settings
+# -----------------------------------------------------------------------
+[battery]
+# Alert thresholds (percentages). An alert fires when battery drops to or
+# below each threshold for the first time.
+# Default: [20, 10, 5]
+thresholds = [20, 10, 5]
+
+# -----------------------------------------------------------------------
+# [orgmode] — Org-mode skill settings (disabled by default)
+# -----------------------------------------------------------------------
+[orgmode]
+# Enable the org-mode skill. Requires allowed_paths to be set.
+# Default: false
+enable = false
+
+# Directories the agent may read/write org files in.
+# An empty list means deny all. There is no default — you must set this.
+# Example:
+# allowed_paths = ["/home/YOU/org", "/home/YOU/notes"]
+allowed_paths = []
+
+# Path to your org-roam SQLite database (for search/backlinks).
+# Default: ~/.emacs.d/org-roam.db
+# db_path = "/home/YOU/.emacs.d/org-roam.db"
+
+# -----------------------------------------------------------------------
+# [amp] — Amp CLI coding orchestration (disabled by default)
+# -----------------------------------------------------------------------
+[amp]
+# Enable the Amp orchestration skill. Requires the amp CLI on PATH
+# and an API key stored as the "amp-api" credential.
+# Default: false
+enable = false
+
+# Directories Amp may operate in. An empty list means no restriction
+# (not recommended for production use).
+# Example:
+# allowed_repo_roots = ["/home/YOU/devel"]
+allowed_repo_roots = []
+
+# -----------------------------------------------------------------------
+# [hoobs] — HOOBS home automation (optional)
+# -----------------------------------------------------------------------
+[hoobs]
+# HOOBS hub host. Can also be set in the "hoobs" credential.
+# host = "192.168.1.10"
+
+# HOOBS hub port (default: 80).
+# port = 80
+
+# Whether to allow the agent to change device states (default: false).
+# Set to true to enable commands like "turn off the living room lights".
+allow_control = false
+
+# -----------------------------------------------------------------------
+# [state] — Agent memory/journal settings
+# -----------------------------------------------------------------------
+[state]
+# Enable the agent's memory and journal system.
+# Default: true
+enabled = true
+
+# Maximum characters per journal file.
+# Default: 20000
+max_file_chars = 20000
+
+# Maximum total characters across all state files.
+# Default: 150000
+max_total_chars = 150000
+#+end_src
+
+** Hot-reloading configuration
+
+Most configuration changes take effect without a daemon restart.  Ask the
+agent:
+
+#+begin_example
+Please reload your configuration.
+#+end_example
+
+Settings that *cannot* be changed at runtime without a restart:
+- =daemon.swank_port=
+- =daemon.pid_file= location
+
+* Storing Credentials
+
+Credentials are stored in age-encrypted files under =~/.crichton/credentials/=.
+Each credential is a named bundle of key-value fields (e.g., a token, username,
+and password together).
+
+** How to store a credential
+
+Use SBCL directly from the command line.  This is a one-time setup step per
+integration.
+
+The general pattern is:
+
+#+begin_src bash
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/home/YOUR_USERNAME/devel/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton)' \
+  --eval '(STORE-CREDENTIAL-CALL-HERE)' \
+  --eval '(sb-ext:exit)'
+#+end_src
+
+Specific credential commands for each integration are listed in the Built-in
+Skills section below.
+
+** Listing stored credentials
+
+#+begin_src bash
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/home/YOUR_USERNAME/devel/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton)' \
+  --eval '(print (crichton/credentials:list-credentials))' \
+  --eval '(sb-ext:exit)'
+#+end_src
+
+** Updating a credential
+
+Add =:overwrite t= to replace an existing credential:
+
+#+begin_src lisp
+(crichton/credentials:store-credential
+ "credential-name"
+ (list :field "new-value")
+ :overwrite t)
+#+end_src
+
+* Using the Clients
+
+** crichton-client (CLI)
+
+The CLI client is the simplest way to talk to Crichton.
+
+*** Single-shot mode
+
+Pass your message as a command-line argument:
+
+#+begin_src bash
+crichton-client "What's the weather like?"
+crichton-client "How much battery do I have left?"
+crichton-client "Summarize what's new in my RSS feeds"
+#+end_src
+
+*** Interactive mode
+
+Run without arguments for a readline-powered prompt:
+
+#+begin_src bash
+crichton-client
+#+end_src
+
+You will see a =>=  prompt.  Type your message and press Enter.  The session
+continues until you type =:quit= (or =:q=, or =:exit=), or press Ctrl-D.
+
+Command history is saved across sessions in =~/.crichton/history= (up to 1000
+entries).  Use the Up/Down arrows to navigate history, and the standard Emacs
+line-editing keys (Ctrl-A for start-of-line, Ctrl-E for end-of-line,
+Ctrl-K to delete to end, etc.).
+
+*** Daemon management
+
+#+begin_src bash
+systemctl --user start crichton    # start the daemon
+systemctl --user stop crichton     # stop the daemon
+systemctl --user restart crichton  # restart (needed after config changes to swank_port)
+systemctl --user status crichton   # check if it's running
+journalctl --user -u crichton -f   # follow the live logs
+#+end_src
+
+** crichton-tui (Terminal UI)
+
+The TUI client is a full-screen terminal application with a scrollable chat
+history, real-time streaming responses, and push notifications.
+
+#+begin_src bash
+crichton-tui
+#+end_src
+
+*** Keyboard shortcuts
+
+| Key           | Action                                        |
+|---------------+-----------------------------------------------|
+| Enter         | Send message                                  |
+| Ctrl-C        | Press twice to quit (first press arms confirmation) |
+| Ctrl-D        | Quit immediately                              |
+| Ctrl-L        | Refresh/redraw the screen                     |
+| Page Up/Down  | Scroll chat history                           |
+| Home          | Jump to top of history                        |
+| End           | Jump to bottom (most recent)                  |
+| Up/Down       | Navigate visual lines in a multiline input    |
+| Escape        | Dismiss notifications                         |
+
+*** Local commands
+
+Type these at the prompt and press Enter:
+
+| Command          | Description                                         |
+|------------------+-----------------------------------------------------|
+| =:quit= or =:q=  | Exit the TUI                                        |
+| =:clear=         | Clear the chat history display                      |
+| =:new=           | Start a new session (clears history and session ID) |
+| =:session=       | Show the current session ID in the status bar       |
+| =:status=        | Request daemon status                               |
+| =:notifications= | Show notification history in the chat               |
+| =:sixel on/off=  | Enable/disable sixel image rendering                |
+| =:img <path>=    | Display an image file in the chat                   |
+
+*** Push notifications
+
+The TUI automatically subscribes to push notifications from the daemon.
+Battery alerts and RSS feed updates appear as banner overlays between the
+title bar and chat area.  They dismiss automatically after 10 seconds, or
+immediately when you press Escape.
+
+** Emacs Client
+
+The Emacs client provides a comint-based chat buffer with streaming responses,
+push notification display, and bidirectional RPC (the agent can query your
+org-roam database).
+
+*** Setup
+
+Add to your Emacs init file:
+
+#+begin_src emacs-lisp
+(add-to-list 'load-path "/home/YOUR_USERNAME/devel/crichton/emacs")
+(require 'crichton)
+#+end_src
+
+*** Connecting and chatting
+
+#+begin_src text
+M-x crichton-connect    Connect to the running daemon
+M-x crichton-chat       Open the *crichton-chat* buffer
+#+end_src
+
+Type your message at the =❯= prompt and press Enter (=RET=) to send.
+Responses stream in as they arrive; a =[thinking...]= indicator shows while
+the LLM is working.  Previous inputs are navigable with =M-p= / =M-n=
+(comint history).
+
+*** Key bindings in the chat buffer
+
+| Key         | Command                             | Description                                       |
+|-------------+-------------------------------------+---------------------------------------------------|
+| =RET=       | =comint-send-input=                 | Send the current input                            |
+| =M-p=       | =comint-previous-input=             | Previous message in history                       |
+| =M-n=       | =comint-next-input=                 | Next message in history                           |
+| =C-c C-k=   | =crichton-disconnect=               | Disconnect from daemon                            |
+| =C-c C-o=   | =crichton-last-response-to-buffer=  | Pop last response into a new org-mode buffer      |
+| =C-c C-p=   | =crichton-show-process-buffer=      | Show raw streaming buffer (like SLIME's inferior) |
+
+*** Other interactive commands
+
+#+begin_src text
+M-x crichton-disconnect    Disconnect from the daemon
+M-x crichton-ping          Ping the daemon
+M-x crichton-status        Request daemon status
+M-x crichton-new-session   Start a fresh session
+#+end_src
+
+*** Customization
+
+#+begin_src emacs-lisp
+;; Change the socket path if needed (default: ~/.crichton/daemon.sock)
+(setq crichton-socket-path "~/.crichton/daemon.sock")
+
+;; Functions the daemon may call via emacs_invoke RPC (security allowlist)
+(setq crichton-allowed-functions
+      '(org-roam-db-query
+        org-roam-node-list
+        org-roam-tag-completions
+        org-agenda-list
+        org-todo-list))
+#+end_src
+
+* Built-in Skills
+
+Built-in skills are capabilities baked into the daemon itself.  They run
+directly in the daemon process (not in the WASM sandbox) and have access to
+the network via the daemon's egress policy.
+
+You interact with all of them by chatting naturally — the agent decides which
+skills to call based on your message.
+
+** Weather
+
+Fetches current conditions and multi-day forecasts for Canadian cities from
+the Environment Canada MSC GeoMet API.
+
+*Configuration* (=~/.crichton/config.toml=):
+
+#+begin_src toml
+[weather]
+city = "Victoria"   # Default city; override per-query by naming a city
+#+end_src
+
+*Network* — requires =api.weather.gc.ca= in =allowed_builtin_http_domains= if
+you are using =egress_policy = "deny-all"=:
+
+#+begin_src toml
+[network]
+egress_policy = "deny-all"
+allowed_builtin_http_domains = ["api.weather.gc.ca"]
+#+end_src
+
+*Credentials* — none required.
+
+*Example interactions*:
+
+#+begin_example
+What's the weather like today?
+What's the forecast for Ottawa this week?
+Any weather warnings in my area?
+#+end_example
+
+** System Information
+
+Reports CPU load average, memory usage, disk usage, and thermal sensor
+readings directly from =/proc= and =/sys=.  No external commands are used.
+
+Works out of the box — no configuration or credentials required.
+
+*Example interactions*:
+
+#+begin_example
+How loaded is my system right now?
+How much free memory do I have?
+Is my CPU running hot?
+#+end_example
+
+** Timing and Time Zones
+
+Reports the current time with microsecond-resolution and supports timing
+measurements.  Useful for understanding when the daemon is responding and
+for benchmarking.
+
+Works out of the box — no configuration or credentials required.
+
+*Example interactions*:
+
+#+begin_example
+What time is it?
+What time is it in Tokyo right now?
+How long did that last tool call take?
+#+end_example
+
+** Scheduler and Reminders
+
+The scheduler runs tasks at specified intervals or at fixed times of day.
+It backs the RSS monitor and battery monitor, and can also run WASM skills
+on a schedule.
+
+Scheduled tasks are persisted to encrypted storage and survive daemon
+restarts.  User-defined tasks (those with names starting =user:=) are
+automatically saved and restored.
+
+Works out of the box — no configuration required.
+
+*Example interactions*:
+
+#+begin_example
+Check my RSS feeds every 30 minutes.
+Remind me about my stand-up meeting every day at 9 AM.
+What scheduled tasks are currently running?
+Stop the RSS monitor.
+#+end_example
+
+** Task Store
+
+Provides encrypted persistence for user-defined scheduled tasks.  Tasks are
+saved to =~/.crichton/tasks/user-tasks.age= and restored on daemon restart.
+
+This operates transparently behind the Scheduler skill — you do not interact
+with it directly.
+
+** RSS Feed Monitor
+
+Fetches and monitors RSS and Atom feeds.  Tracks which items you have already
+seen, and sends push notifications to connected TUI and Emacs clients when
+new items appear.
+
+Feed monitors persist across daemon restarts — you only need to set them up
+once.
+
+*Network* — add the feed domains to =allowed_builtin_http_domains= if you are
+using =egress_policy = "deny-all"=:
+
+#+begin_src toml
+[network]
+egress_policy = "deny-all"
+allowed_builtin_http_domains = ["feeds.arstechnica.com", "lobste.rs"]
+#+end_src
+
+*Credentials* — none required.
+
+*Example interactions*:
+
+#+begin_example
+Start monitoring https://lobste.rs/rss for new posts every 15 minutes.
+What's new in my RSS feeds?
+Monitor the Ars Technica feed and only notify me about items mentioning "Linux".
+Stop monitoring the Lobste.rs feed.
+#+end_example
+
+*** Keyword filtering
+
+When starting a monitor, you can filter for specific keywords so only matching
+items trigger notifications:
+
+#+begin_example
+Monitor https://news.ycombinator.com/rss with keywords "lisp, wasm, security".
+#+end_example
+
+This uses the =rss-filter= WASM skill (see the WASM Skills section) internally.
+The filter settings are saved with the monitor and survive restarts.
+
+** Battery Monitor
+
+Monitors laptop battery charge level and sends proactive push notifications
+when the battery drops to configured thresholds.  Battery state is read
+directly from =/sys/class/power_supply/=.
+
+On systems without a battery (desktops), this skill does nothing.
+
+*Configuration* (=~/.crichton/config.toml=):
+
+#+begin_src toml
+[battery]
+thresholds = [20, 10, 5]   # Alert at 20%, 10%, and 5% (default)
+#+end_src
+
+*Credentials* — none required.
+
+Battery monitoring state (enabled/disabled and interval) is persisted so it
+survives daemon restarts.
+
+*Example interactions*:
+
+#+begin_example
+What's my battery level?
+Start monitoring my battery every 5 minutes.
+Stop battery monitoring.
+Am I on AC power?
+#+end_example
+
+** Ephemeris (Sunrise/Sunset)
+
+Calculates sunrise, sunset, solar noon, day length, and lunar phase for any
+location and date.  Uses the USNO algorithm (accurate to within about one
+minute).  All calculations happen locally — no network required.
+
+*Configuration* — location is passed per-query; there is no fixed default in
+config.  If you have the org-mode skill enabled and use org-roam, the agent
+can infer your location from stored notes.  Otherwise, specify your
+coordinates or city in your request.
+
+*Credentials* — none required.
+
+*Example interactions*:
+
+#+begin_example
+What time is sunset today in Victoria, BC?
+What's the lunar phase tonight?
+How long is the day in Reykjavik in December?
+What's the solar noon in 48.8566° N, 2.3522° E?
+#+end_example
+
+** Token Usage Meter
+
+Tracks LLM API token consumption and estimates cost.  Records input and output
+tokens for every LLM call and provides running totals, burn rate, and cost
+estimates.
+
+Usage data persists across daemon restarts.
+
+Works out of the box — no configuration or credentials required.
+
+*Example interactions*:
+
+#+begin_example
+How many tokens have I used today?
+What's my estimated API cost this session?
+Show me my token usage breakdown.
+#+end_example
+
+** Log Inspector
+
+Reads and searches the daemon's own structured log file
+(=~/.crichton/logs/daemon.jsonl=).  Provides tail, keyword search, and
+summary reports.  Useful for diagnosing problems without leaving the chat
+interface.
+
+Works out of the box — no configuration or credentials required.
+
+*Example interactions*:
+
+#+begin_example
+Show me the last 20 log entries.
+Search the logs for "error".
+Any warnings in the logs from the last hour?
+#+end_example
+
+** GitHub
+
+Interacts with the GitHub REST API.  Supports repos, issues, pull requests,
+CI/Actions status, releases, and code search.
+
+*Credentials* — store a GitHub personal access token:
+
+#+begin_src bash
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/home/YOUR_USERNAME/devel/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton)' \
+  --eval '(crichton/credentials:store-credential
+           "github-api-key"
+           (list :token "ghp_YOUR_TOKEN_HERE"))' \
+  --eval '(sb-ext:exit)'
+#+end_src
+
+Create a token at: https://github.com/settings/tokens
+
+*Network* — add =api.github.com= to =allowed_builtin_http_domains=:
+
+#+begin_src toml
+[network]
+allowed_builtin_http_domains = ["api.github.com"]
+#+end_src
+
+*Example interactions*:
+
+#+begin_example
+What are the open issues on my-org/my-repo?
+Show me the failing CI checks on my latest PR.
+Create an issue titled "Fix the login bug" in my-org/my-repo.
+#+end_example
+
+** Pushover Notifications
+
+Sends push notifications to iOS, Android, and desktop devices via
+Pushover.net.  Useful for getting notified about important agent events even
+when you are away from your terminal.
+
+*Credentials* — store your Pushover app token and user key:
+
+#+begin_src bash
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/home/YOUR_USERNAME/devel/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton)' \
+  --eval '(crichton/credentials:store-credential
+           "pushover"
+           (list :token "YOUR_APP_TOKEN" :user "YOUR_USER_KEY"))' \
+  --eval '(sb-ext:exit)'
+#+end_src
+
+Get your tokens from: https://pushover.net/
+
+*Network* — add =api.pushover.net= to =allowed_builtin_http_domains=:
+
+#+begin_src toml
+[network]
+allowed_builtin_http_domains = ["api.pushover.net"]
+#+end_src
+
+*Example interactions*:
+
+#+begin_example
+Send me a Pushover notification saying "Build finished".
+Notify me on my phone when the RSS monitor finds something new.
+Send a high-priority notification: "Server disk nearly full".
+#+end_example
+
+** HOOBS Home Automation
+
+Controls HomeKit accessories via a HOOBS hub on your local network.  Supports
+listing rooms and accessories, querying device state, and (with
+=allow_control = true=) changing device state.
+
+*Credentials* — store your HOOBS connection details:
+
+#+begin_src bash
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/home/YOUR_USERNAME/devel/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton)' \
+  --eval '(crichton/credentials:store-credential
+           "hoobs"
+           (list :host "192.168.1.10"
+                 :port 80
+                 :username "admin"
+                 :password "your-hoobs-password"))' \
+  --eval '(sb-ext:exit)'
+#+end_src
+
+*Configuration* (=~/.crichton/config.toml=):
+
+#+begin_src toml
+[hoobs]
+# host and port can also be set here instead of (or in addition to) the credential
+host = "192.168.1.10"
+port = 80
+# Set to true to allow the agent to control devices (turn on/off, etc.)
+allow_control = false
+#+end_src
+
+*Example interactions*:
+
+#+begin_example
+What lights are on right now?
+List all my HomeKit accessories.
+Turn off the living room lights.   (requires allow_control = true)
+What's the temperature in the bedroom?
+#+end_example
+
+** Raindrop.io Bookmarks
+
+Manages bookmarks via the Raindrop.io API.  Supports saving, searching,
+listing, updating, and deleting bookmarks and collections.
+
+*Credentials* — store your Raindrop.io OAuth2 test token:
+
+#+begin_src bash
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/home/YOUR_USERNAME/devel/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton)' \
+  --eval '(crichton/credentials:store-credential
+           "raindrop-api"
+           (list :token "YOUR_OAUTH2_TEST_TOKEN"))' \
+  --eval '(sb-ext:exit)'
+#+end_src
+
+Get a test token from: https://app.raindrop.io/settings/integrations
+
+*Network* — add =api.raindrop.io= to =allowed_builtin_http_domains=:
+
+#+begin_src toml
+[network]
+allowed_builtin_http_domains = ["api.raindrop.io"]
+#+end_src
+
+*Example interactions*:
+
+#+begin_example
+Save https://example.com as a bookmark tagged "reference, lisp".
+Search my bookmarks for articles about WebAssembly.
+List my bookmarks in the "Work" collection.
+What bookmark collections do I have?
+#+end_example
+
+** Org-Mode Integration
+
+Reads, searches, creates, and appends to org-mode files.  Integrates with
+org-roam for node search, backlink queries, and tag management.
+
+This skill is *disabled by default* and requires explicit configuration.
+It never exposes your org files to external network services — it is
+strictly a local, daemon-only skill.
+
+*Configuration* (=~/.crichton/config.toml=):
+
+#+begin_src toml
+[orgmode]
+enable = true
+
+# Directories the agent may access. Empty list = deny all.
+allowed_paths = ["/home/YOU/org", "/home/YOU/notes"]
+
+# Path to org-roam SQLite database (optional, for roam queries)
+db_path = "/home/YOU/.emacs.d/org-roam.db"
+#+end_src
+
+*Credentials* — none required.
+
+*Supported actions*:
+
+- =read= — read an org file
+- =search= — search org-roam nodes by title or tag
+- =list_tags= — list all org-roam tags
+- =backlinks= — find what links to a given node
+- =create_note= — create a new org-roam note with UUID ID and filetags
+- =append= — add text to the end of a file or under a specific headline
+- =list_files= — list org files in the allowed paths
+- =set_filetags= — add, remove, or replace file-level tags
+
+*Example interactions*:
+
+#+begin_example
+Find my org-roam notes tagged "project".
+What notes link back to my "Lisp" node?
+Create a new note titled "Meeting notes 2026-03-21" with tag "work".
+Append "- Follow up with Alex" under the "Action Items" heading in ~/org/work.org.
+#+end_example
+
+** AMP Code Review
+
+Delegates coding and testing tasks to the Amp CLI agent.  Crichton acts as
+a supervisor: it plans the work and dispatches implementation to Amp.
+
+This skill is *disabled by default* and requires Amp to be installed.
+
+*Configuration* (=~/.crichton/config.toml=):
+
+#+begin_src toml
+[amp]
+enable = true
+
+# Directories Amp is allowed to operate in (strongly recommended)
+allowed_repo_roots = ["/home/YOU/devel"]
+#+end_src
+
+*Credentials* — store your Amp API key:
+
+#+begin_src bash
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/home/YOUR_USERNAME/devel/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton)' \
+  --eval '(crichton/credentials:store-credential
+           "amp-api"
+           (list :key "YOUR_AMP_API_KEY"))' \
+  --eval '(sb-ext:exit)'
+#+end_src
+
+*Example interactions*:
+
+#+begin_example
+Use Amp to add docstrings to all public functions in src/parser.py.
+Run the test suite in ~/devel/myproject and fix any failures.
+Check if Amp is available on this system.
+#+end_example
+
+* WASM Skills
+
+WASM (WebAssembly) skills extend Crichton with third-party capabilities.  They
+run in a strict sandbox: a separate process using the wasmtime runtime, with
+no network access, no filesystem access, and no environment variables — unless
+the skill's manifest explicitly declares those capabilities and Crichton
+approves them.
+
+Think of a WASM skill as a plugin in a locked room.  It receives input from
+Crichton, computes a result, and returns it.  It cannot reach out to the
+network or read your files unless that is declared upfront.
+
+** Installing a WASM Skill
+
+1. Obtain the skill directory.  It must contain at minimum:
+   - =skill.toml= — the capability manifest
+   - =skill.wasm= — the compiled WebAssembly binary
+
+2. Copy the directory to =~/.crichton/skills/=:
+
+   #+begin_src bash
+   cp -r /path/to/skill-name ~/.crichton/skills/
+   # Result: ~/.crichton/skills/skill-name/skill.toml
+   #          ~/.crichton/skills/skill-name/skill.wasm
+   #+end_src
+
+3. Restart the daemon to pick it up:
+
+   #+begin_src bash
+   systemctl --user restart crichton
+   #+end_src
+
+4. Verify the skill was loaded:
+
+   #+begin_example
+   List the available skills.
+   #+end_example
+
+** The skill manifest (skill.toml)
+
+Every WASM skill has a =skill.toml= manifest that declares what it does and
+what capabilities it needs.  You should review this file before installing any
+skill.
+
+| Field                       | Description                                          |
+|-----------------------------+------------------------------------------------------|
+| =[skill] name=              | Unique identifier for the skill                      |
+| =[skill] version=           | Version string                                       |
+| =[skill] description=       | What the skill does                                  |
+| =[skill] signature=         | Ed25519 signature (empty string = unsigned/dev only) |
+| =[capabilities] http_domains= | Domains the skill may contact (empty = no network) |
+| =[capabilities] read_files= | File paths the skill may read (empty = none)         |
+| =[capabilities] write_files= | File paths the skill may write (empty = none)       |
+| =[capabilities] env_vars=   | Environment variables the skill may see (empty = none)|
+| =max_memory_mb=             | Maximum memory in megabytes                          |
+| =max_cpu_seconds=           | Maximum CPU time per invocation                      |
+| =[provides] functions=      | List of exported function names                      |
+
+A skill with =http_domains = []= and =read_files = []= and =write_files = []=
+is a pure computation skill — it can only process the data you give it.
+
+** RSS Filter Skill
+
+The RSS filter skill is a pure-function skill that filters RSS feed items by
+keywords.  It is included in the Crichton source under
+=examples/skills/rss-filter/= and is used internally by the RSS monitor when
+you set keyword filters on a feed.
+
+*What it does*: Given a list of RSS items and a list of keywords, it returns
+only the items whose title or description contains at least one keyword.
+
+*Capabilities*: No network access, no filesystem access — completely self-
+contained.
+
+*To install it manually*:
+
+#+begin_src bash
+# From your crichton source directory
+cp -r examples/skills/rss-filter ~/.crichton/skills/
+# You will also need to build the .wasm file — see below
+#+end_src
+
+The =skill.wasm= file must be compiled from the Rust source.  If you have
+Rust installed:
+
+#+begin_src bash
+cd examples/skills/rss-filter
+rustup target add wasm32-unknown-unknown
+cargo build --target wasm32-unknown-unknown --release
+cp target/wasm32-unknown-unknown/release/rss_filter.wasm .
+#+end_src
+
+*Usage*: Once installed and the daemon restarted, the RSS monitor will use
+it automatically when you set keyword filters:
+
+#+begin_example
+Monitor https://news.ycombinator.com/rss with keywords "lisp, security".
+#+end_example
+
+** Meaning of Life (Developer Example)
+
+This is a minimal example skill included in the Crichton source for
+developers learning to write WASM skills.  It returns the number 42 and logs
+a message.
+
+*This is not a production skill* — it exists to demonstrate the skill
+development workflow and is not useful in normal operation.
+
+It is located at =examples/skills/meaning-of-life/= in the source tree.  See
+=docs/SKILL_DEVELOPMENT.org= if you want to write your own skills.
+
+* Troubleshooting
+
+** Daemon will not start
+
+Check the journal for error messages:
+
+#+begin_src bash
+journalctl --user -u crichton -n 50
+#+end_src
+
+Common causes:
+
+- *SBCL not found* — make sure SBCL is installed and =/usr/bin/sbcl= exists.
+  If it is in a different location, edit the service file.
+- *Wrong path in service file* — double-check the path to your crichton source
+  directory in =~/.config/systemd/user/crichton.service=.
+- *Missing dependency* — SBCL will print what it could not load.  You may need
+  to install the missing ASDF package via Quicklisp.
+
+** "Daemon socket not found"
+
+The socket =~/.crichton/daemon.sock= is created when the daemon starts and
+removed when it stops.  This error means the daemon is not running:
+
+#+begin_src bash
+systemctl --user status crichton
+systemctl --user start crichton
+#+end_src
+
+** "Credential not found"
+
+The credential was not stored, or was stored under a different name.  List
+what is stored:
+
+#+begin_src bash
+ls ~/.crichton/credentials/
+#+end_src
+
+Each file =<name>.age= corresponds to a credential named =<name>=.  Store the
+missing credential as described in the relevant Built-in Skills section.
+
+** Weather returns no results
+
+The weather skill covers Canadian cities only (Environment Canada data).  For
+other countries, there is no built-in weather source yet.
+
+Also check that =api.weather.gc.ca= is in your =allowed_builtin_http_domains=
+if you have =egress_policy = "deny-all"=.
+
+** TUI is stuck on "Streaming..."
+
+This can happen if the daemon encounters an error during a streaming response.
+Press Ctrl-C once (then a second time to quit if needed), and restart the TUI.
+Check the logs:
+
+#+begin_src bash
+journalctl --user -u crichton -n 20
+#+end_src
+
+** Rate limit errors from the Anthropic API
+
+If you see errors mentioning HTTP 429, you are hitting Anthropic's rate limits.
+Crichton automatically retries up to three times with 15/30/45-second backoff,
+so usually the request will succeed on retry.  If it keeps failing, you may
+need to upgrade your Anthropic API tier.
+
+** Org-mode skill reports "Org-mode skill is disabled"
+
+You need to set =enable = true= in the =[orgmode]= section of
+=~/.crichton/config.toml=, and also set at least one path in =allowed_paths=.
+An empty =allowed_paths= list denies all file access even if the skill is
+enabled.
+
+** Checking the logs
+
+All daemon logs are written to =~/.crichton/logs/daemon.jsonl= in JSON Lines
+format.  You can ask Crichton to inspect them for you:
+
+#+begin_example
+Show me the last 30 log entries.
+Search the logs for any errors from the last hour.
+#+end_example
+
+Or use standard tools:
+
+#+begin_src bash
+# Tail the raw log
+tail -f ~/.crichton/logs/daemon.jsonl
+
+# Pretty-print recent entries (requires jq)
+tail -50 ~/.crichton/logs/daemon.jsonl | jq .
+
+# Filter for errors
+grep '"level":"error"' ~/.crichton/logs/daemon.jsonl | tail -20
+#+end_src
