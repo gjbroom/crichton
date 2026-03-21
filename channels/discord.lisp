@@ -174,40 +174,73 @@ Store it with: (crichton/credentials:store-credential \"discord-bot-token\" '(:t
                       (equal (gethash "id" m) bot-id))
               return t))))
 
+;;; --- MESSAGE_CREATE predicates ---
+
+(defun ignore-message-p (data channel)
+  "Return T if the message should be silently ignored (bot or self)."
+  (let* ((author (hg data "author"))
+         (is-bot (when author (gethash "bot" author)))
+         (author-id (when author (gethash "id" author))))
+    (or is-bot (equal author-id (bot-user-id channel)))))
+
+(defun should-respond-p (data channel)
+  "Return T if the bot should respond: DM or @mention in a guild channel."
+  (or (null (gethash "guild_id" data))
+      (bot-mentioned-p data (bot-user-id channel))))
+
+(defun extract-user-text (data channel)
+  "Return message text, stripping the bot @mention if present."
+  (let ((content (gethash "content" data)))
+    (if (and (gethash "guild_id" data)
+             (bot-mentioned-p data (bot-user-id channel)))
+        (strip-mention content (bot-user-id channel))
+        content)))
+
 (defun handle-message-create (channel data)
   "Handle a MESSAGE_CREATE dispatch event."
-  (let* ((author (hg data "author"))
-         (author-id (when author (gethash "id" author)))
-         (is-bot (when author (gethash "bot" author)))
-         (content (gethash "content" data))
-         (channel-id (gethash "channel_id" data))
-         (guild-id (gethash "guild_id" data))
-         (msg-id (gethash "id" data)))
-    (when (or is-bot (equal author-id (bot-user-id channel)))
-      (return-from handle-message-create))
-    (let ((is-dm (null guild-id))
-          (is-mentioned (bot-mentioned-p data (bot-user-id channel))))
-      (unless (or is-dm is-mentioned)
-        (return-from handle-message-create))
-      (let ((text (if is-mentioned
-                      (strip-mention content (bot-user-id channel))
-                      content)))
-        (when (and text (plusp (length text)) (discord-handler channel))
-          (let ((msg (crichton/channels:make-channel-message
-                      :id msg-id
-                      :text text
-                      :author-id author-id
-                      :author-name (when author (gethash "username" author))
-                      :channel-id channel-id
-                      :guild-id guild-id
-                      :raw data)))
-            (bt:make-thread
-             (lambda ()
-               (handler-case
-                   (funcall (discord-handler channel) channel msg)
-                 (error (c)
-                   (log:error "Discord message handler error: ~A" c))))
-             :name "discord-msg-handler")))))))
+  (when (and (not (ignore-message-p data channel))
+             (should-respond-p data channel))
+    (let ((text (extract-user-text data channel))
+          (author (hg data "author")))
+      (when (and text (plusp (length text)) (discord-handler channel))
+        (let ((msg (crichton/channels:make-channel-message
+                    :id (gethash "id" data)
+                    :text text
+                    :author-id (when author (gethash "id" author))
+                    :author-name (when author (gethash "username" author))
+                    :channel-id (gethash "channel_id" data)
+                    :guild-id (gethash "guild_id" data)
+                    :raw data)))
+          (bt:make-thread
+           (lambda ()
+             (handler-case
+                 (funcall (discord-handler channel) channel msg)
+               (error (c)
+                 (log:error "Discord message handler error: ~A" c))))
+           :name "discord-msg-handler"))))))
+
+;;; --- Gateway op handlers ---
+
+(defun handle-hello (channel data)
+  "Handle HELLO (op 10): configure heartbeat interval and identify."
+  (setf (heartbeat-interval-ms channel) (gethash "heartbeat_interval" data))
+  (log:info "Discord: HELLO received (heartbeat ~Dms)" (heartbeat-interval-ms channel))
+  (start-heartbeat channel)
+  (send-identify channel))
+
+(defun handle-dispatch-ready (channel data)
+  "Handle DISPATCH READY: record bot identity and session info."
+  (let ((user-id (hg data "user" "id")))
+    (setf (bot-user-id channel) user-id
+          (discord-session-id channel) (gethash "session_id" data)
+          (discord-resume-url channel) (gethash "resume_gateway_url" data))
+    (log:info "Discord: READY (bot user ~A)" user-id)))
+
+(defun handle-dispatch-event (channel event-type data)
+  "Dispatch a DISPATCH (op 0) event by type."
+  (cond
+    ((string= event-type "READY") (handle-dispatch-ready channel data))
+    ((string= event-type "MESSAGE_CREATE") (handle-message-create channel data))))
 
 (defun handle-gateway-event (channel payload-text)
   "Parse and dispatch a Gateway event."
@@ -220,34 +253,15 @@ Store it with: (crichton/credentials:store-credential \"discord-bot-token\" '(:t
         (when seq
           (setf (discord-seq channel) seq))
         (case op
-          (10 ; HELLO
-           (setf (heartbeat-interval-ms channel)
-                 (gethash "heartbeat_interval" data))
-           (log:info "Discord: HELLO received (heartbeat ~Dms)"
-                     (heartbeat-interval-ms channel))
-           (start-heartbeat channel)
-           (send-identify channel))
-          (11 ; HEARTBEAT_ACK
-           nil)
-          (0  ; DISPATCH
-           (cond
-             ((string= event-type "READY")
-              (let ((user-id (hg data "user" "id")))
-                (setf (bot-user-id channel) user-id
-                      (discord-session-id channel) (gethash "session_id" data)
-                      (discord-resume-url channel) (gethash "resume_gateway_url" data))
-                (log:info "Discord: READY (bot user ~A)" user-id)))
-             ((string= event-type "MESSAGE_CREATE")
-              (handle-message-create channel data))))
-          (7  ; RECONNECT
-           (log:warn "Discord: RECONNECT requested")
-           (wsd:close-connection (discord-ws channel)))
-          (9  ; INVALID_SESSION
-           (log:warn "Discord: INVALID_SESSION")
-           (sleep 3)
-           (send-identify channel))
-          (1  ; HEARTBEAT (server-requested)
-           (send-heartbeat channel))))
+          (10 (handle-hello channel data))
+          (11 nil)                                    ; HEARTBEAT_ACK
+          (0  (handle-dispatch-event channel event-type data))
+          (7  (log:warn "Discord: RECONNECT requested")
+              (wsd:close-connection (discord-ws channel)))
+          (9  (log:warn "Discord: INVALID_SESSION")
+              (sleep 3)
+              (send-identify channel))
+          (1  (send-heartbeat channel))))             ; server-requested heartbeat
     (error (c)
       (log:error "Discord gateway event error: ~A" c))))
 
