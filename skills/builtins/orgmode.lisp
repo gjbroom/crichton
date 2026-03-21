@@ -643,34 +643,38 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                 (%om-sql-rows-to-plists stmt cols)))
           (sqlite:finalize-statement stmt))))))
 
-(defun org-roam-backlinks (node-id)
+(defun org-roam-backlinks (node-id &key (limit 50))
   "Return nodes that link TO this node-id.
-   Results filtered by allowed paths."
+   Results filtered by allowed paths, capped at LIMIT."
   (with-org-roam-db (db)
     (let* ((sql "SELECT DISTINCT n.id, n.file, n.title, n.level
                  FROM links l
                  JOIN nodes n ON n.id = l.source
-                 WHERE l.dest = ? AND l.type = 'id'")
+                 WHERE l.dest = ? AND l.type = 'id'
+                 LIMIT ?")
            (stmt (sqlite:prepare-statement db sql)))
       (unwind-protect
            (progn
              (sqlite:bind-parameter stmt 1 node-id)
+             (sqlite:bind-parameter stmt 2 limit)
              (%om-filter-by-allowed-paths
               (%om-sql-rows-to-plists stmt '("id" "file" "title" "level"))))
         (sqlite:finalize-statement stmt)))))
 
-(defun org-roam-forward-links (node-id)
+(defun org-roam-forward-links (node-id &key (limit 50))
   "Return nodes that this node-id links TO.
-   Results filtered by allowed paths."
+   Results filtered by allowed paths, capped at LIMIT."
   (with-org-roam-db (db)
     (let* ((sql "SELECT DISTINCT n.id, n.file, n.title, n.level
                  FROM links l
                  JOIN nodes n ON n.id = l.dest
-                 WHERE l.source = ? AND l.type = 'id'")
+                 WHERE l.source = ? AND l.type = 'id'
+                 LIMIT ?")
            (stmt (sqlite:prepare-statement db sql)))
       (unwind-protect
            (progn
              (sqlite:bind-parameter stmt 1 node-id)
+             (sqlite:bind-parameter stmt 2 limit)
              (%om-filter-by-allowed-paths
               (%om-sql-rows-to-plists stmt '("id" "file" "title" "level"))))
         (sqlite:finalize-statement stmt)))))
@@ -886,9 +890,9 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                        (or (getf preamble :file-id)
                            (error "File ~A has no :ID: property" id-or-path))))))
     (let ((back (when (member direction '(:backlinks :both))
-                  (org-roam-backlinks node-id)))
+                  (org-roam-backlinks node-id :limit limit)))
           (fwd (when (member direction '(:forward :both))
-                 (org-roam-forward-links node-id))))
+                 (org-roam-forward-links node-id :limit limit))))
       (let ((results (append back fwd)))
         (subseq results 0 (min limit (length results)))))))
 
