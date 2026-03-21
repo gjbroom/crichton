@@ -159,14 +159,16 @@
 
 ;;; --- Regex patterns ---
 
-(defparameter *headline-re*
-  (cl-ppcre:create-scanner
-   "^(\\*+)\\s+(?:(TODO|DONE|NEXT|WAITING|CANCELLED|SOMEDAY)\\s+)?(?:\\[#([A-C])\\]\\s+)?(.*?)(?:\\s+(:[\\w:]+:))?\\s*$")
-  "Match org headline: stars, optional TODO keyword, optional priority, title, optional tags.")
-
 (defparameter *todo-keywords*
   '("TODO" "DONE" "NEXT" "WAITING" "CANCELLED" "SOMEDAY")
-  "Recognized TODO keywords.")
+  "Recognized TODO keywords.  *headline-re* is derived from this list.")
+
+(defparameter *headline-re*
+  (cl-ppcre:create-scanner
+   (format nil "^(\\*+)\\s+(?:(~A)\\s+)?(?:\\[#([A-C])\\]\\s+)?(.*?)(?:\\s+(:[\\w:]+:))?\\s*$"
+           (format nil "~{~A~^|~}" *todo-keywords*)))
+  "Match org headline: stars, optional TODO keyword, optional priority, title, optional tags.
+Derived from *todo-keywords* — update that list to extend recognised keywords.")
 
 (defparameter *property-drawer-start-re*
   (cl-ppcre:create-scanner "^\\s*:PROPERTIES:\\s*$" :case-insensitive-mode t))
