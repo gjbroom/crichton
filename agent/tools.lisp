@@ -228,6 +228,7 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
    (include-disk "boolean" "Include disk usage. Default: true."))
   (declare (ignore include-load include-memory include-thermal include-disk))
   (with-output-to-string (s)
+    (format s "Crichton ~A~%" crichton/config:*crichton-version*)
     (crichton/skills:system-report
      :stream s
      :mounts '("/" "/home"))))

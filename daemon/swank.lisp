@@ -9,6 +9,11 @@
 (defvar *swank-port* nil
   "Port the Swank server is running on, or NIL if not started.")
 
+(defun crichton-swank-banner ()
+  "Print Crichton version banner in the SLIME/SLY REPL on connect."
+  (format *standard-output* "~&; Crichton ~A~%~%"
+          crichton/config:*crichton-version*))
+
 (defun start-swank (&key (port nil) (dont-close t))
   "Start a Swank server for SLIME/SLY connections.
    PORT defaults to config value or 4005.
@@ -23,7 +28,10 @@
     (handler-case
         (progn
           (asdf:load-system :swank)
-          (let ((create-server (find-symbol "CREATE-SERVER" :swank)))
+          (let ((create-server (find-symbol "CREATE-SERVER" :swank))
+                (hook-var (find-symbol "*AFTER-INIT-HOOK*" :swank)))
+            (when hook-var
+              (pushnew 'crichton-swank-banner (symbol-value hook-var)))
             (funcall create-server :port actual-port :dont-close dont-close)
             (setf *swank-port* actual-port)
             (log:info "Swank server started on port ~D" actual-port)
