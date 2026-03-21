@@ -159,14 +159,16 @@
 
 ;;; --- Regex patterns ---
 
-(defparameter *headline-re*
-  (cl-ppcre:create-scanner
-   "^(\\*+)\\s+(?:(TODO|DONE|NEXT|WAITING|CANCELLED|SOMEDAY)\\s+)?(?:\\[#([A-C])\\]\\s+)?(.*?)(?:\\s+(:[\\w:]+:))?\\s*$")
-  "Match org headline: stars, optional TODO keyword, optional priority, title, optional tags.")
-
 (defparameter *todo-keywords*
   '("TODO" "DONE" "NEXT" "WAITING" "CANCELLED" "SOMEDAY")
-  "Recognized TODO keywords.")
+  "Recognized TODO keywords.  *headline-re* is derived from this list.")
+
+(defparameter *headline-re*
+  (cl-ppcre:create-scanner
+   (format nil "^(\\*+)\\s+(?:(~A)\\s+)?(?:\\[#([A-C])\\]\\s+)?(.*?)(?:\\s+(:[\\w:]+:))?\\s*$"
+           (format nil "~{~A~^|~}" *todo-keywords*)))
+  "Match org headline: stars, optional TODO keyword, optional priority, title, optional tags.
+Derived from *todo-keywords* — update that list to extend recognised keywords.")
 
 (defparameter *property-drawer-start-re*
   (cl-ppcre:create-scanner "^\\s*:PROPERTIES:\\s*$" :case-insensitive-mode t))
@@ -335,8 +337,7 @@
     (with-open-file (s path :direction :input :if-does-not-exist nil)
       (when s
         (loop for line = (read-line s nil nil)
-              for line-num from 1
-              while (and line (< line-num 50))
+              while line
               do (cond
                    ;; Property drawer
                    ((cl-ppcre:scan *property-drawer-start-re* line)
@@ -373,10 +374,11 @@
 
 ;;; --- Full parse ---
 
-(defun parse-org-file (path)
+(defun parse-org-file (path &key text)
   "Parse an org file into an org-document instance.
-   Returns the org-document."
-  (let* ((text (uiop:read-file-string path))
+   TEXT may be supplied to avoid a second disk read when the caller
+   already holds the file contents.  Returns the org-document."
+  (let* ((text (or text (uiop:read-file-string path)))
          (lines (coerce (cl-ppcre:split "\\n" text) 'vector))
          (title nil) (file-id nil) (filetags nil)
          (headlines nil) (links nil) (tables nil) (src-blocks nil)
@@ -641,34 +643,38 @@
                 (%om-sql-rows-to-plists stmt cols)))
           (sqlite:finalize-statement stmt))))))
 
-(defun org-roam-backlinks (node-id)
+(defun org-roam-backlinks (node-id &key (limit 50))
   "Return nodes that link TO this node-id.
-   Results filtered by allowed paths."
+   Results filtered by allowed paths, capped at LIMIT."
   (with-org-roam-db (db)
     (let* ((sql "SELECT DISTINCT n.id, n.file, n.title, n.level
                  FROM links l
                  JOIN nodes n ON n.id = l.source
-                 WHERE l.dest = ? AND l.type = 'id'")
+                 WHERE l.dest = ? AND l.type = 'id'
+                 LIMIT ?")
            (stmt (sqlite:prepare-statement db sql)))
       (unwind-protect
            (progn
              (sqlite:bind-parameter stmt 1 node-id)
+             (sqlite:bind-parameter stmt 2 limit)
              (%om-filter-by-allowed-paths
               (%om-sql-rows-to-plists stmt '("id" "file" "title" "level"))))
         (sqlite:finalize-statement stmt)))))
 
-(defun org-roam-forward-links (node-id)
+(defun org-roam-forward-links (node-id &key (limit 50))
   "Return nodes that this node-id links TO.
-   Results filtered by allowed paths."
+   Results filtered by allowed paths, capped at LIMIT."
   (with-org-roam-db (db)
     (let* ((sql "SELECT DISTINCT n.id, n.file, n.title, n.level
                  FROM links l
                  JOIN nodes n ON n.id = l.dest
-                 WHERE l.source = ? AND l.type = 'id'")
+                 WHERE l.source = ? AND l.type = 'id'
+                 LIMIT ?")
            (stmt (sqlite:prepare-statement db sql)))
       (unwind-protect
            (progn
              (sqlite:bind-parameter stmt 1 node-id)
+             (sqlite:bind-parameter stmt 2 limit)
              (%om-filter-by-allowed-paths
               (%om-sql-rows-to-plists stmt '("id" "file" "title" "level"))))
         (sqlite:finalize-statement stmt)))))
@@ -676,20 +682,18 @@
 (defun org-roam-list-tags ()
   "Return all distinct tags from nodes under allowed paths."
   (with-org-roam-db (db)
-    (let* ((sql "SELECT DISTINCT t.tag
+    (let* ((sql "SELECT DISTINCT t.tag, n.file
                  FROM tags t
                  JOIN nodes n ON n.id = t.node_id
                  ORDER BY t.tag")
            (stmt (sqlite:prepare-statement db sql)))
       (unwind-protect
-           (let ((all-tags (%om-sql-rows-to-plists stmt '("tag"))))
-             ;; Filter: only include tags from nodes under allowed paths
-             ;; For efficiency, get the full node+tag list
-             (let ((tag-names nil))
-               (dolist (row all-tags)
-                 (pushnew (getf row :tag) tag-names :test #'string-equal))
-               ;; Return as simple list of strings
-               (sort tag-names #'string<)))
+           (let* ((rows (%om-sql-rows-to-plists stmt '("tag" "file")))
+                  (allowed (%om-filter-by-allowed-paths rows))
+                  (tag-names nil))
+             (dolist (row allowed)
+               (pushnew (getf row :tag) tag-names :test #'string-equal))
+             (sort tag-names #'string<))
         (sqlite:finalize-statement stmt)))))
 
 (defun org-roam-node-by-id (node-id)
@@ -886,9 +890,9 @@
                        (or (getf preamble :file-id)
                            (error "File ~A has no :ID: property" id-or-path))))))
     (let ((back (when (member direction '(:backlinks :both))
-                  (org-roam-backlinks node-id)))
+                  (org-roam-backlinks node-id :limit limit)))
           (fwd (when (member direction '(:forward :both))
-                 (org-roam-forward-links node-id))))
+                 (org-roam-forward-links node-id :limit limit))))
       (let ((results (append back fwd)))
         (subseq results 0 (min limit (length results)))))))
 
@@ -1016,7 +1020,10 @@
           (let* ((conditions (list "n.todo IS NOT NULL"))
                  (params nil)
                  (param-idx 0))
-            (unless include-done
+            (unless (or include-done state)
+              ;; Skip the exclusion when state is explicit — the equality
+              ;; filter below is already restrictive, and combining both
+              ;; would produce a contradiction for done-state queries.
               (let ((done (%om-done-keywords)))
                 (push (format nil "n.todo NOT IN (~{?~^, ~})"
                               (make-list (length done) :initial-element nil))
@@ -1189,7 +1196,7 @@
         (let* ((text (uiop:read-file-string canonical))
                (lines (cl-ppcre:split "\\n" text))
                (lines-vec (coerce lines 'vector))
-               (doc (parse-org-file canonical))
+               (doc (parse-org-file canonical :text text))
                (target (find headline (doc-headlines doc)
                              :key #'headline-title
                              :test #'string-equal)))
