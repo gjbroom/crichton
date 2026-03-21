@@ -220,6 +220,14 @@
            #:rss-state-stats
            #:enable-rss-persistence
            #:disable-rss-persistence
+           ;; rss feed writing/generation
+           #:rss-feed-configure
+           #:rss-feed-publish
+           #:rss-feed-items
+           #:rss-feed-xml
+           #:rss-feed-clear
+           #:rss-feed-delete
+           #:rss-feed-list
            ;; token-usage / metered resources
            #:register-pricing
            #:record-usage

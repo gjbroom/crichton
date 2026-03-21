@@ -372,15 +372,20 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
 ;;; --- RSS tool ---
 
 (define-tool rss
-    (:description "Fetch, check, and monitor RSS/Atom feeds.  Use 'fetch' to read all items from a feed, 'check' to see only new items since last check, 'monitor_start' to begin periodic monitoring, 'monitor_stop' to stop a monitor, or 'list_monitors' to see active monitors.  Monitors can optionally filter items by keywords using the rss-filter WASM skill — only matching items are reported and notified.  Filter settings survive daemon restarts.")
+    (:description "Fetch, check, and monitor RSS/Atom feeds; or write/publish your own RSS feeds.
+Reading: 'fetch' reads all items from a URL, 'check' returns only new items since last check, 'monitor_start' starts periodic polling, 'monitor_stop' stops a monitor, 'list_monitors' shows active monitors.
+Writing: 'publish_item' adds an item to a named feed (creating it implicitly), 'configure_feed' sets feed metadata (title/description/link/max-items), 'get_feed_xml' returns the RSS 2.0 XML for serving, 'list_feed_items' shows the current item list, 'list_feeds' shows all feeds, 'clear_feed' removes all items (keeps config), 'delete_feed' removes feed entirely.
+Monitors can filter items by keywords via the rss-filter WASM skill.  Published feeds persist across restarts via encrypted storage.")
   ((action "string"
-           "The RSS action: fetch (get all items), check (get new items only), monitor_start (begin periodic monitoring), monitor_stop (stop monitoring), list_monitors (show active monitors)."
-           :enum ("fetch" "check" "monitor_start" "monitor_stop" "list_monitors")
+           "The RSS action: fetch, check, monitor_start, monitor_stop, list_monitors, publish_item, configure_feed, get_feed_xml, list_feed_items, list_feeds, clear_feed, delete_feed."
+           :enum ("fetch" "check" "monitor_start" "monitor_stop" "list_monitors"
+                  "publish_item" "configure_feed" "get_feed_xml"
+                  "list_feed_items" "list_feeds" "clear_feed" "delete_feed")
            :required-p t)
    (url "string"
         "The RSS/Atom feed URL. Required for fetch, check, monitor_start.")
    (name "string"
-         "Monitor name (for monitor_start/monitor_stop). Conventionally 'rss:something'.")
+         "Feed name for writing actions (publish_item, configure_feed, get_feed_xml, etc.), or monitor name for monitor_start/monitor_stop.  For monitors, conventionally 'rss:something'.")
    (interval-seconds "integer"
                      "Polling interval in seconds for monitor_start. Default: 3600 (1 hour)."
                      :default 3600)
@@ -390,7 +395,19 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
                "Keyword matching mode: 'any' (default, match if any keyword found) or 'all' (match only if all keywords found)."
                :enum ("any" "all"))
    (search-fields "array"
-                  "Which item fields to search for keywords.  Default: [\"title\", \"description\"].  Valid values: title, description, content."))
+                  "Which item fields to search for keywords.  Default: [\"title\", \"description\"].  Valid values: title, description, content.")
+   (title "string"
+          "Item title (for publish_item) or feed title (for configure_feed).")
+   (description "string"
+                "Item description/body (for publish_item) or feed description (for configure_feed).")
+   (link "string"
+         "Item URL (for publish_item) or feed homepage URL (for configure_feed).")
+   (guid "string"
+         "Explicit GUID for publish_item.  Auto-generated if omitted.")
+   (pub-date "string"
+             "Publication date in RFC 822 format for publish_item.  Defaults to current time.")
+   (max-items "integer"
+              "Maximum number of items to retain for configure_feed.  Oldest items are dropped.  Default: 100."))
   (cond
     ((string-equal action "fetch")
      (if (null url)
@@ -424,6 +441,63 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
        (if monitors
            (format nil "~{~S~^~%~}" monitors)
            "No active RSS monitors.")))
+    ;; --- Feed writing actions ---
+    ((string-equal action "publish_item")
+     (if (null name)
+         "Error: 'name' is required for publish_item"
+         (let ((guid (crichton/skills:rss-feed-publish
+                      name
+                      :title       (or title "")
+                      :description (or description "")
+                      :link        (or link "")
+                      :guid        guid
+                      :pub-date    pub-date)))
+           (format nil "Published item to feed '~A'. GUID: ~A" name guid))))
+    ((string-equal action "configure_feed")
+     (if (null name)
+         "Error: 'name' is required for configure_feed"
+         (progn
+           (crichton/skills:rss-feed-configure
+            name
+            :title       title
+            :description description
+            :link        link
+            :max-items   max-items)
+           (format nil "Feed '~A' configured." name))))
+    ((string-equal action "get_feed_xml")
+     (if (null name)
+         "Error: 'name' is required for get_feed_xml"
+         (crichton/skills:rss-feed-xml name)))
+    ((string-equal action "list_feed_items")
+     (if (null name)
+         "Error: 'name' is required for list_feed_items"
+         (let ((items (crichton/skills:rss-feed-items name)))
+           (if items
+               (with-output-to-string (s)
+                 (format s "Feed '~A': ~D item~:P~%" name (length items))
+                 (dolist (item items)
+                   (format s "  ~A~%" (getf item :title))
+                   (when (plusp (length (getf item :link)))
+                     (format s "    ~A~%" (getf item :link)))
+                   (format s "    ~A~%" (getf item :pub-date))))
+               (format nil "Feed '~A' has no items." name)))))
+    ((string-equal action "list_feeds")
+     (let ((feeds (crichton/skills:rss-feed-list)))
+       (if feeds
+           (format nil "Published feeds:~%~{  ~A~%~}" feeds)
+           "No published feeds configured.")))
+    ((string-equal action "clear_feed")
+     (if (null name)
+         "Error: 'name' is required for clear_feed"
+         (progn
+           (crichton/skills:rss-feed-clear name)
+           (format nil "Feed '~A' items cleared." name))))
+    ((string-equal action "delete_feed")
+     (if (null name)
+         "Error: 'name' is required for delete_feed"
+         (progn
+           (crichton/skills:rss-feed-delete name)
+           (format nil "Feed '~A' deleted." name))))
     (t (format nil "Unknown RSS action: ~A" action))))
 
 ;;; --- Battery tool ---

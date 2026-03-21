@@ -1384,6 +1384,74 @@ Lisp plist params are automatically converted to JSON objects by
 - Lists that don't look like plists (first element not a keyword)
   are serialized as JSON arrays
 
+*** RSS Feed Writing API
+
+Crichton can produce RSS 2.0 feeds in addition to consuming them.  The API
+lives in =skills/builtins/rss.lisp= under the heading "Feed writing/generation".
+Items are persisted to encrypted storage (namespace =rss-pub=) and survive
+daemon restarts.
+
+*Feed lifecycle*:
+
+#+begin_src lisp
+;; 1. Configure (optional — auto-created with defaults on first publish)
+(rss-feed-configure "my-feed"
+  :title "My Feed"
+  :description "Updates from Crichton"
+  :link "https://example.com"
+  :max-items 50)
+
+;; 2. Publish items
+(rss-feed-publish "my-feed"
+  :title "Something happened"
+  :description "Details about the event."
+  :link "https://example.com/post-1")
+;; => "https://example.com/post-1#<timestamp>"   ; GUID
+
+;; 3. Retrieve XML to serve
+(rss-feed-xml "my-feed")
+;; => "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+;;     <rss version=\"2.0\">..."
+
+;; 4. Inspect
+(rss-feed-items "my-feed")
+;; => ((:title "Something happened" :description "..." :link "..." :guid "..." :pub-date "...") ...)
+
+(rss-feed-list)
+;; => ("my-feed" ...)
+
+;; 5. Housekeeping
+(rss-feed-clear "my-feed")   ; remove items, keep config
+(rss-feed-delete "my-feed")  ; remove config and items
+#+end_src
+
+*Function reference*:
+
+| Function               | Arguments                                          | Returns          |
+|------------------------+----------------------------------------------------+------------------|
+| =rss-feed-configure=   | name &key title description link max-items         | feed name        |
+| =rss-feed-publish=     | name &key title description link guid pub-date     | GUID string      |
+| =rss-feed-items=       | name                                               | list of plists   |
+| =rss-feed-xml=         | name                                               | XML string       |
+| =rss-feed-list=        | —                                                  | list of names    |
+| =rss-feed-clear=       | name                                               | T                |
+| =rss-feed-delete=      | name                                               | T                |
+
+*Storage details*:
+
+- Namespace: =rss-pub= (file: =~/.crichton/data/rss-pub.age=)
+- Config key: =feed-config:<name>=  (hash-table with "title", "description", "link", "max_items")
+- Items key:  =feed-items:<name>=   (vector of hash-tables, newest first)
+- Items are capped at =max_items= (default 100); oldest entries are dropped.
+- Dates are stored in RFC 822 format ("Mon, 01 Jan 2026 00:00:00 +0000") as
+  required by RSS 2.0 validators.
+- XML output escapes =&=, =<=, =>= in all text fields.
+
+*Agent tool actions* (in the =rss= tool):
+
+=publish_item=, =configure_feed=, =get_feed_xml=, =list_feed_items=,
+=list_feeds=, =clear_feed=, =delete_feed= (see =agent/tools.lisp=).
+
 ** Agent Tools API (~agent/tools.lisp~)
 
 Register and manage tools available to the LLM agent.

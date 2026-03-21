@@ -779,14 +779,18 @@ cp ~/.crichton/tasks/user-tasks.age /secure/backup/location/
 To restore, copy it back before starting the daemon.  The age identity key
 (=~/.crichton/age-identity.txt=) must also be present to decrypt it.
 
-** RSS Feed Monitor
+** RSS Feed Monitor and Publisher
 
 Fetches and monitors RSS and Atom feeds.  Tracks which items you have already
 seen, and sends push notifications to connected TUI and Emacs clients when
 new items appear.
 
-Feed monitors persist across daemon restarts — you only need to set them up
-once.
+Crichton can also /produce/ RSS 2.0 feeds — publishing items from within a
+conversation and serving the resulting XML to any RSS reader.  Use this to
+broadcast status updates, summaries, curated links, or any agent-generated
+content as a standard feed.
+
+Feed monitors and published feeds both persist across daemon restarts.
 
 *Network* — add the feed domains to =allowed_builtin_http_domains= if you are
 using =egress_policy = "deny-all"=:
@@ -799,7 +803,7 @@ allowed_builtin_http_domains = ["feeds.arstechnica.com", "lobste.rs"]
 
 *Credentials* — none required.
 
-*Example interactions*:
+*Example interactions (reading)*:
 
 #+begin_example
 Start monitoring https://lobste.rs/rss for new posts every 15 minutes.
@@ -819,6 +823,44 @@ Monitor https://news.ycombinator.com/rss with keywords "lisp, wasm, security".
 
 This uses the =rss-filter= WASM skill (see the WASM Skills section) internally.
 The filter settings are saved with the monitor and survive restarts.
+
+*** Publishing your own feeds
+
+Crichton can generate valid RSS 2.0 feeds from items you publish.  Items are
+stored in encrypted storage and survive daemon restarts.
+
+*Example interactions (writing)*:
+
+#+begin_example
+Create an RSS feed called "daily-digest" with title "My Daily Digest".
+Publish an item to daily-digest: "Interesting AI paper" linking to https://example.com/paper.
+Show me the RSS XML for daily-digest.
+What items are in the daily-digest feed?
+Clear all items from daily-digest.
+#+end_example
+
+*Feed operations*:
+
+| Action              | Description                                          |
+|---------------------+------------------------------------------------------|
+| =configure_feed=    | Set feed title, description, link, and max-items cap |
+| =publish_item=      | Add an item (title, description, link, guid)         |
+| =get_feed_xml=      | Get RSS 2.0 XML ready to serve to a reader           |
+| =list_feed_items=   | Show items currently in a feed                       |
+| =list_feeds=        | Show all configured feeds                            |
+| =clear_feed=        | Remove all items (keeps configuration)               |
+| =delete_feed=       | Remove feed entirely                                 |
+
+*Serving the feed*: The =get_feed_xml= action returns the raw RSS 2.0 XML.
+Pipe it to a file or to an HTTP server to make it accessible to readers:
+
+#+begin_example
+Show me the XML for my daily-digest feed so I can save it.
+#+end_example
+
+*Persistence*: Published feeds are stored in =~/.crichton/data/rss-pub.age=
+(age-encrypted).  The most recent /N/ items are retained (default 100;
+configurable via =configure_feed= with =max-items=).
 
 ** Battery Monitor
 
