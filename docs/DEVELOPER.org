@@ -2854,3 +2854,657 @@ crichton-client
 (crichton/storage:flush-namespace "meters")
 #+end_src
 
+* Writing WASM Skills
+
+This section is a focused developer guide for authoring WASM skills from
+scratch.  The [[*Skill Development][Skill Development]] section above covers the manifest format
+and Rust/JSON-ABI details; this section emphasises the rationale, the
+directory layout, the WAT quick-start path, and the full host function
+reference.
+
+** Why WASM?
+
+| Property      | Benefit                                                                   |
+|---------------+---------------------------------------------------------------------------|
+| Sandboxed     | No direct filesystem, network, or environment variable access             |
+| Portable      | Write once in any WASM-capable language (Rust, C, AssemblyScript, WAT)   |
+| Signed        | Ed25519 signatures verify code integrity before execution                 |
+| Capability-based | Explicit =skill.toml= manifest declares what the skill is allowed to do |
+| Isolated      | Runs in a separate runner process — cannot crash or compromise the daemon |
+
+This matches Design Principle 1: /Skills must be isolated/.
+
+** Skill Bundle Structure
+
+#+begin_src ditaa
+~/.crichton/skills/my-skill/
++-- skill.toml    : Manifest (required)
++-- skill.wasm    : Compiled WASM binary (required)
++-- skill.wat     : WAT source (optional, human-readable)
+#+end_src
+
+The =skill.toml= manifest must be present.  =skill.wasm= is the runnable
+binary.  =skill.wat= is optional source; commit it for version control but
+do not ship it to end users.
+
+** Quick Start: WAT (5 minutes)
+
+WAT (WebAssembly Text format) is the human-readable form of WASM and
+requires no compiler toolchain beyond =wat2wasm=.
+
+*Install tools:*
+#+begin_src bash
+sudo apt install wabt   # Debian/Ubuntu
+brew install wabt       # macOS
+#+end_src
+
+*Create the skill directory:*
+#+begin_src bash
+mkdir -p ~/.crichton/skills/meaning-of-life
+cd ~/.crichton/skills/meaning-of-life
+#+end_src
+
+*Write =skill.toml=:*
+#+begin_src toml
+[skill]
+name = "meaning-of-life"
+version = "1.0.0"
+author = "you@example.com"
+description = "Returns 42"
+signature = ""
+
+[capabilities]
+http_domains = []
+max_memory_mb = 16
+max_cpu_seconds = 5
+#+end_src
+
+*Write =skill.wat=:*
+#+begin_src wat
+(module
+  ;; Import Crichton's log host function
+  (import "env" "log" (func $log (param i32 i32 i32)))
+
+  ;; Export linear memory (required for host functions that read strings)
+  (memory (export "memory") 1)
+
+  ;; Embed a string at offset 0 in the data section
+  (data (i32.const 0) "Hello from WASM!")
+
+  ;; Export the entry-point function
+  (func (export "main") (result i32)
+    ;; log(INFO=1, offset=0, len=16)
+    (call $log
+      (i32.const 1)   ;; level: INFO
+      (i32.const 0)   ;; string starts at offset 0
+      (i32.const 16)) ;; "Hello from WASM!" is 16 bytes
+    ;; Return the answer
+    (i32.const 42)))
+#+end_src
+
+*Compile:*
+#+begin_src bash
+wat2wasm skill.wat -o skill.wasm
+#+end_src
+
+*Test from the SLIME/SLY REPL:*
+#+begin_src lisp
+(crichton/wasm:run-wasm-with-host-fns
+  "(module
+     (import \"env\" \"log\" (func $log (param i32 i32 i32)))
+     (memory (export \"memory\") 1)
+     (data (i32.const 0) \"Hello from WASM!\")
+     (func (export \"main\") (result i32)
+       (call $log (i32.const 1) (i32.const 0) (i32.const 16))
+       (i32.const 42)))"
+  "main")
+;; => 42  (also logs "Hello from WASM!" at INFO level)
+#+end_src
+
+See =examples/skills/meaning-of-life/= for the complete working example.
+
+** Quick Start: Rust / JSON ABI
+
+For skills that need structured input/output, use the JSON-through-memory
+ABI with Rust and =serde_json=.  See =examples/skills/rss-filter/= for a
+production example.
+
+Key points:
+- Export =alloc(size: usize) -> *mut u8= and =dealloc(ptr: *mut u8)=
+- The entry-point function takes =(input_ptr: *const u8, input_len: usize)=
+  and returns an i64 that packs =(output_ptr, output_len)=
+- Declare =abi = "json"= in =[provides.function.<name>]= in =skill.toml=
+- Build with =cargo build --release --target wasm32-unknown-unknown=
+
+See [[*Building a WASM Skill][Building a WASM Skill]] for the full Rust template.
+
+** Host Functions Reference
+
+Skills have no direct system access.  All external capabilities come through
+host functions imported from the ="env"= module.
+
+*** =env.log(level: i32, ptr: i32, len: i32)=
+
+Log a UTF-8 string from WASM linear memory.
+
+| Argument | Meaning                                      |
+|----------+----------------------------------------------|
+| =level=  | 0 = debug, 1 = info, 2 = warn, 3 = error     |
+| =ptr=    | Byte offset in WASM memory where string starts |
+| =len=    | Length of string in bytes                    |
+
+Returns nothing (void).  *Status*: Implemented.
+
+WAT import:
+#+begin_src wat
+(import "env" "log" (func $log (param i32 i32 i32)))
+#+end_src
+
+*** =env.kv_get(key_ptr: i32, key_len: i32, out_ptr: i32, out_cap: i32) -> i32=
+
+Retrieve a value from the skill's private key-value store.
+
+| Argument   | Meaning                           |
+|------------+-----------------------------------|
+| =key_ptr=  | Pointer to key string in memory   |
+| =key_len=  | Length of key string in bytes     |
+| =out_ptr=  | Pointer to output buffer          |
+| =out_cap=  | Capacity of output buffer in bytes |
+
+Returns: bytes written to =out_ptr=, or -1 if key not found.
+*Status*: Implemented (via =crichton/skills:kv-get=, stored in =~/.crichton/skills-kv/=).
+
+*** =env.kv_set(key_ptr: i32, key_len: i32, val_ptr: i32, val_len: i32) -> i32=
+
+Store a key-value pair in the skill's private storage.
+
+Returns: 0 on success, negative error code on failure.
+*Status*: Implemented.
+
+*** =env.kv_delete(key_ptr: i32, key_len: i32) -> i32=
+
+Delete a key from the skill's private storage.
+
+Returns: 0 on success, -1 if not found.
+*Status*: Implemented.
+
+*** =env.kv_exists(key_ptr: i32, key_len: i32) -> i32=
+
+Check whether a key exists in the skill's private storage.
+
+Returns: 1 if exists, 0 if not.
+*Status*: Implemented.
+
+*** =env.kv_list(prefix_ptr: i32, prefix_len: i32, out_ptr: i32, out_cap: i32) -> i32=
+
+List all keys in the skill's store that match =prefix= (empty prefix = all
+keys).  The output is a newline-delimited list of key strings.
+
+Returns: bytes written to =out_ptr=, or -1 on error.
+*Status*: Implemented.
+
+*** =env.http_request(method_ptr: i32, method_len: i32, url_ptr: i32, url_len: i32, headers_ptr: i32, headers_len: i32, body_ptr: i32, body_len: i32) -> i32=
+
+Make an HTTP request.  The URL must match a domain declared in
+=capabilities.http_domains= in =skill.toml=.
+
+Returns: HTTP status code, or negative error code.
+*Status*: Host function registered; full implementation pending (returns 403
+until complete).  URL allowlist enforcement logic is in
+=runner/skill-context.lisp:check-http-allowlist=.
+
+*** =env.get_secret(name_ptr: i32, name_len: i32) -> i32=
+
+Retrieve a secret from Crichton's encrypted credential store.  The skill
+must declare =requires_credential = "credential-name"= in its =skill.toml=.
+
+Returns: pointer to secret value in WASM memory, or -1 if not found or not
+allowed.
+*Status*: Host function registered; full mediation implementation pending.
+
+** Capability Enforcement
+
+The runner process checks all capability constraints before and during skill
+execution:
+
+- =http_domains=: Each HTTP request target is validated against the allowlist.
+- =max_memory_mb=: Passed to wasmtime as a memory limit at instantiation time.
+- =kv_store.max_keys= and =kv_store.max_total_bytes=: Enforced by the KV
+  store layer before every write.
+- Credentials: The skill must declare =requires_credential= in its manifest;
+  the daemon validates this before injecting the credential.
+
+Skills that violate their declared capabilities receive error return codes
+from host functions — they are not killed.  This is intentional: a skill
+returning an error code is safer than an abrupt WASM trap.
+
+* Skill Signing
+
+Crichton uses Ed25519 signatures (via =ironclad=) to verify skill
+integrity.  Signing is optional during development but required for
+production distribution.
+
+** Key Generation
+
+Generate a signing keypair via the SLIME/SLY REPL:
+
+#+begin_src lisp
+(crichton/skills:generate-signing-keypair
+  :private-key-path #p"~/.crichton/signing-key.priv")
+;; => (values key-id private-key-path public-key-path)
+#+end_src
+
+- *Private key*: =~/.crichton/signing-key.priv= (keep secret, mode 0600)
+- *Public key*: automatically installed in =~/.crichton/trusted-keys/{key-id}.pub=
+
+** Trusted Keys Directory
+
+#+begin_src ditaa
+~/.crichton/
++-- signing-key.priv           : Ed25519 private key (secret)
++-- trusted-keys/
+|   +-- abc123.pub             : Your own public key (auto-installed)
+|   +-- vendor-xyz.pub         : Third-party key you chose to trust
+#+end_src
+
+At startup the daemon loads all =*.pub= files in =trusted-keys/=.  A skill
+whose =signature= field matches any trusted key will be allowed to run.
+
+** Signing a Skill
+
+#+begin_src lisp
+(let* ((wasm-bytes (with-open-file (s #p"~/.crichton/skills/my-skill/skill.wasm"
+                                      :element-type '(unsigned-byte 8))
+                     (let ((b (make-array (file-length s)
+                                          :element-type '(unsigned-byte 8))))
+                       (read-sequence b s) b)))
+       (signature (crichton/skills:sign-skill-bytes
+                   wasm-bytes
+                   #p"~/.crichton/signing-key.priv")))
+  ;; Paste the printed signature into skill.toml as:
+  ;; signature = "<value>"
+  (format t "signature = ~S~%" signature))
+#+end_src
+
+Update =skill.toml=:
+#+begin_src toml
+[skill]
+name = "my-skill"
+signature = "base64-ed25519-sig..."
+#+end_src
+
+** Verifying a Skill
+
+#+begin_src lisp
+(let ((manifest (crichton/skills:parse-skill-manifest
+                  #p"~/.crichton/skills/my-skill/skill.toml"))
+      (wasm-bytes (with-open-file (s #p"~/.crichton/skills/my-skill/skill.wasm"
+                                     :element-type '(unsigned-byte 8))
+                    (let ((b (make-array (file-length s)
+                                         :element-type '(unsigned-byte 8))))
+                      (read-sequence b s) b))))
+  (multiple-value-bind (valid-p key-id)
+      (crichton/skills:verify-skill-bundle manifest wasm-bytes)
+    (if valid-p
+        (format t "Valid signature from key ~A~%" key-id)
+        (format t "Invalid or missing signature~%"))))
+#+end_src
+
+** Unsigned Skills During Development
+
+Leave =signature = ""= in =skill.toml= while developing.  The daemon
+accepts unsigned skills in this state.  Add the signature only when
+publishing for others to use.
+
+* State Files Subsystem
+
+The =crichton/state= module manages the three identity/continuity files
+that are injected into the LLM system prompt on every turn, plus a daily
+journal that is searchable on-demand.
+
+** Why Plain Text?
+
+- Org-mode is the project's documentation standard.
+- The LLM reads prose, not data structures — no schema drift.
+- Human-editable in Emacs without tooling.
+- Can be age-encrypted at rest (the infrastructure already exists).
+
+** File Layout
+
+#+begin_src ditaa
+~/.crichton/state/
++-- SOUL.org       : Persona, values, behavioural tone
++-- USER.org       : User identity and preferences
++-- MEMORY.org     : Curated long-term facts (main sessions only)
++-- journal/
+|   +-- 2026-03-02.org    : Today's raw daily log (append-only)
+|   +-- 2026-03-01.org    : Yesterday's daily log
+#+end_src
+
+Directory permissions: =0700=.  File permissions: =0600=.
+
+** File Definitions
+
+*** SOUL.org — Persona and Values
+
+Who is Crichton?  How should it behave?  Loaded on every turn.  The
+user writes this file; the agent may suggest edits but must ask first.
+A minimal template is created on first boot if the file does not exist.
+
+*** MEMORY.org — Curated Long-Term Memory
+
+What does Crichton need to remember across sessions?  Auto-injected in
+main sessions.  *Not* injected in channel (Discord) sessions or subagent
+contexts — personal facts must not leak to those contexts.
+
+The agent writes to this file when it learns durable facts (preferences,
+ongoing projects, lessons learned).  It is curated prose, not a raw log.
+
+*** USER.org — User Context
+
+Who is the human?  Loaded alongside SOUL.org on every turn.
+
+*** journal/ — Daily Logs
+
+Raw, append-only daily notes.  Never auto-injected (would blow the context
+window).  Searchable on-demand via the =memory_search= agent tool.  One
+file per day: =journal/YYYY-MM-DD.org=.
+
+** Module API (=crichton/state=)
+
+| Function                       | Purpose                                              |
+|--------------------------------+------------------------------------------------------|
+| =state-dir=                    | Return (creating if needed) =~/.crichton/state/=    |
+| =load-bootstrap-files=         | Read SOUL + USER + MEMORY into a plist              |
+| =filter-bootstrap-for-session= | Strip MEMORY for subagent/channel sessions           |
+| =bootstrap-system-prompt=      | Build composite system prompt with bootstrap context |
+| =journal-dir=                  | Return (creating if needed) =state/journal/=         |
+| =journal-today-path=           | Return path for today's journal file                 |
+| =journal-append=               | Append an entry to today's journal                   |
+| =journal-search=               | Search journal files by date range and/or keyword    |
+| =append-to-memory=             | Append a curated fact to MEMORY.org                  |
+| =flush-session-to-journal=     | Pre-compaction dump of session history to journal    |
+
+** Bootstrap Loading Flow
+
+#+begin_src ditaa
++-------------------+     +---------------------+
+| Agent turn starts  |---->| load-bootstrap-files|
++-------------------+     +----------+----------+
+                                      |
+                              +-------v-------+
+                              | Session type? |
+                              +---+-------+---+
+                                  |       |
+                           main   |       | channel / subagent
+                                  |       |
+                    +-------------v-+   +-v-----------+
+                    | Full set      |   | Minimal set |
+                    | SOUL          |   | SOUL        |
+                    | USER          |   | USER        |
+                    | MEMORY        |   +-------------+
+                    +-------+-------+
+                            |
+                   +--------v---------+
+                   | bootstrap-system |
+                   | -prompt          |
+                   | (char budget     |
+                   |  enforced)       |
+                   +------------------+
+#+end_src
+
+The composite system prompt is =*default-system-prompt*= concatenated with
+the loaded bootstrap text.  Per-file limit: 20,000 chars.  Total limit:
+150,000 chars (configurable in =config.toml= =[state]= section).
+
+** Configuration
+
+#+begin_src toml
+[state]
+enabled = true
+max_file_chars = 20000
+max_total_chars = 150000
+encrypt = false
+#+end_src
+
+** Agent Tools for Memory
+
+Two tools registered in =agent/tools.lisp= give the LLM controlled access:
+
+- *=memory_write=*: Write a durable fact to MEMORY.org or today's journal.
+  Target is ="memory"= or ="journal"=.
+- *=memory_search=*: Search daily journal entries by keyword and date range.
+
+** Security Notes
+
+MEMORY.org is never accessible to WASM skills (no host function, no RPC
+op exposes the state directory).  Channel sessions receive only SOUL.org
+and USER.org — MEMORY.org is stripped by =filter-bootstrap-for-session=.
+
+* TUI Architecture
+
+This section describes the TUI client's internal architecture for
+developers working on =crichton-tui=.  For user-facing documentation see
+the [[*Architecture Overview][Architecture Overview]] section.
+
+** TEA (The Elm Architecture) via cl-tuition
+
+The TUI is built on =cl-tuition=, a Common Lisp port of Go's Bubble Tea
+framework.  It implements the TEA pattern:
+
+#+begin_src ditaa
++--------+     +----------------+     +--------+
+| Event  |---->| update-message |---->| Model  |
++--------+     | (CLOS method)  |     | (CLOS) |
+               +-------+--------+     +---+----+
+                       |                  |
+               +-------v--------+     +---v----+
+               | Command        |     | view   |
+               | (zero-arg      |     | (fn)   |
+               | lambda, run on |     +---+----+
+               | thread pool)   |         |
+               +----------------+     +---v-----------+
+                                       | Terminal I/O |
+                                       +--------------+
+#+end_src
+
+- *Model*: A =tui-model= CLOS instance holding all application state (chat
+  history, input buffer, scroll position, status, notifications, session ID,
+  terminal dimensions, spinner).
+- *Messages*: CLOS instances created via =tui:defmessage=.  The main loop
+  dispatches each message to =tui:update-message= specialised on the model
+  and message type.
+- *View*: A pure function from model to terminal output (ANSI escape strings).
+  Called after every =update-message= invocation.
+- *Commands*: Zero-argument lambdas returned (optionally) from
+  =update-message=.  The framework runs them on a thread pool so the main
+  loop never blocks on I/O.
+
+** Message Types
+
+#+begin_src lisp
+;; Incoming from the daemon I/O thread
+(tui:defmessage daemon-response-msg   ; normal chat response
+  ((id error-p text session)))
+(tui:defmessage daemon-notification-msg ; push notification
+  ((kind text source)))
+(tui:defmessage daemon-disconnected-msg ())
+
+;; User actions
+(tui:defmessage send-chat-msg ((text)))
+
+;; Framework messages (from cl-tuition)
+;; tui:key-msg, tui:window-size-msg, tui:tick-msg
+#+end_src
+
+** Update Cycle
+
+1. User presses Enter → =tui:key-msg= dispatched to =update-message=
+2. Model updated (new =chat-entry= pushed, input cleared, status → =:waiting=)
+3. =update-message= returns a command: a lambda that writes NDJSON to the
+   daemon socket on a pool thread
+4. Daemon responds asynchronously; the I/O thread reads the response and
+   calls =(tui:send program (make-instance 'daemon-response-msg ...)=)
+5. =daemon-response-msg= dispatched to =update-message=: appends assistant
+   entry to model, clears spinner, status → =:idle=
+6. =view= re-renders the complete frame
+
+For streaming responses, =chat_delta= push messages arrive before
+=chat_done= and are accumulated into a provisional =chat-entry= that is
+updated on each delta.
+
+** Threading Model
+
+#+begin_src ditaa
++-----------------------------------+
+|  Main Thread (cl-tuition loop)    |
+|                                   |
+|  - Terminal I/O and rendering     |
+|  - Input decoding                 |
+|  - update-message dispatch        |
+|  - view -> terminal output        |
++---+-------------------------------+
+    |
+    | tui:send (thread-safe)
+    |
++---v-------------------------------+
+|  Daemon I/O Thread (bt:make-thread)|
+|                                   |
+|  - Persistent connection to       |
+|    ~/.crichton/daemon.sock        |
+|  - Reads NDJSON lines in a loop   |
+|  - Injects daemon-response-msg    |
+|    and daemon-notification-msg    |
++-----------------------------------+
+#+end_src
+
+*Invariant*: The daemon I/O thread never touches terminal state directly.
+All state mutations happen on the main thread via =tui:send=.
+
+** Rendering Pipeline
+
+The =view= function in =tui/render.lisp= computes the full terminal frame
+on every call.  Layout is derived from =model-width= / =model-height=
+(updated on =tui:window-size-msg= / =SIGWINCH=):
+
+#+begin_src ditaa
++------------------------------------------------------+
+| Title bar (1 line, full width)                       |
++------------------------------------------------------+
+|                                                      |
+|  Chat history (remaining height, scrollable)         |
+|  - word-wrapped to (width - 4)                       |
+|  - Markdown-to-ANSI rendered                         |
+|  - Notification toasts as overlays                   |
+|                                                      |
++------------------------------------------------------+
+| Status bar (1 line)                                  |
++------------------------------------------------------+
+| Input area (1-3 lines, grows with wrapped text)      |
++------------------------------------------------------+
+#+end_src
+
+LLM responses are rendered with lightweight Markdown-to-ANSI conversion:
+=**bold**=, =*italic*=, =`code`=, fenced code blocks, bullet and numbered
+lists.
+
+** How the TUI Connects to the Daemon
+
+The TUI reuses the same NDJSON-over-Unix-socket protocol as =crichton-client=.
+Two extensions are used:
+
+- ={op: "chat", stream: true}=: The daemon pushes =chat_delta= and
+  =chat_done= messages before (and instead of) the normal response.
+- ={op: "subscribe"}=: The daemon registers the connection for unsolicited
+  =notify= push messages (battery alerts, RSS items, scheduler events).
+
+The daemon I/O thread loop dispatches both types of unsolicited messages
+by checking the ="op"= field of every incoming NDJSON line.  See
+=tui/client.lisp:start-daemon-reader= for the dispatch logic.
+
+** Source Files
+
+| File              | Purpose                                                        |
+|-------------------+----------------------------------------------------------------|
+| =tui/package.lisp=  | Package definition; exports =main=, =tui-repl=               |
+| =tui/protocol.lisp= | =connect-daemon=, =write-message=, =read-message=            |
+| =tui/model.lisp=    | =tui-model= and =chat-entry= CLOS classes                    |
+| =tui/messages.lisp= | =tui:defmessage= message type definitions                    |
+| =tui/theme.lisp=    | Colour and style constants (=tui:make-style= objects)        |
+| =tui/sixel.lisp=    | Sixel terminal detection and =img2sixel= integration         |
+| =tui/render.lisp=   | =view= function, layout computation, Markdown renderer       |
+| =tui/client.lisp=   | =tui:update-message= methods, daemon I/O thread, entry point |
+
+* Coding Conventions
+
+** =defclass= over =defstruct= (Hot-Reload Safety)
+
+*Always use =defclass= instead of =defstruct=* for data types that may
+evolve.
+
+*Rationale*: SBCL rejects incompatible struct redefinitions at hot-reload
+time, forcing a daemon restart.  CLOS classes update existing instances
+automatically via =update-instance-for-redefined-class=, enabling live
+iteration.  Use =defstruct= only for truly fixed-layout,
+performance-critical types that will never change.  In practice: almost
+never.
+
+See the history in beads cricht-rcl (original conversion), cricht-6d7
+(inadvertent regression), cricht-p6i (policy bead).
+
+** Zero STYLE-WARNING Policy (Boy-Scout Rule)
+
+The target for every commit is *zero STYLE-WARNING conditions* from:
+
+#+begin_src bash
+sbcl --noinform --non-interactive \
+  --eval '(require :asdf)' \
+  --eval '(push #p"/home/gjbroom/devel/crichton/" asdf:*central-registry*)' \
+  --eval '(asdf:load-system :crichton :force t)'
+#+end_src
+
+Fix every warning you encounter, even if you didn't introduce it (the
+boy-scout rule: leave the campsite cleaner than you found it).
+
+** Commit Style
+
+- Commit format: =type(bead-id): short description=
+  Example: =feat(cricht-z1o): consolidate developer docs=
+- Commit as you go.  Every meaningful change gets its own commit.
+- *Do NOT add Co-Authored-By lines* to commit messages.
+- Push to =origin master= at the end of every work session (see
+  AGENTS.org "Landing the Plane").
+
+** Changelog Entries
+
+Add an entry to the =Unreleased= section of =CHANGELOG.org= for any
+user-visible feature or bug fix.  Focus on what changed from the user's
+perspective, not implementation details.  Internal refactorings do not
+need changelog entries — =git log= is sufficient.
+
+** Diagrams
+
+Use =#+begin_src ditaa= blocks for all diagrams.  Do not use Unicode
+box-drawing characters or =#+begin_example= blocks for diagrams.
+
+Reason: box-drawing characters are not rendered correctly when org-mode
+is exported to LaTeX/PDF.  ditaa uses plain ASCII (=+-|= for boxes,
+=-->= for arrows) and org-babel converts them to proper images on export.
+
+** Hot-Loading vs Restart
+
+*Never restart the daemon* to pick up code changes.  Restart loses all
+in-memory context (session history, channel state, scheduler queue).
+
+Use SBCL hot-loading instead:
+
+#+begin_src lisp
+;; From SLIME/SLY connected to port 4005
+(asdf:load-system :crichton :force t)  ; Full reload
+(load "/path/to/file.lisp")            ; Single file
+(crichton/agent:register-all-tools)    ; After tool handler changes
+#+end_src
+
+Or via the command line with =swank-client= (see =AGENTS.org= for the
+one-liner).
+
