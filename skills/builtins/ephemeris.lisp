@@ -100,7 +100,7 @@
          
          ;; Illumination: ranges from 0 (new) to 1 (full) and back
          ;; Uses cosine to smooth the brightness curve
-         (illumination (* 50.0d0 (+ 1.0d0 (cos (* 2.0d0 pi phase)))))
+         (illumination (* 50.0d0 (- 1.0d0 (cos (* 2.0d0 pi phase)))))
          
          ;; Determine phase name
          (phase-name
