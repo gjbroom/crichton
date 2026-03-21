@@ -443,7 +443,7 @@ then send the result back."
                              (op . "emacs_result")
                              (error . ((code . "not_allowed")
                                        (message . ,(format "Function %s not in allowlist"
-                                                           func-name)))))))))))))
+                                                           func-name)))))))))))
 
 ;;;; Convenience commands
 
