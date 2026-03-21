@@ -1,0 +1,136 @@
+{
+  "audit": {
+    "project": "openclaw",
+    "updated": "2026-03-20"
+  },
+  "phases": {
+    "phase3": {
+      "title": "Vulnerability Pattern Analysis",
+      "status": "completed",
+      "items": [
+        {
+          "id": "3.1",
+          "title": "Command injection pattern analysis",
+          "bead": "cricht-001",
+          "status": "completed",
+          "risk": "LOW",
+          "findings": "30+ exec imports, ~20 call sites. All use execFile/array args. No shell string interpolation found."
+        },
+        {
+          "id": "3.2",
+          "title": "Path traversal pattern analysis",
+          "bead": "cricht-002",
+          "status": "completed",
+          "risk": "MEDIUM",
+          "findings": "1841+ path.join calls, strong protections overall. 2 potential risks in session ID path handling."
+        },
+        {
+          "id": "3.3",
+          "title": "SQL injection pattern analysis",
+          "bead": "cricht-003",
+          "status": "completed",
+          "risk": "LOW",
+          "findings": "All SQLite queries parameterized. FTS input sanitized. No string interpolation in queries."
+        },
+        {
+          "id": "3.4",
+          "title": "Weak cryptography analysis",
+          "bead": "cricht-004",
+          "status": "completed",
+          "risk": "LOW",
+          "findings": "Math.random used only for cosmetic purposes. sha1 used only for fingerprinting. crypto.randomBytes/randomUUID used for tokens/keys."
+        },
+        {
+          "id": "3.5",
+          "title": "Data exposure analysis",
+          "bead": "cricht-005",
+          "status": "completed",
+          "risk": "LOW",
+          "findings": "No actual secrets found in console.log/logger call sites. No credential leaks in error messages."
+        },
+        {
+          "id": "3.6",
+          "title": "Insecure deserialization analysis",
+          "bead": "cricht-006",
+          "status": "completed",
+          "risk": "MEDIUM",
+          "findings": "296+ JSON.parse calls. 3 medium-risk sites: WebSocket message handler, SSE stream parser, CLI parameter parsing — no schema validation at these boundaries."
+        }
+      ]
+    },
+    "phase4": {
+      "title": "Documentation Review",
+      "status": "completed",
+      "items": [
+        {
+          "id": "4.1",
+          "title": "Review SECURITY.md",
+          "bead": "cricht-007",
+          "status": "completed",
+          "findings": "SECURITY.md presents partial/misleading security posture. Covers Docker/Node.js hardening but omits skill execution model entirely. Basic disclosure process (single Gmail). No explicit threat model."
+        },
+        {
+          "id": "4.2",
+          "title": "Review security documentation",
+          "bead": "cricht-008",
+          "status": "completed",
+          "findings": "21 docs reviewed. Excellent hardening guidance overall. 6 doc-vs-code gaps found. Most critical: skill trust boundary undocumented; sandbox off by default and omitted from secure baseline config."
+        },
+        {
+          "id": "4.3",
+          "title": "Review configuration examples",
+          "bead": "cricht-009",
+          "status": "completed",
+          "findings": "16 files reviewed. 11 findings: real phone number in .env.example, weak example gateway tokens, inline API keys normalized to placeholders, legacy Claude web scraping vars in docker-compose.yml. Good secure defaults overall."
+        }
+      ]
+    },
+    "phase5": {
+      "title": "Dependency Analysis",
+      "status": "completed",
+      "items": [
+        {
+          "id": "5.1",
+          "title": "Run pnpm audit",
+          "bead": "cricht-010",
+          "status": "completed",
+          "findings": "1,209 deps scanned. 1 moderate CVE: request package SSRF vulnerability, present only in optional Matrix extension. No critical or high severity CVEs."
+        },
+        {
+          "id": "5.2",
+          "title": "Dependency count and pinning analysis",
+          "bead": "cricht-011",
+          "status": "completed",
+          "findings": "53 prod + 20 dev direct deps. 78% use caret ranges (not pinned). 4 pre-release prod deps. 8 native build scripts. typebox version conflict. No pnpm audit step in CI pipeline."
+        },
+        {
+          "id": "5.3",
+          "title": "Check outdated packages",
+          "bead": "cricht-014",
+          "status": "completed",
+          "findings": "Security overrides maintained for tar/tough-cookie/qs/fast-xml-parser. Sole audit CVE (request SSRF) has no available patch."
+        }
+      ]
+    },
+    "phase6": {
+      "title": "Test Coverage",
+      "status": "in_progress",
+      "items": [
+        {
+          "id": "6.1",
+          "title": "Run test suite",
+          "bead": "cricht-015",
+          "status": "completed",
+          "findings": "6,199 passed, 28 failed, 1 skipped. All failures from missing LanceDB native dependency — not security-related. Gateway tests: 219/219 passed."
+        },
+        {
+          "id": "6.2",
+          "title": "Run test coverage",
+          "bead": "cricht-016",
+          "status": "not_started",
+          "findings": null
+        }
+      ]
+    }
+  }
+}
