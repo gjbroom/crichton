@@ -5,6 +5,9 @@
 
 (in-package #:crichton/config)
 
+(defparameter *crichton-version* "0.2.0"
+  "Crichton daemon version string. Must match crichton.asd :version.")
+
 (defvar *config* nil
   "Parsed configuration plist. Loaded from ~/.crichton/config.toml.")
 
@@ -47,15 +50,15 @@
   "Convert a cl-toml value to a Lisp value.
    Hash-tables become plists, cl-toml booleans become T/NIL, rest pass through.
    NOTE: String values remain strings — callers expecting keywords (e.g. :provider,
-   :backend, :egress-policy) must normalize themselves. See llm/registry.lisp for
-   the pattern. A future config-section-get-keyword accessor could centralize this."
-  (cond
-    ((hash-table-p value) (toml-table-to-plist value))
-    ((eq value 'cl-toml:true) t)
-    ((eq value 'cl-toml:false) nil)
-    ((stringp value) value)
-    ((vectorp value) (map 'list #'toml-value-to-lisp value))
-    (t value)))
+   :backend, :egress-policy) should use CONFIG-SECTION-GET-KEYWORD."
+  (typecase value
+    (hash-table (toml-table-to-plist value))
+    (string value)
+    (vector (map 'list #'toml-value-to-lisp value))
+    (t (cond
+         ((eq value 'cl-toml:true) t)
+         ((eq value 'cl-toml:false) nil)
+         (t value)))))
 
 (defun deep-merge-plist (defaults overrides)
   "Merge OVERRIDES into DEFAULTS. Both are plists. Nested plists are merged recursively.
@@ -83,6 +86,14 @@
 (defun config-section-get (section key &optional default)
   "Get a nested config value. (config-section-get :daemon :swank-port) => 4005"
   (getf (config-get section) key default))
+
+(defun config-section-get-keyword (section key &optional default)
+  "Like CONFIG-SECTION-GET but normalizes string values to keywords.
+   Use for config values that should be keywords (:provider, :backend, :egress-policy, etc.)."
+  (let ((val (config-section-get section key default)))
+    (if (stringp val)
+        (intern (string-upcase val) :keyword)
+        val)))
 
 (defun default-config ()
   "Sensible defaults for a fresh install."
@@ -166,13 +177,9 @@
                         (setf (symbol-value provider-var) nil))))
 
                   ;; Update logging level if changed
-                  (let ((new-level (config-section-get :logging :level)))
+                  (let ((new-level (config-section-get-keyword :logging :level)))
                     (when new-level
-                      (let ((level-keyword (if (keywordp new-level)
-                                               new-level
-                                               (intern (string-upcase (string new-level))
-                                                      :keyword))))
-                        (log4cl:set-log-level log4cl:*root-logger* level-keyword))))
+                      (log4cl:set-log-level log4cl:*root-logger* new-level)))
 
                   (log:info "Configuration reloaded successfully from ~A" path)
                   (list :success t

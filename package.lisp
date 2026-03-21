@@ -6,12 +6,14 @@
   (:use #:cl)
   (:export #:*agent-home*
            #:*config*
+           #:*crichton-version*
            #:agent-path
            #:ensure-directories
            #:load-config
            #:reload-config
            #:config-get
            #:config-section-get
+           #:config-section-get-keyword
            ;; TOML conversion (config/loader.lisp)
            #:toml-key-to-keyword
            #:toml-value-to-lisp

@@ -87,14 +87,16 @@
     (return-from start-daemon nil))
   (crichton/config:ensure-directories)
   (crichton/config:load-config)
-  (crichton/logging:setup-logging)
+  (crichton/logging:setup-logging
+   :level (crichton/config:config-section-get-keyword :logging :level :info))
   (write-pid-file)
   (setf *running* t)
   (start-swank)
   (init-storage)
   (init-skills)
   (init-network)
-  (log:info "Crichton daemon started (PID ~D)" (sb-posix:getpid))
+  (log:info "Crichton ~A daemon started (PID ~D)"
+            crichton/config:*crichton-version* (sb-posix:getpid))
   (when foreground
     (install-signal-handlers)
     (bt:with-lock-held (*shutdown-lock*)
