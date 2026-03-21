@@ -27,6 +27,12 @@ For development details, see the git commit history and BEADS issue tracker.
 
 ** Added
 
+- *Task persistence inspection tools* (cricht-vmf): new functions and agent commands for diagnosing and managing persisted scheduled tasks
+  - =list-unrestorable-tasks=: identifies tasks in the persisted store whose backing action is no longer registered — these would be silently skipped on the next daemon restart
+  - =export-user-tasks=: returns a human-readable JSON dump of all live user tasks (unencrypted, for debugging)
+  - Scheduler tool: new =persist= action (manually flush tasks to disk) and =list_unrestorable= action (ask the agent which tasks are at risk)
+- *Task persistence test suite* (cricht-0bz): =tests/test-task-persistence.lisp=, loadable from SLIME/SLY, covering serialization roundtrip, encryption roundtrip, edge cases (corrupt file, missing action, past one-shot), full restart-simulation cycle, and the new inspection functions
+
 ** Changed
 
 ** Fixed
