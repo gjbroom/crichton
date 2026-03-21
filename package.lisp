@@ -50,7 +50,8 @@
   (:export #:setup-logging
            #:suppress-console-logging
            #:with-redaction
-           #:write-audit-event))
+           #:write-audit-event
+           #:redact-channel-output))
 
 (defpackage #:crichton/daemon
   (:use #:cl)
@@ -371,8 +372,12 @@
            #:chat-session
            #:register-all-tools
            #:all-tool-defs
+           #:channel-safe-tool-defs
            #:dispatch-tool
-           #:register-tool))
+           #:register-tool
+           #:sanitize-user-input
+           #:+max-channel-input-length+
+           #:+max-direct-input-length+))
 
 (defpackage #:crichton/crypto
   (:use #:cl)

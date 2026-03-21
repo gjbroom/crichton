@@ -86,6 +86,28 @@ from bootstrap files for SESSION-TYPE."
           (crichton/state:bootstrap-system-prompt :session-type session-type)
           *default-system-prompt*)))
 
+(defun %sanitize-input-for-session (user-input session-type)
+  "Sanitize USER-INPUT according to SESSION-TYPE trust level.
+   Channel sessions (external sources) use a tighter length limit.
+   Returns the sanitised string or NIL."
+  (when user-input
+    (if (eq session-type :channel)
+        (sanitize-user-input user-input
+                             :max-length +max-channel-input-length+
+                             :source "channel")
+        (sanitize-user-input user-input
+                             :max-length +max-direct-input-length+
+                             :source (symbol-name session-type)))))
+
+(defun %resolve-tools-for-session (tools session-type)
+  "Return the effective tool list for SESSION-TYPE.
+   Channel sessions use the restricted channel-safe allowlist unless
+   an explicit TOOLS list was supplied by the caller."
+  (cond
+    (tools tools)
+    ((eq session-type :channel) (channel-safe-tool-defs))
+    (t (all-tool-defs))))
+
 (defun run-agent (user-input &key provider system tools messages
                                   (session-type :main)
                                   (max-iterations *default-max-iterations*)
@@ -96,16 +118,19 @@ Returns (values response-text all-messages last-response).
 
 PROVIDER defaults to the configured LLM provider.
 SYSTEM defaults to bootstrap-assembled prompt for SESSION-TYPE.
-TOOLS defaults to all registered tools.
+TOOLS defaults to all registered tools (or channel-safe subset for :channel).
 MESSAGES is the conversation history (extended destructively via NCONC).
-SESSION-TYPE controls which bootstrap files are included (:main, :channel,
-:subagent).
+SESSION-TYPE controls bootstrap files and tool access:
+  :main     — full tool access, local clients
+  :channel  — restricted tool allowlist, sanitised input (Discord etc.)
+  :subagent — full tool access, sub-agent calls
 MAX-ITERATIONS prevents runaway tool loops."
-  (let ((provider (or provider (crichton/llm:ensure-llm-provider)))
-        (system   (%resolve-system-prompt system session-type))
-        (tools    (or tools (all-tool-defs)))
-        (msgs     (%initialize-messages user-input messages)))
-    (log:info "Agent start: ~A" (truncate-for-log user-input))
+  (let* ((provider (or provider (crichton/llm:ensure-llm-provider)))
+         (system   (%resolve-system-prompt system session-type))
+         (tools    (%resolve-tools-for-session tools session-type))
+         (safe-input (%sanitize-input-for-session user-input session-type))
+         (msgs     (%initialize-messages safe-input messages)))
+    (log:info "Agent start [~A]: ~A" session-type (truncate-for-log user-input))
     (%run-agent-loop
      msgs
      (lambda (msgs)
@@ -121,14 +146,14 @@ MAX-ITERATIONS prevents runaway tool loops."
                                                       temperature)
   "Run the agent loop on USER-INPUT, streaming the final response.
 ON-DELTA is called with each text delta string during the final streaming response.
-SESSION-TYPE controls which bootstrap files are included (:main, :channel,
-:subagent).
+SESSION-TYPE controls bootstrap files and tool access (same as run-agent).
 Returns (values response-text all-messages last-response), same as run-agent."
-  (let ((provider (or provider (crichton/llm:ensure-llm-provider)))
-        (system   (%resolve-system-prompt system session-type))
-        (tools    (or tools (all-tool-defs)))
-        (msgs     (%initialize-messages user-input messages)))
-    (log:info "Agent/stream start: ~A" (truncate-for-log user-input))
+  (let* ((provider (or provider (crichton/llm:ensure-llm-provider)))
+         (system   (%resolve-system-prompt system session-type))
+         (tools    (%resolve-tools-for-session tools session-type))
+         (safe-input (%sanitize-input-for-session user-input session-type))
+         (msgs     (%initialize-messages safe-input messages)))
+    (log:info "Agent/stream start [~A]: ~A" session-type (truncate-for-log user-input))
     (%run-agent-loop
      msgs
      (lambda (msgs)

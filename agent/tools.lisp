@@ -52,11 +52,16 @@
 (defun dispatch-tool (name input)
   "Call the handler for tool NAME with INPUT (a hash-table from the LLM).
    Returns a result string. On error, returns an error description string.
-   Offers :USE-VALUE and :REPORT-ERROR restarts."
+   Offers :USE-VALUE and :REPORT-ERROR restarts.
+   Writes an audit event for every tool call (cricht-g7r)."
   (let ((tool (get-tool name)))
     (unless tool
       (return-from dispatch-tool
         (format nil "Error: unknown tool ~S" name)))
+    ;; Audit every tool invocation (cricht-g7r)
+    (let ((fields (make-hash-table :test #'equal)))
+      (setf (gethash "tool" fields) name)
+      (crichton/logging:write-audit-event "agent.tool.call" fields))
     (handler-bind
         ((error (lambda (c)
                   (let ((r (find-restart :report-error)))
@@ -1128,6 +1133,31 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
          (format nil "Error: ~A" c))))
     (t
      (format nil "Unknown HOOBS action: ~A" action))))
+
+;;; --- Channel tool allowlist (cricht-g7r) ---
+
+(defparameter *default-channel-allowed-tools*
+  '("weather" "time" "ephemeris" "system_info" "rss" "battery" "resource_usage")
+  "Tools available in external channel sessions (Discord, etc.) when no
+   config override is set.  Intentionally excludes privileged tools such
+   as amp_code, amp_test, orgmode, raindrop, pushover, and github.")
+
+(defun channel-safe-tool-defs ()
+  "Return tool definitions safe for external channel sessions.
+   Reads [agent] channel_allowed_tools from config (a list of tool-name
+   strings); falls back to *default-channel-allowed-tools* when absent or
+   empty.  Logs the effective allowlist at startup."
+  (let* ((configured (crichton/config:config-section-get :agent :channel-allowed-tools))
+         (allowed (if (and (listp configured) (plusp (length configured)))
+                      configured
+                      *default-channel-allowed-tools*))
+         (allowed-set (make-hash-table :test #'equal)))
+    (dolist (name allowed)
+      (setf (gethash name allowed-set) t))
+    (log:info "Channel tool allowlist: ~{~A~^, ~}" allowed)
+    (remove-if-not (lambda (def)
+                     (gethash (getf def :name) allowed-set))
+                   (all-tool-defs))))
 
 ;;; --- Registration ---
 

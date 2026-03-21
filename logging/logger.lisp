@@ -83,6 +83,18 @@
     (close *json-log-stream*))
   (setf *json-log-stream* nil))
 
+;;; --- Channel output filtering (cricht-g7r) ---
+
+(defun redact-channel-output (text)
+  "Apply secret redaction to TEXT before sending it to an external channel.
+   Logs a warning when any redaction is performed so the operator knows
+   a response contained sensitive-looking patterns.
+   Returns the redacted string."
+  (let ((redacted (redact-string text)))
+    (unless (string= redacted text)
+      (log:warn "Outbound channel response contained redactable patterns — secrets suppressed"))
+    redacted))
+
 ;;; --- Structured audit events ---
 
 (defun write-audit-event (event-type fields)

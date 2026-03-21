@@ -46,7 +46,8 @@
                         (id (incf *rpc-id-counter*)))
                     (setf (gethash "id" req) id
                           (gethash "op" req) "chat"
-                          (gethash "text" req) text)
+                          (gethash "text" req) text
+                          (gethash "channel_type" req) "channel")
                     (when session-id
                       (setf (gethash "session_id" req) session-id))
                     (crichton/rpc:write-message stream req)
@@ -78,9 +79,11 @@
               (when new-session-id
                 (setf (gethash key *conversation-sessions*) new-session-id))
               (when (and response-text (plusp (length response-text)))
-                (channel-send channel
-                              (channel-message-channel-id msg)
-                              response-text))))
+                ;; Filter secrets from outbound channel responses (cricht-g7r)
+                (let ((filtered (crichton/logging:redact-channel-output response-text)))
+                  (channel-send channel
+                                (channel-message-channel-id msg)
+                                filtered)))))
         (error (c)
           (log:error "Error handling message from ~A: ~A"
                      (channel-name channel) c))))))

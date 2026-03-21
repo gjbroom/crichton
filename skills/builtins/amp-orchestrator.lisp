@@ -181,6 +181,62 @@
       (values s nil)
       (values (subseq s 0 cap) t)))
 
+;;; --- Prompt input sanitization (cricht-ex8) ---
+
+(defparameter +amp-max-description-length+ 10000
+  "Maximum length for a coding task description passed to Amp.")
+
+(defparameter +amp-max-context-length+ 5000
+  "Maximum length for additional context passed to Amp.")
+
+(defparameter +amp-max-test-output-length+ 8000
+  "Maximum length of test output embedded in an Amp fix prompt.")
+
+(defparameter *amp-injection-patterns*
+  '("(?i)ignore\\s+(all\\s+)?(previous|prior)\\s+instructions?"
+    "(?i)\\bsystem\\s*:\\s"
+    "(?i)\\bnew\\s+instructions?\\s*:"
+    "(?i)\\bforget\\s+(everything|all|prior)"
+    "(?i)\\[/?INST\\]"
+    "(?i)<\\|system\\|>"
+    "(?i)<\\|user\\|>"
+    "(?i)<\\|assistant\\|>")
+  "Patterns indicating potential prompt injection in Amp prompt inputs.")
+
+(defun sanitize-for-amp-prompt (text &key (max-length +amp-max-description-length+) label)
+  "Sanitize TEXT before embedding it in an Amp CLI prompt.
+   - Strips null bytes and non-printable control characters.
+   - Truncates to MAX-LENGTH (logs a warning if truncated).
+   - Detects and audit-logs potential injection markers.
+   LABEL is used in log and audit messages for context.
+   Returns the sanitised string, or NIL if TEXT is NIL."
+  (when (null text)
+    (return-from sanitize-for-amp-prompt nil))
+  (let* ((stripped (with-output-to-string (s)
+                     (loop for ch across text
+                           when (or (char>= ch #\Space)
+                                    (char= ch #\Newline)
+                                    (char= ch #\Tab)
+                                    (char= ch #\Return))
+                             do (write-char ch s))))
+         (truncated (if (> (length stripped) max-length)
+                        (progn
+                          (log:warn "Amp prompt input truncated (~D → ~D chars)~@[ [~A]~]"
+                                    (length stripped) max-length label)
+                          (subseq stripped 0 max-length))
+                        stripped))
+         (marker-count (loop for pattern in *amp-injection-patterns*
+                             count (when (cl-ppcre:scan pattern truncated) 1))))
+    (when (plusp marker-count)
+      (log:warn "~D injection marker(s) in Amp prompt input~@[ [~A]~] — audit event written"
+                marker-count label)
+      (let ((fields (make-hash-table :test #'equal)))
+        (setf (gethash "label" fields) (or label "unknown")
+              (gethash "marker_count" fields) marker-count
+              (gethash "input_length" fields) (length truncated))
+        (crichton/logging:write-audit-event "amp.prompt.injection_markers" fields)))
+    truncated))
+
 ;;; --- Git status tracking (cricht-c0d) ---
 
 (defun git-status-snapshot (repo-path)
@@ -425,15 +481,23 @@
 ;;; --- High-level coding task ---
 
 (defun build-code-prompt (description &key files context)
-  "Build a structured prompt for a coding task."
-  (with-output-to-string (s)
-    (write-string description s)
-    (when files
-      (format s "~%~%Files to focus on:~%")
-      (dolist (f files)
-        (format s "- ~A~%" f)))
-    (when context
-      (format s "~%~%Additional context:~%~A" context))))
+  "Build a structured prompt for a coding task.
+   Sanitizes DESCRIPTION and CONTEXT before embedding (cricht-ex8)."
+  (let ((safe-description (sanitize-for-amp-prompt description
+                                                   :max-length +amp-max-description-length+
+                                                   :label "description"))
+        (safe-context (when context
+                        (sanitize-for-amp-prompt context
+                                                 :max-length +amp-max-context-length+
+                                                 :label "context"))))
+    (with-output-to-string (s)
+      (write-string safe-description s)
+      (when files
+        (format s "~%~%Files to focus on:~%")
+        (dolist (f files)
+          (format s "- ~A~%" f)))
+      (when safe-context
+        (format s "~%~%Additional context:~%~A" safe-context)))))
 
 (defun amp-code-task (description &key repo-path files context (timeout-seconds 300))
   "Delegate a coding task to Amp. Builds a structured prompt from
@@ -481,8 +545,15 @@
 
 (defun attempt-fix (iteration test-runner test-args repo-path timeout-seconds)
   "Invoke Amp to fix a failed test ITERATION. Mutates the iteration plist
-   to record the fix attempt. Returns the fix elapsed seconds."
+   to record the fix attempt. Returns the fix elapsed seconds.
+   Sanitizes test output before embedding in the fix prompt (cricht-ex8)."
   (let* ((command-str (format nil "~A~{ ~A~}" test-runner test-args))
+         (safe-output (sanitize-for-amp-prompt (getf iteration :test-output)
+                                               :max-length +amp-max-test-output-length+
+                                               :label "test-output"))
+         (safe-error (sanitize-for-amp-prompt (getf iteration :test-error)
+                                              :max-length +amp-max-test-output-length+
+                                              :label "test-error"))
          (fix-prompt
            (format nil "The following test command failed:~%~%  ~A~%~%~
                         Exit code: ~D~%~%~
@@ -491,8 +562,8 @@
                         Please fix the code so the tests pass."
                    command-str
                    (getf iteration :test-exit-code)
-                   (getf iteration :test-output)
-                   (getf iteration :test-error)))
+                   safe-output
+                   safe-error))
          (fix-result (amp-invoke fix-prompt
                                 :repo-path repo-path
                                 :timeout-seconds timeout-seconds)))

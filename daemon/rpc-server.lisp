@@ -119,10 +119,19 @@ when a :RETRY restart is available (established by the LLM provider)."
              ,@(when stream `((push-chat-done ,stream ,lock ,id ,err-msg ,session-id)))
              (crichton/rpc:make-error-response ,id "agent_error" ,err-msg)))))))
 
+(defun %rpc-session-type (msg)
+  "Derive the :session-type keyword from the RPC message.
+   Returns :channel when channel_type is 'channel', :main otherwise."
+  (let ((ct (crichton/rpc:msg-get msg "channel_type")))
+    (if (and ct (string-equal ct "channel"))
+        :channel
+        :main)))
+
 (defun handle-streaming-chat-request (id msg stream lock)
   "Handle a streaming 'chat' request. Pushes chat_delta/chat_done messages."
   (let ((text (crichton/rpc:msg-get msg "text"))
-        (session-id (crichton/rpc:msg-get msg "session_id")))
+        (session-id (crichton/rpc:msg-get msg "session_id"))
+        (session-type (%rpc-session-type msg)))
     (unless text
       (return-from handle-streaming-chat-request
         (crichton/rpc:make-error-response id "bad_request" "Missing required field: text")))
@@ -141,6 +150,7 @@ when a :RETRY restart is available (established by the LLM provider)."
                            (gethash "id" delta-msg) id
                            (gethash "text" delta-msg) delta)
                      (rpc-push stream lock delta-msg)))
+                 :session-type session-type
                  :messages msgs)
               (setf (gethash session-id *chat-sessions*) all-messages)
               (let ((done-msg (make-hash-table :test #'equal)))
@@ -157,7 +167,8 @@ when a :RETRY restart is available (established by the LLM provider)."
 (defun handle-blocking-chat-request (id msg)
   "Handle a non-streaming 'chat' request."
   (let ((text (crichton/rpc:msg-get msg "text"))
-        (session-id (crichton/rpc:msg-get msg "session_id")))
+        (session-id (crichton/rpc:msg-get msg "session_id"))
+        (session-type (%rpc-session-type msg)))
     (unless text
       (return-from handle-blocking-chat-request
         (crichton/rpc:make-error-response id "bad_request" "Missing required field: text")))
@@ -168,7 +179,7 @@ when a :RETRY restart is available (established by the LLM provider)."
         (let ((msgs (gethash session-id *chat-sessions*)))
           (with-llm-error-handling (id)
             (multiple-value-bind (response-text all-messages)
-                (crichton/agent:run-agent text :messages msgs)
+                (crichton/agent:run-agent text :session-type session-type :messages msgs)
               (setf (gethash session-id *chat-sessions*) all-messages)
               (let ((result (make-hash-table :test #'equal)))
                 (setf (gethash "text" result) response-text
