@@ -38,10 +38,24 @@
 
 ;;; --- Session operations ---
 
+(defun session-file-extension ()
+  "Return the file extension for session files based on encryption config."
+  (if (encryption-enabled-p) "age" "jsonl"))
+
 (defun session-file-path (session-id)
-  "Return the .age file path for SESSION-ID."
-  (merge-pathnames (make-pathname :name session-id :type "age")
+  "Return the session file path for SESSION-ID, using the configured extension."
+  (merge-pathnames (make-pathname :name session-id :type (session-file-extension))
                    (sessions-dir)))
+
+(defun find-session-path (session-id)
+  "Return the path for SESSION-ID, trying both .age and .jsonl extensions.
+   Handles sessions written under a different encryption setting."
+  (dolist (ext '("age" "jsonl"))
+    (let ((path (merge-pathnames (make-pathname :name session-id :type ext)
+                                 (sessions-dir))))
+      (when (probe-file path)
+        (return-from find-session-path path))))
+  nil)
 
 (defun encryption-enabled-p ()
   "Return T if session encryption is configured (default: T)."
@@ -107,11 +121,11 @@
 (defun load-session (session-id)
   "Load a session from disk. Decrypts if needed.
    Signals an error if the session does not exist."
-  (let ((path (session-file-path session-id)))
-    (unless (probe-file path)
+  (let ((path (find-session-path session-id)))
+    (unless path
       (error "Session not found: ~A" session-id))
     (let ((plaintext
-            (if (encryption-enabled-p)
+            (if (string= (pathname-type path) "age")
                 (crichton/crypto:decrypt-from-file path)
                 (crichton/crypto:read-file-bytes path))))
       (let ((session (json-bytes-to-session plaintext)))
@@ -122,18 +136,26 @@
 ;;; --- List ---
 
 (defun list-sessions ()
-  "Return a list of all session IDs on disk."
-  (let ((pattern (merge-pathnames
-                  (make-pathname :name :wild :type "age")
-                  (sessions-dir))))
-    (mapcar #'pathname-name (directory pattern))))
+  "Return a list of all session IDs on disk (both .age and .jsonl)."
+  (let ((seen (make-hash-table :test #'equal))
+        (ids nil))
+    (dolist (ext '("age" "jsonl"))
+      (let ((pattern (merge-pathnames
+                      (make-pathname :name :wild :type ext)
+                      (sessions-dir))))
+        (dolist (path (directory pattern))
+          (let ((id (pathname-name path)))
+            (unless (gethash id seen)
+              (setf (gethash id seen) t)
+              (push id ids))))))
+    (nreverse ids)))
 
 ;;; --- Delete ---
 
 (defun delete-session (session-id)
   "Delete a session from disk.  Returns T if deleted, NIL if not found."
-  (let ((path (session-file-path session-id)))
-    (when (crichton/config:delete-file-if-exists path)
+  (let ((path (find-session-path session-id)))
+    (when (and path (crichton/config:delete-file-if-exists path))
       (log:info "Session deleted: ~A" session-id)
       t)))
 

@@ -31,10 +31,12 @@
         (purged 0))
     (when (null days)
       (return-from purge-expired-sessions 0))
-    (let ((pattern (merge-pathnames
-                    (make-pathname :name :wild :type "age")
-                    (sessions-dir))))
-      (dolist (path (directory pattern))
+    (dolist (path (apply #'append
+                         (mapcar (lambda (ext)
+                                   (directory (merge-pathnames
+                                               (make-pathname :name :wild :type ext)
+                                               (sessions-dir))))
+                                 '("age" "jsonl"))))
         (let ((should-delete
                 (if (zerop days)
                     t
@@ -47,7 +49,7 @@
                   (log:info "Purged expired session: ~A" (pathname-name path)))
               (error (c)
                 (log:warn "Failed to purge session ~A: ~A"
-                          (pathname-name path) c)))))))
+                          (pathname-name path) c))))))
     (when (plusp purged)
       (log:info "Purged ~D expired session~:P" purged))
     purged))
