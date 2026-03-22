@@ -1,84 +1,110 @@
-#![no_std]
+// Unit tests run on the host (not WASM) so we re-enable std for the test build.
+#![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
 
 use alloc::{format, string::String, vec, vec::Vec};
-use core::panic::PanicInfo;
-use core::sync::atomic::{AtomicUsize, Ordering};
 use serde::{Deserialize, Serialize};
 
-const PAGE_SIZE: usize = 65536;
-static HEAP_POS: AtomicUsize = AtomicUsize::new(0);
+// --- WASM memory management (excluded from test builds) ---
 
-struct BumpAllocator;
+#[cfg(not(test))]
+mod wasm_support {
+    use core::panic::PanicInfo;
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
-unsafe impl alloc::alloc::GlobalAlloc for BumpAllocator {
-    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
-        let size = layout.size();
-        let align = layout.align();
+    const PAGE_SIZE: usize = 65536;
+    static HEAP_POS: AtomicUsize = AtomicUsize::new(0);
 
-        loop {
-            let current = HEAP_POS.load(Ordering::Relaxed);
-            let start = if current == 0 {
-                let pages = core::arch::wasm32::memory_grow(0, 1);
-                if pages == usize::MAX {
-                    return core::ptr::null_mut();
+    pub struct BumpAllocator;
+
+    unsafe impl alloc::alloc::GlobalAlloc for BumpAllocator {
+        unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+            let size = layout.size();
+            let align = layout.align();
+
+            loop {
+                let current = HEAP_POS.load(Ordering::Relaxed);
+                let start = if current == 0 {
+                    let pages = core::arch::wasm32::memory_grow(0, 1);
+                    if pages == usize::MAX {
+                        return core::ptr::null_mut();
+                    }
+                    pages * PAGE_SIZE
+                } else {
+                    current
+                };
+
+                let aligned = (start + align - 1) & !(align - 1);
+                let end = aligned + size;
+                let page_end = (start / PAGE_SIZE + 1) * PAGE_SIZE;
+
+                if end > page_end {
+                    let pages_needed = (end - page_end + PAGE_SIZE - 1) / PAGE_SIZE;
+                    if core::arch::wasm32::memory_grow(0, pages_needed) == usize::MAX {
+                        return core::ptr::null_mut();
+                    }
                 }
-                pages * PAGE_SIZE
-            } else {
-                current
-            };
 
-            let aligned = (start + align - 1) & !(align - 1);
-            let end = aligned + size;
-            let page_end = (start / PAGE_SIZE + 1) * PAGE_SIZE;
-
-            if end > page_end {
-                let pages_needed = (end - page_end + PAGE_SIZE - 1) / PAGE_SIZE;
-                if core::arch::wasm32::memory_grow(0, pages_needed) == usize::MAX {
-                    return core::ptr::null_mut();
+                if HEAP_POS
+                    .compare_exchange(current, end, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    return aligned as *mut u8;
                 }
-            }
-
-            if HEAP_POS.compare_exchange(current, end, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
-                return aligned as *mut u8;
             }
         }
+
+        unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
     }
 
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
+    #[global_allocator]
+    pub static ALLOCATOR: BumpAllocator = BumpAllocator;
+
+    #[panic_handler]
+    fn panic(_info: &PanicInfo) -> ! {
+        core::arch::wasm32::unreachable()
+    }
+
+    #[link(wasm_import_module = "env")]
+    extern "C" {
+        pub fn log(level: i32, ptr: *const u8, len: usize);
+    }
 }
 
-#[global_allocator]
-static ALLOCATOR: BumpAllocator = BumpAllocator;
-
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    core::arch::wasm32::unreachable()
-}
-
-#[link(wasm_import_module = "env")]
-extern "C" {
-    fn log(level: i32, ptr: *const u8, len: usize);
-}
-
+/// Write a log message via the WASM host. No-op in unit tests.
 fn host_log(level: i32, msg: &str) {
+    #[cfg(not(test))]
     unsafe {
-        log(level, msg.as_ptr(), msg.len());
+        wasm_support::log(level, msg.as_ptr(), msg.len());
+    }
+    #[cfg(test)]
+    {
+        let _ = (level, msg);
     }
 }
 
+/// Exported alloc/dealloc for the JSON-through-memory ABI.
+#[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn alloc(len: usize) -> *mut u8 {
     let layout = core::alloc::Layout::from_size_align(len, 1).unwrap();
     unsafe { alloc::alloc::alloc(layout) }
 }
 
+#[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn dealloc(ptr: *mut u8, len: usize) {
     let layout = core::alloc::Layout::from_size_align(len, 1).unwrap();
     unsafe { alloc::alloc::dealloc(ptr, layout) }
 }
+
+// --- Input validation limits (cricht-5z9) ---
+
+const MAX_ITEMS: usize = 1_000;
+const MAX_KEYWORDS: usize = 100;
+const MAX_KEYWORD_LEN: usize = 200;
+const MAX_ITEM_TEXT_LEN: usize = 100_000;
 
 // --- Data structures ---
 
@@ -123,6 +149,64 @@ struct FilterResult {
 struct Statistics {
     items_scanned: usize,
     items_matched: usize,
+}
+
+// --- Input validation ---
+
+/// Validate filter parameters against DoS limits.
+/// Returns Ok(()) when all limits are satisfied, Err(description) otherwise.
+fn validate_params(params: &FilterParams) -> Result<(), String> {
+    if params.items.len() > MAX_ITEMS {
+        return Err(format!(
+            "too many items: {} (max {})",
+            params.items.len(),
+            MAX_ITEMS
+        ));
+    }
+    if params.keywords.len() > MAX_KEYWORDS {
+        return Err(format!(
+            "too many keywords: {} (max {})",
+            params.keywords.len(),
+            MAX_KEYWORDS
+        ));
+    }
+    for kw in &params.keywords {
+        if kw.len() > MAX_KEYWORD_LEN {
+            return Err(format!(
+                "keyword too long: {} bytes (max {})",
+                kw.len(),
+                MAX_KEYWORD_LEN
+            ));
+        }
+    }
+    for item in &params.items {
+        if item.title.len() > MAX_ITEM_TEXT_LEN {
+            return Err(format!(
+                "item title too long: {} bytes (max {})",
+                item.title.len(),
+                MAX_ITEM_TEXT_LEN
+            ));
+        }
+        if let Some(desc) = &item.description {
+            if desc.len() > MAX_ITEM_TEXT_LEN {
+                return Err(format!(
+                    "item description too long: {} bytes (max {})",
+                    desc.len(),
+                    MAX_ITEM_TEXT_LEN
+                ));
+            }
+        }
+        if let Some(content) = &item.content {
+            if content.len() > MAX_ITEM_TEXT_LEN {
+                return Err(format!(
+                    "item content too long: {} bytes (max {})",
+                    content.len(),
+                    MAX_ITEM_TEXT_LEN
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 // --- Filtering logic ---
@@ -208,6 +292,11 @@ pub extern "C" fn filter_items(
         }
     };
 
+    if let Err(e) = validate_params(&params) {
+        host_log(3, &format!("filter_items: validation error: {}", e));
+        return 4;
+    }
+
     let match_mode = params.match_mode.as_deref().unwrap_or("any");
     let default_fields = vec![String::from("title"), String::from("description")];
     let search_fields = params.search_fields.as_deref().unwrap_or(&default_fields);
@@ -275,4 +364,146 @@ pub extern "C" fn filter_items(
     }
 
     0
+}
+
+// --- Unit tests (cricht-lli) ---
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::ToString;
+
+    /// Build a minimal RssItem for testing.
+    fn make_item(title: &str, description: Option<&str>, content: Option<&str>) -> RssItem {
+        RssItem {
+            id: "test-id".to_string(),
+            title: title.to_string(),
+            description: description.map(|s| s.to_string()),
+            content: content.map(|s| s.to_string()),
+            link: None,
+            published: None,
+            feed_name: None,
+        }
+    }
+
+    fn fields(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn kws(words: &[&str]) -> Vec<String> {
+        words.iter().map(|s| s.to_string()).collect()
+    }
+
+    // --- check_item_match tests ---
+
+    #[test]
+    fn test_any_match() {
+        let item = make_item("Rust and WASM", None, None);
+        let result = check_item_match(&item, &kws(&["Rust", "Python"]), "any", &fields(&["title"]), false);
+        assert_eq!(result, kws(&["Rust"]));
+    }
+
+    #[test]
+    fn test_all_match() {
+        let item = make_item("Rust and WASM together", None, None);
+        let result = check_item_match(&item, &kws(&["Rust", "WASM"]), "all", &fields(&["title"]), false);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_all_match_fails() {
+        // "all" mode: Python is absent, so nothing should match.
+        let item = make_item("Only Rust here", None, None);
+        let result = check_item_match(&item, &kws(&["Rust", "Python"]), "all", &fields(&["title"]), false);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_case_insensitive() {
+        let item = make_item("Hello World", None, None);
+        let result = check_item_match(&item, &kws(&["hello"]), "any", &fields(&["title"]), false);
+        assert_eq!(result, kws(&["hello"]));
+    }
+
+    #[test]
+    fn test_case_sensitive() {
+        // Lowercase "hello" must not match title-case "Hello" in case-sensitive mode.
+        let item = make_item("Hello World", None, None);
+        let result = check_item_match(&item, &kws(&["hello"]), "any", &fields(&["title"]), true);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_multiple_fields() {
+        // Keyword absent from title but present in description.
+        let item = make_item("Greeting", Some("Hello World content"), None);
+        let result = check_item_match(
+            &item,
+            &kws(&["World"]),
+            "any",
+            &fields(&["title", "description"]),
+            false,
+        );
+        assert_eq!(result, kws(&["World"]));
+    }
+
+    // --- validate_params tests ---
+
+    fn make_params(items: Vec<RssItem>, keywords: Vec<String>) -> FilterParams {
+        FilterParams {
+            items,
+            keywords,
+            match_mode: None,
+            search_fields: None,
+            case_sensitive: None,
+        }
+    }
+
+    #[test]
+    fn test_validate_ok() {
+        let p = make_params(vec![make_item("title", None, None)], kws(&["kw"]));
+        assert!(validate_params(&p).is_ok());
+    }
+
+    #[test]
+    fn test_validate_too_many_items() {
+        let items: Vec<RssItem> = (0..MAX_ITEMS + 1).map(|_| make_item("t", None, None)).collect();
+        let p = make_params(items, kws(&["kw"]));
+        assert!(validate_params(&p).is_err());
+    }
+
+    #[test]
+    fn test_validate_too_many_keywords() {
+        let keywords: Vec<String> = (0..MAX_KEYWORDS + 1).map(|i| format!("kw{}", i)).collect();
+        let p = make_params(vec![make_item("t", None, None)], keywords);
+        assert!(validate_params(&p).is_err());
+    }
+
+    #[test]
+    fn test_validate_keyword_too_long() {
+        let long_kw = "x".repeat(MAX_KEYWORD_LEN + 1);
+        let p = make_params(vec![make_item("t", None, None)], vec![long_kw]);
+        assert!(validate_params(&p).is_err());
+    }
+
+    #[test]
+    fn test_validate_item_title_too_long() {
+        let long_title = "x".repeat(MAX_ITEM_TEXT_LEN + 1);
+        let p = make_params(vec![make_item(&long_title, None, None)], kws(&["kw"]));
+        assert!(validate_params(&p).is_err());
+    }
+
+    #[test]
+    fn test_validate_item_description_too_long() {
+        let long_desc = "x".repeat(MAX_ITEM_TEXT_LEN + 1);
+        let p = make_params(vec![make_item("t", Some(&long_desc), None)], kws(&["kw"]));
+        assert!(validate_params(&p).is_err());
+    }
+
+    #[test]
+    fn test_validate_item_content_too_long() {
+        let long_content = "x".repeat(MAX_ITEM_TEXT_LEN + 1);
+        let p = make_params(vec![make_item("t", None, Some(&long_content))], kws(&["kw"]));
+        assert!(validate_params(&p).is_err());
+    }
 }
