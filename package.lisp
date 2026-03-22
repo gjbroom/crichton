@@ -163,6 +163,10 @@
            #:system-disk-usage
            #:system-snapshot
            #:system-report
+           #:system-monitor-config
+           #:start-system-monitoring
+           #:stop-system-monitoring
+           #:restore-system-monitoring
            ;; timing
            #:with-timing
            #:make-stopwatch

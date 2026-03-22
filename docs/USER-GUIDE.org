@@ -349,6 +349,26 @@ city = "Victoria"
 thresholds = [20, 10, 5]
 
 # -----------------------------------------------------------------------
+# [system] — Continuous system monitoring settings
+# -----------------------------------------------------------------------
+[system]
+# Alert when memory usage reaches this percentage.  Default: 90
+# mem_alert_percent = 90
+
+# Alert when the 1-minute load average per CPU reaches this value.
+# 1.0 = 100% of one core; 2.0 = 200% (heavy load).  Default: 2.0
+# cpu_alert_load = 2.0
+
+# Alert when any monitored disk is this percent full.  Default: 90
+# disk_alert_percent = 90
+
+# Alert when any thermal zone reaches this temperature (°C).  Default: 85
+# temp_alert_celsius = 85
+
+# How often to check (seconds).  Default: 300 (5 minutes)
+# interval = 300
+
+# -----------------------------------------------------------------------
 # [orgmode] — Org-mode skill settings (disabled by default)
 # -----------------------------------------------------------------------
 [orgmode]
@@ -678,7 +698,26 @@ Any weather warnings in my area?
 Reports CPU load average, memory usage, disk usage, and thermal sensor
 readings directly from =/proc= and =/sys=.  No external commands are used.
 
+Can also run as a background monitor: Crichton checks the system periodically
+and sends push notifications when any metric crosses a configured threshold.
+Monitoring state (enabled/disabled and interval) is persisted so it survives
+daemon restarts.
+
 Works out of the box — no configuration or credentials required.
+
+*Configuration* (=~/.crichton/config.toml=):
+
+#+begin_src toml
+[system]
+mem_alert_percent = 90     # Alert when memory usage >= 90% (default)
+cpu_alert_load = 2.0       # Alert when 1-minute load/CPU >= 2.0 (default)
+disk_alert_percent = 90    # Alert when any disk >= 90% full (default)
+temp_alert_celsius = 85    # Alert when any thermal zone >= 85°C (default)
+interval = 300             # Check every 5 minutes (default)
+#+end_src
+
+Each alert fires once when the condition is first detected.  It will not
+repeat until the metric recovers and then crosses the threshold again.
 
 *Example interactions*:
 
@@ -686,6 +725,8 @@ Works out of the box — no configuration or credentials required.
 How loaded is my system right now?
 How much free memory do I have?
 Is my CPU running hot?
+Start monitoring my system and alert me if anything looks bad.
+Stop system monitoring.
 #+end_example
 
 ** Timing and Time Zones

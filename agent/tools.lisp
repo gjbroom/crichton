@@ -226,17 +226,33 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
 ;;; --- System info tool ---
 
 (define-tool system-info
-    (:description "Get current system health metrics: CPU load average, memory usage, thermal zones, and disk usage.  Linux only (reads /proc and /sys).  Use this to check if the system is healthy or under stress.")
-  ((include-load "boolean" "Include CPU load average. Default: true.")
-   (include-memory "boolean" "Include memory statistics. Default: true.")
-   (include-thermal "boolean" "Include thermal zone temperatures. Default: true.")
-   (include-disk "boolean" "Include disk usage. Default: true."))
-  (declare (ignore include-load include-memory include-thermal include-disk))
-  (with-output-to-string (s)
-    (format s "Crichton ~A~%" crichton/config:*crichton-version*)
-    (crichton/skills:system-report
-     :stream s
-     :mounts '("/" "/home"))))
+    (:description "Get current system health metrics and manage continuous monitoring.  Metrics: CPU load average, memory usage, disk usage, and thermal zone temperatures.  Linux only (reads /proc and /sys).  Can start/stop background monitoring that sends push notifications when thresholds are crossed (configurable via [system] in config.toml).")
+  ((action "string"
+           "The action: 'status' (get current metrics, default), 'start_monitoring' (enable periodic threshold alerts), 'stop_monitoring' (disable monitoring)."
+           :enum ("status" "start_monitoring" "stop_monitoring")
+           :default "status"))
+  (let ((a (or action "status")))
+    (cond
+      ((string-equal a "status")
+       (with-output-to-string (s)
+         (format s "Crichton ~A~%" crichton/config:*crichton-version*)
+         (crichton/skills:system-report :stream s :mounts '("/" "/home"))))
+      ((string-equal a "start_monitoring")
+       (let* ((config (crichton/skills:system-monitor-config))
+              (interval (getf config :interval)))
+         (if (crichton/skills:start-system-monitoring :interval interval)
+             (format nil "System monitoring started (every ~Ds). Will alert when: memory >=~A%, load/CPU >=~,1F, any disk >=~A% full, any thermal zone >=~,1F°C."
+                     interval
+                     (getf config :mem-alert-percent)
+                     (getf config :cpu-alert-load)
+                     (getf config :disk-alert-percent)
+                     (getf config :temp-alert-celsius))
+             "System monitoring is already running.")))
+      ((string-equal a "stop_monitoring")
+       (if (crichton/skills:stop-system-monitoring)
+           "System monitoring stopped."
+           "System monitoring was not running."))
+      (t (format nil "Unknown system_info action: ~A" a)))))
 
 ;;; --- Scheduler tool helpers ---
 
@@ -340,11 +356,11 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
              (with-output-to-string (s)
                (format s "~D task~:P would be lost on restart (action not registered):~%"
                        (length tasks))
-               (dolist (t tasks)
+               (dolist (task tasks)
                  (format s "  ~A (action: ~A, kind: ~A)~%"
-                         (getf t :name)
-                         (getf t :action-name)
-                         (getf t :kind))))
+                         (getf task :name)
+                         (getf task :action-name)
+                         (getf task :kind))))
              "All persisted user tasks have registered actions — none would be lost on restart.")))
       (t
        (format nil "Unknown scheduler action: ~A" action)))))

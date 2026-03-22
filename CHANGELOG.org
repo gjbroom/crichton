@@ -28,6 +28,7 @@ For development details, see the git commit history and BEADS issue tracker.
 ** Added
 
 - *RSS feed publishing* (cricht-hit): Crichton can now produce RSS 2.0 feeds in addition to consuming them.  Use the =rss= agent tool with the new =publish_item=, =configure_feed=, =get_feed_xml=, =list_feed_items=, =list_feeds=, =clear_feed=, and =delete_feed= actions to build and serve RSS feeds from within conversations.  Published feeds persist across restarts in encrypted storage (=~/.crichton/data/rss-pub.age=).
+- *Continuous system monitoring* (cricht-vtw): the =system_info= agent tool can now run as a background monitor.  Use =start_monitoring= to enable periodic checks; Crichton will send push notifications when memory, CPU load, disk usage, or thermal zone temperatures first cross configured thresholds.  Thresholds are set via the new =[system]= section in =config.toml= (defaults: memory >= 90%, load/CPU >= 2.0, disk >= 90%, temp >= 85°C; interval 5 minutes).  Monitoring state persists across daemon restarts.
 - *Task persistence inspection tools* (cricht-vmf): new functions and agent commands for diagnosing and managing persisted scheduled tasks
   - =list-unrestorable-tasks=: identifies tasks in the persisted store whose backing action is no longer registered — these would be silently skipped on the next daemon restart
   - =export-user-tasks=: returns a human-readable JSON dump of all live user tasks (unencrypted, for debugging)

@@ -2378,10 +2378,14 @@ retention_days = 30
 enabled = true
 
 [battery]
-enabled = true
-threshold_low = 20
-threshold_critical = 10
-check_interval_seconds = 300
+thresholds = [20, 10, 5]
+
+[system]
+mem_alert_percent = 90
+cpu_alert_load = 2.0
+disk_alert_percent = 90
+temp_alert_celsius = 85
+interval = 300
 
 [discord]
 enabled = false
@@ -2411,14 +2415,33 @@ bot_token_credential = "discord-bot-token"
 
 **** =[battery]=
 
-- =enabled= (boolean): Enable battery monitoring
-- =threshold_low= (integer): Low battery warning percentage
-- =threshold_critical= (integer): Critical battery percentage
-- =check_interval_seconds= (integer): Poll interval
+- =thresholds= (list of integers or single integer): Battery percentage thresholds for proactive alerts.  Default: =[20, 10, 5]=.
+- =interval= (integer): Battery polling interval in seconds.  Default: =300=.
 
 AC adapter status is detected via =ac-adapter-online-p= (reads
 =ACAD/online= from sysfs).  The =battery-status-plist= includes an
 =:ac-online= key and =battery-report= prints the AC power state.
+
+Monitoring state (enabled/disabled, interval) persists across restarts via
+encrypted storage.  Monitoring is re-enabled automatically on startup if it
+was active when the daemon last shut down.
+
+**** =[system]=
+
+Configures continuous system monitoring.  When enabled (via the =system_info=
+agent tool), the daemon polls system metrics at the configured interval and
+sends push notifications when thresholds are first crossed.
+
+- =mem_alert_percent= (integer): Alert when memory used >= this percent.  Default: =90=.
+- =cpu_alert_load= (float): Alert when the 1-minute load average divided by CPU count >= this value.  Default: =2.0= (200% per core).
+- =disk_alert_percent= (integer): Alert when any monitored disk is >= this percent full.  Default: =90=.
+- =temp_alert_celsius= (float): Alert when any thermal zone reaches this temperature (°C).  Default: =85.0=.
+- =interval= (integer): Polling interval in seconds.  Default: =300= (5 minutes).
+
+Each alert fires once per condition onset — it will not repeat until the
+metric recovers and crosses the threshold again.  Alert state is reset when
+monitoring is stopped.  Monitoring state persists across daemon restarts via
+encrypted storage (=~/.crichton/data/=).
 
 **** =[discord]=
 

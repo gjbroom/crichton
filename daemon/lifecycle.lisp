@@ -70,7 +70,9 @@
     (crichton/skills:restore-battery-monitoring))
   (guarded "Battery monitoring startup failed"
     (let ((interval (or (crichton/config:config-section-get :battery :interval) 300)))
-      (crichton/skills:start-battery-monitoring :interval interval))))
+      (crichton/skills:start-battery-monitoring :interval interval)))
+  (guarded "System monitoring restoration failed"
+    (crichton/skills:restore-system-monitoring)))
 
 (defun init-network ()
   "Initialize network subsystems: RPC server, external channels."
@@ -127,6 +129,8 @@
     (stop-rpc-server))
   (guarded "Battery monitoring shutdown error"
     (crichton/skills:stop-battery-monitoring))
+  (guarded "System monitoring shutdown error"
+    (crichton/skills:stop-system-monitoring))
   (persist-all-storage)
   (crichton/skills:stop-scheduler)
   (setf *running* nil)

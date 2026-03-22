@@ -114,7 +114,12 @@
                    :allowed-repo-roots nil)
         :state (list :enabled t
                      :max-file-chars 20000
-                     :max-total-chars 150000)))
+                     :max-total-chars 150000)
+        :system (list :mem-alert-percent 90
+                      :cpu-alert-load 2.0d0
+                      :disk-alert-percent 90
+                      :temp-alert-celsius 85.0d0
+                      :interval 300)))
 
 (defun reload-config (&optional (path (merge-pathnames "config.toml" *agent-home*)))
   "Hot-reload configuration from PATH without restarting the daemon.
