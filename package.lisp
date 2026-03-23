@@ -281,6 +281,13 @@
            #:clear-kv-cache
            #:kv-usage-report
            #:kv-quota-exceeded
+           ;; kv-store operational tools (cricht-jio)
+           #:kv-dir-path
+           #:backup-kv-store
+           #:restore-kv-backup
+           #:check-kv-integrity
+           #:repair-corrupt-kv
+           #:kv-health-check
            ;; amp orchestrator
            #:amp-available-p
            #:amp-enabled-p
@@ -338,7 +345,23 @@
            #:hoobs-set-accessory
            #:hoobs-rooms
            #:hoobs-service-status
-           #:hoobs-report))
+           #:hoobs-report
+           ;; git
+           #:git-enabled-p
+           #:git-config-status
+           #:git-status
+           #:git-log
+           #:git-diff
+           #:git-branches
+           #:git-worktrees
+           #:git-read-file
+           #:git-show
+           #:git-write-file
+           #:git-stage
+           #:git-unstage
+           #:git-commit
+           #:git-create-branch
+           #:git-checkout))
 
 (defpackage #:crichton/llm
   (:use #:cl)

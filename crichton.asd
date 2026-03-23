@@ -64,7 +64,8 @@ signing. Informed by a security audit of OpenClaw."
                                             (:file "orgmode")
                                             (:file "pushover")
                                             (:file "github")
-                                            (:file "hoobs")))))
+                                            (:file "hoobs")
+                                            (:file "git")))))
                (:module "crypto"
                 :components ((:file "wipe")
                              (:file "age")))
