@@ -296,6 +296,22 @@ retention_days = 30
 encrypt = true
 
 # -----------------------------------------------------------------------
+# [kv] — WASM skill persistent storage quotas
+# -----------------------------------------------------------------------
+[kv]
+# Maximum number of keys a skill may store.
+# Default: 100
+# max_keys = 100
+
+# Maximum byte size of a single value.
+# Default: 10240 (10 KiB)
+# max_value_bytes = 10240
+
+# Maximum total bytes stored across all keys for one skill.
+# Default: 1048576 (1 MiB)
+# max_total_bytes = 1048576
+
+# -----------------------------------------------------------------------
 # [credentials] — Credential store backend
 # -----------------------------------------------------------------------
 [credentials]
@@ -387,6 +403,25 @@ allowed_paths = []
 # db_path = "/home/YOU/.emacs.d/org-roam.db"
 
 # -----------------------------------------------------------------------
+# [git] — Local git skill (disabled by default)
+# -----------------------------------------------------------------------
+[git]
+# Enable the local git skill. Requires allowed_repos to be set.
+# Default: false
+enable = false
+
+# Repositories the agent may access. Empty list = deny all.
+# An empty list means deny all. There is no default — you must set this.
+# Example:
+# allowed_repos = ["/home/YOU/devel/myrepo"]
+allowed_repos = []
+
+# Allow write operations (write_file, stage, commit, create_branch, checkout).
+# Set to true only if you want Crichton to be able to modify code and commit.
+# Default: false
+allow_write = false
+
+# -----------------------------------------------------------------------
 # [amp] — Amp CLI coding orchestration (disabled by default)
 # -----------------------------------------------------------------------
 [amp]
@@ -438,7 +473,7 @@ max_total_chars = 150000
 # Tools available to external channel sessions (Discord, etc.).
 # Defaults to a safe read-only subset: weather, time, ephemeris,
 # system_info, rss, battery, resource_usage.
-# Privileged tools (amp_code, amp_test, orgmode, raindrop, github,
+# Privileged tools (amp_code, amp_test, orgmode, git, raindrop, github,
 # pushover, hoobs) are excluded by default for external channels.
 # Override with a complete list to customise:
 # channel_allowed_tools = ["weather", "time", "rss", "system_info"]
@@ -1182,6 +1217,59 @@ Create a new note titled "Meeting notes 2026-03-21" with tag "work".
 Append "- Follow up with Alex" under the "Action Items" heading in ~/org/work.org.
 #+end_example
 
+** Local Git
+
+Reads and modifies local git repositories and files.  This is the primary
+mechanism for Crichton to inspect and modify its own source code.
+
+This skill is *disabled by default* and requires explicit configuration.
+It never touches the network — it is strictly a local, daemon-only skill.
+
+*Configuration* (=~/.crichton/config.toml=):
+
+#+begin_src toml
+[git]
+enable = true
+
+# Repositories the agent may access. Empty list = deny all.
+allowed_repos = ["/home/YOU/devel/myrepo"]
+
+# Allow write operations (write_file, stage, commit, etc.)
+# Omit or set false for read-only access.
+allow_write = true
+#+end_src
+
+*Credentials* — none required.
+
+*Read-only actions* (require =enable = true= and =allowed_repos=):
+
+- =status= — =git status --short --branch=
+- =log= — recent commit history (filterable by path or branch)
+- =diff= — working tree or staged changes (optionally against a ref)
+- =branches= — list local and optionally remote branches
+- =worktrees= — list git worktrees
+- =read_file= — read a file's current contents from disk
+- =show= — read a file as it existed at a specific commit
+
+*Write actions* (additionally require =allow_write = true=):
+
+- =write_file= — write content to a file (creates or overwrites)
+- =stage= — =git add -- paths=
+- =unstage= — =git restore --staged -- paths=
+- =commit= — =git commit -m message=
+- =create_branch= — create and check out a new branch
+- =checkout= — switch to an existing branch
+
+*Example interactions*:
+
+#+begin_example
+Show me the git status of ~/devel/crichton.
+What changed in the last 10 commits to ~/devel/crichton?
+Show me the contents of skills/builtins/weather.lisp in the crichton repo.
+Read agent/tools.lisp and suggest improvements to the scheduler tool.
+Write a fix to skills/builtins/rss.lisp, stage it, and commit with message "fix: handle empty feed URL".
+#+end_example
+
 ** AMP Code Review
 
 Delegates coding and testing tasks to the Amp CLI agent.  Crichton acts as
@@ -1288,6 +1376,11 @@ skill.
 A skill with =http_domains = []= and =read_files = []= and =write_files = []=
 is a pure computation skill — it can only process the data you give it.
 
+Every WASM skill automatically has access to a small persistent key-value store
+with no manifest declaration required.  The store is per-skill and age-encrypted
+at rest (=~/.crichton/kv/<skill-id>.age=).  Quota limits apply (see =[kv]= in the
+configuration reference).
+
 ** RSS Filter Skill
 
 The RSS filter skill is a pure-function skill that filters RSS feed items by
@@ -1337,6 +1430,105 @@ development workflow and is not useful in normal operation.
 
 It is located at =examples/skills/meaning-of-life/= in the source tree.  See
 =docs/SKILL_DEVELOPMENT.org= if you want to write your own skills.
+
+** Managing WASM Skill Storage
+
+Every WASM skill gets its own age-encrypted key-value store at
+=~/.crichton/kv/<skill-id>.age=.  Most users never need to touch these files
+directly, but the following operations are available via the Lisp REPL (SLIME/SLY
+or =crichton-client --eval=).
+
+*** Viewing storage usage
+
+#+begin_example
+How much storage are my WASM skills using?
+#+end_example
+
+Or from the REPL:
+
+#+begin_src lisp
+(crichton/skills:kv-usage-report)
+#+end_src
+
+*** Health check
+
+Checks that all store files are accessible and not corrupt:
+
+#+begin_src lisp
+(crichton/skills:kv-health-check)
+;; KV Store Health Check
+;; ----------------------------------------
+;;   Directory  : /home/you/.crichton/kv/
+;;   Accessible : yes
+;;   Files      : 2 (2 OK, 0 corrupt)
+;; ...
+#+end_src
+
+Returns =T= when everything is healthy.
+
+*** Backup
+
+Copy all skill stores to a backup directory (the daemon flushes any pending
+writes first):
+
+#+begin_src lisp
+(crichton/skills:backup-kv-store #p"~/.crichton/kv-backup-2026-03-22/")
+#+end_src
+
+Or from the shell:
+
+#+begin_src bash
+# Simple file copy — .age files are already encrypted
+cp -r ~/.crichton/kv /secure/backup/kv-$(date +%Y%m%d)
+#+end_src
+
+*** Restore
+
+#+begin_src lisp
+(crichton/skills:restore-kv-backup #p"~/.crichton/kv-backup-2026-03-22/")
+#+end_src
+
+This copies the backed-up =.age= files back into =~/.crichton/kv/= and clears the
+in-memory cache so they are reloaded on next access.
+
+*** Integrity check and repair
+
+If you suspect a skill's store is corrupt (e.g., interrupted write, damaged
+backup):
+
+#+begin_src lisp
+;; Find corrupt files
+(crichton/skills:check-kv-integrity)
+;; => ((:SKILL-ID "my-skill" :STATUS :OK :ERROR NIL)
+;;     (:SKILL-ID "bad-skill" :STATUS :CORRUPT :ERROR "..."))
+
+;; Rename the corrupt file out of the way (adds .corrupt extension)
+;; and evict the cache entry so the skill starts fresh
+(crichton/skills:repair-corrupt-kv "bad-skill")
+#+end_src
+
+*** Clearing a skill's data
+
+#+begin_src lisp
+;; Wipe all stored data for one skill
+(crichton/skills:kv-clear-skill "my-skill")
+#+end_src
+
+This removes the =.age= file and the in-memory cache entry.
+
+*** Quota limits
+
+Default limits per skill (adjustable in =config.toml= under =[kv]=):
+
+| Limit             | Default    |
+|-------------------+------------|
+| Max keys          | 100        |
+| Max value size    | 10 KiB     |
+| Max total storage | 1 MiB      |
+
+When a skill exceeds a quota, the =kv_set= call returns an error and the skill
+receives a −1 return code.  The daemon logs a warning.  Increase limits in
+=config.toml= if a skill legitimately needs more space.
 
 * Troubleshooting
 

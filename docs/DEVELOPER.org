@@ -554,21 +554,45 @@ Log a UTF-8 string to daemon logs.
 - =ptr=: Pointer to string in WASM linear memory
 - =len=: Length of string in bytes
 
-*** =kv_get(key_ptr: i32, key_len: i32, out_ptr: i32, out_cap: i32) -> i32=
+*** =kv_get(key_ptr: i32, key_len: i32) -> i32=
 
-Get a value from skill-scoped persistent KV store.
+Check whether a key exists in the skill-scoped persistent KV store.
 
-- =key_ptr=, =key_len=: Key string
-- =out_ptr=, =out_cap=: Output buffer
-- Returns: Bytes written, or -1 if not found
+- =key_ptr=, =key_len=: Key string in WASM linear memory
+- Returns: 0=found, -1=not found, -2=error
+
+/Note: the current implementation returns a status code only — the value is
+not written back to WASM memory.  Use =kv_get= to confirm a key exists before
+acting; retrieve values by having the daemon (Lisp side) call =kv-get= directly./
 
 *** =kv_set(key_ptr: i32, key_len: i32, val_ptr: i32, val_len: i32) -> i32=
 
-Set a value in skill-scoped persistent KV store.
+Set a key-value pair in the skill-scoped persistent KV store.
 
 - =key_ptr=, =key_len=: Key string
-- =val_ptr=, =val_len=: Value bytes
-- Returns: 0 on success
+- =val_ptr=, =val_len=: Value string (UTF-8)
+- Returns: 0=success, -1=quota exceeded, -2=other error
+
+*** =kv_delete(key_ptr: i32, key_len: i32) -> i32=
+
+Delete a key from the skill-scoped KV store.
+
+- =key_ptr=, =key_len=: Key string
+- Returns: 0=deleted, 1=not found, -1=error
+
+*** =kv_exists(key_ptr: i32, key_len: i32) -> i32=
+
+Test whether a key exists (does not affect values).
+
+- =key_ptr=, =key_len=: Key string
+- Returns: 1=exists, 0=does not exist, -1=error
+
+*** =kv_list(prefix_ptr: i32, prefix_len: i32) -> i32=
+
+Count keys whose names begin with the given prefix (pass length 0 to count all keys).
+
+- =prefix_ptr=, =prefix_len=: Prefix string; set =prefix_len= to 0 to list all
+- Returns: number of matching keys, or -1 on error
 
 *** =http_fetch(url_ptr: i32, url_len: i32, out_ptr: i32, out_cap: i32) -> i32=
 
@@ -873,6 +897,174 @@ Generate human-readable report of all namespaces.
 (storage-report)
 ;; Prints to *standard-output*
 #+end_src
+
+** KV Store API (~skills/kv-store.lisp~) (cricht-jio)
+
+Per-skill age-encrypted persistent key-value store for WASM skills.
+
+*** Overview
+
+- *Location*: =~/.crichton/kv/<skill-id>.age= — one file per skill
+- *Format*: Age-encrypted JSON envelope (=version=, =skill_id=, =updated_at=, =data=)
+- *Isolation*: Each skill can only access its own KV store (enforced at host function level)
+- *Thread safety*: All operations protected by =*kv-lock*= (bordeaux-threads)
+- *Write-through cache*: writes go to both in-memory hash-table and disk atomically
+
+*** Quotas (configurable in =config.toml= under =[kv]=)
+
+| Parameter         | Default  | Description                          |
+|-------------------+----------+--------------------------------------|
+| =max_keys=        | 100      | Max keys per skill                   |
+| =max_value_bytes= | 10240    | Max value size in bytes (10 KiB)     |
+| =max_total_bytes= | 1048576  | Max total store size per skill (1 MiB) |
+
+Exceeding any quota signals a =kv-quota-exceeded= condition (from WASM: returns -1 from =kv_set=).
+
+*** Core API (Lisp side)
+
+**** =kv-get (skill-id key) → value-or-nil=
+
+Get a value. Returns =NIL= if the key does not exist.
+
+#+begin_src lisp
+(kv-get "my-skill" "last-run")
+;; => "2026-03-22T12:00:00Z"  or  NIL
+#+end_src
+
+**** =kv-set (skill-id key value) → T=
+
+Set a value. Write-through: updates cache and disk atomically. Signals =kv-quota-exceeded= if any limit is exceeded.
+
+#+begin_src lisp
+(kv-set "my-skill" "last-run" "2026-03-22T12:00:00Z")
+;; => T
+#+end_src
+
+**** =kv-delete (skill-id key) → T-or-nil=
+
+Delete a key. Returns =T= if the key existed, =NIL= if not.
+
+#+begin_src lisp
+(kv-delete "my-skill" "stale-key")
+;; => T
+#+end_src
+
+**** =kv-exists-p (skill-id key) → T-or-nil=
+
+Check whether a key exists without loading its value.
+
+#+begin_src lisp
+(kv-exists-p "my-skill" "last-run")
+;; => T or NIL
+#+end_src
+
+**** =kv-list (skill-id &optional prefix) → list-of-strings=
+
+Return all keys for a skill, sorted alphabetically. Pass a prefix string to filter.
+
+#+begin_src lisp
+(kv-list "my-skill")
+;; => ("alpha:a" "alpha:b" "beta:x")
+
+(kv-list "my-skill" "alpha:")
+;; => ("alpha:a" "alpha:b")
+#+end_src
+
+*** Admin API
+
+**** =kv-clear-skill (skill-id) → T=
+
+Wipe all data for a skill: removes from cache and deletes the =.age= file.
+
+**** =kv-skill-usage (skill-id) → plist=
+
+Return =(:SKILL-ID … :KEY-COUNT n :TOTAL-BYTES n)= for one skill.
+
+**** =kv-global-usage () → list-of-plists=
+
+Return usage stats for all skills currently in the in-memory cache.
+
+**** =kv-usage-report (&key stream) → nil=
+
+Print a formatted usage table to =stream= (default =*standard-output*=).
+
+*** Lifecycle
+
+**** =preload-kv-cache () → count=
+
+Scan =~/.crichton/kv/*.age= and load all stores into cache.  Called at daemon startup.  Skips unreadable files with a warning.
+
+**** =flush-all-kv () → count=
+
+Save all cached stores to disk.  Called at daemon shutdown.
+
+**** =clear-kv-cache () → T=
+
+Wipe the in-memory cache without touching disk (forces reload on next access).
+
+*** Operational Tools
+
+**** =kv-dir-path () → pathname=
+
+Return the path to the KV directory (=~/.crichton/kv/=).
+
+**** =backup-kv-store (backup-dir) → count=
+
+Flush all cached stores, then copy every =.age= file to =backup-dir= (created if it does not exist). Returns the number of files copied.
+
+#+begin_src lisp
+(backup-kv-store #p"~/.crichton/kv-backup-2026-03-22/")
+;; => 3
+#+end_src
+
+**** =restore-kv-backup (backup-dir) → count=
+
+Copy all =.age= files from =backup-dir= to the live KV directory, then clear the in-memory cache. Returns the number of files restored.
+
+#+begin_src lisp
+(restore-kv-backup #p"~/.crichton/kv-backup-2026-03-22/")
+;; => 3
+#+end_src
+
+**** =check-kv-integrity () → list-of-plists=
+
+Attempt to decrypt and parse every =.age= file in the KV directory. Returns a list of result plists:
+
+#+begin_src lisp
+(check-kv-integrity)
+;; => ((:SKILL-ID "my-skill" :STATUS :OK      :ERROR NIL)
+;;     (:SKILL-ID "bad-skill" :STATUS :CORRUPT :ERROR "age: decryption failed"))
+#+end_src
+
+**** =repair-corrupt-kv (skill-id) → pathname-or-nil=
+
+Rename the corrupt =.age= file to =<skill-id>.corrupt.age= and evict the cache entry. Returns the new path, or =NIL= if no file existed.
+
+#+begin_src lisp
+(repair-corrupt-kv "bad-skill")
+;; => #P"~/.crichton/kv/bad-skill.corrupt.age"
+#+end_src
+
+**** =kv-health-check (&key stream) → T-or-nil=
+
+Print a combined health report: directory accessibility, integrity results, quota configuration, and per-skill usage. Returns =T= if no corrupt files were found.
+
+#+begin_src lisp
+(kv-health-check)
+;; KV Store Health Check
+;; ----------------------------------------
+;;   Directory  : /home/user/.crichton/kv/
+;;   Accessible : yes
+;;   Files      : 3 (3 OK, 0 corrupt)
+;; ...
+#+end_src
+
+*** Security Properties
+
+- *Isolation*: Each skill's KV data is stored in a separate =.age= file and the WASM host functions enforce that a skill can only access its own store via the per-invocation =skill-context-id=.
+- *Encryption*: All files are age-encrypted at rest (same key as credentials and sessions).
+- *Permissions*: Files are written with 0600 permissions via =crichton/crypto:encrypt-to-file=.
+- *Atomic writes*: Encryption writes via temp file + rename to prevent partial writes.
 
 ** Credential API (~credentials/mediator.lisp~)
 
@@ -1608,6 +1800,67 @@ Gated by =[orgmode] enable = true= in =config.toml=.
 - =set_todo= — change a headline's TODO state (adds CLOSED timestamp for done states)
 - =set_filetags= — replace file-level =#+FILETAGS:= (handles insert, replace, and removal; case-insensitive matching)
 - =status= — report skill configuration and allowed paths
+
+*** =git= Tool (~skills/builtins/git.lisp~)
+
+The =git= tool provides local git repository and file access, including
+the ability to read and write files and make commits.  This is the
+primary mechanism for Crichton to modify its own source code.
+
+Gated by two independent config flags:
+- =[git] enable = true= — enables read-only operations
+- =[git] allow_write = true= — additionally enables write operations
+
+*Configuration:*
+#+begin_src toml
+[git]
+enable = true
+allowed_repos = ["/home/user/devel/crichton"]
+allow_write = true
+#+end_src
+
+- =allowed_repos= is an explicit allowlist (empty = deny all, no default)
+- =allow_write= defaults to false; must be set explicitly to permit mutations
+- No credentials required — accesses the local filesystem directly
+
+| Parameter      | Type    | Required             | Description                                              |
+|----------------+---------+----------------------+----------------------------------------------------------|
+| =action=       | string  | yes                  | Action to perform (see below)                            |
+| =repo_path=    | string  | for most actions     | Absolute path to git repository (must be in =allowed_repos=) |
+| =file_path=    | string  | for file actions     | File path relative to repo or absolute                   |
+| =content=      | string  | for =write_file=     | Content to write                                         |
+| =paths=        | string  | for =stage=/=unstage= | Comma-separated paths                                    |
+| =message=      | string  | for =commit=         | Commit message                                           |
+| =branch_name=  | string  | for =create_branch=/=checkout= | Branch name                                  |
+| =ref=          | string  | no                   | Git ref (=HEAD=, =main=, =HEAD~3=) for =diff=/=show=    |
+| =count=        | integer | no                   | Number of log entries (default 20)                       |
+| =all_branches= | boolean | no                   | Include remote tracking branches (=branches= action)     |
+| =staged=       | boolean | no                   | Show staged-only changes (=diff= action)                 |
+
+*Read-only actions* (require =enable = true=, =allowed_repos=):
+- =status= — =git status --short --branch=
+- =log= — recent commits (=--oneline=), filterable by path/branch
+- =diff= — working tree or staged changes, optionally against a ref
+- =branches= — list branches (optionally including remotes)
+- =worktrees= — =git worktree list=
+- =read_file= — read a file's current on-disk contents
+- =show= — read a file at a specific commit (=git show ref:path=)
+- =config_status= — report enabled state and configuration
+
+*Write actions* (also require =allow_write = true=):
+- =write_file= — write content to a file (creates or overwrites; parent dirs created)
+- =stage= — =git add -- paths=
+- =unstage= — =git restore --staged -- paths=
+- =commit= — =git commit -m message=
+- =create_branch= — =git checkout -b name [from-ref]=
+- =checkout= — =git checkout branch=
+
+*Security properties:*
+- =allowed_repos= allowlist with canonical path comparison (resolves symlinks, rejects =..= traversal)
+- Write gate is independent of read gate — set them separately
+- All git commands run via =sb-ext:run-program= with explicit argv (no shell)
+- Branch names validated against shell metacharacters before use
+- =git= tool excluded from the default channel tool allowlist
 
 *** Amp Orchestrator Tools (~skills/builtins/amp-orchestrator.lisp~)
 
@@ -2920,7 +3173,7 @@ Default allowed set: =weather=, =time=, =ephemeris=, =system_info=, =rss=,
 =battery=, =resource_usage=.
 
 Excluded by default: =amp_code=, =amp_test=, =amp_check=, =orgmode=,
-=raindrop=, =github=, =pushover=, =hoobs=, =scheduler= write operations.
+=git=, =raindrop=, =github=, =pushover=, =hoobs=, =scheduler= write operations.
 
 Configurable via =[agent] channel_allowed_tools= in =config.toml=.
 
