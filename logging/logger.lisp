@@ -83,7 +83,7 @@
     (close *json-log-stream*))
   (setf *json-log-stream* nil))
 
-;;; --- Channel output filtering (cricht-g7r) ---
+;;; --- Channel output filtering ---
 
 (defun redact-channel-output (text)
   "Apply secret redaction to TEXT before sending it to an external channel.

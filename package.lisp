@@ -281,7 +281,7 @@
            #:clear-kv-cache
            #:kv-usage-report
            #:kv-quota-exceeded
-           ;; kv-store operational tools (cricht-jio)
+           ;; kv-store operational tools
            #:kv-dir-path
            #:backup-kv-store
            #:restore-kv-backup

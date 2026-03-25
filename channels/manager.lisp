@@ -79,7 +79,7 @@
               (when new-session-id
                 (setf (gethash key *conversation-sessions*) new-session-id))
               (when (and response-text (plusp (length response-text)))
-                ;; Filter secrets from outbound channel responses (cricht-g7r)
+                ;; Filter secrets from outbound channel responses
                 (let ((filtered (crichton/logging:redact-channel-output response-text)))
                   (channel-send channel
                                 (channel-message-channel-id msg)

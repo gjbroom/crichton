@@ -396,7 +396,11 @@ a batched command that sends the chat request to the daemon."
 (defmethod tui:update-message ((model tui-model) (msg daemon-chat-done-msg))
   (let ((entry (model-streaming-entry model)))
     (when entry
-      (when (msg-done-text msg)
+      ;; Only use done-text as fallback when streaming produced no text.
+      ;; If streaming already built up entry-text, ignore done-text to
+      ;; avoid the erase-and-rewrite visible glitch.
+      (when (and (msg-done-text msg)
+                 (string= (entry-text entry) ""))
         (setf (entry-text entry) (msg-done-text msg)))
       (when (msg-done-error-p msg)
         (setf (entry-role entry) :error))

@@ -27,12 +27,16 @@
 (defvar *kv-cache* (make-hash-table :test #'equal)
   "In-memory cache: skill-id string → hash-table of key→value.")
 
-;;; --- Path helper ---
+;;; --- Path helpers ---
+
+(defun kv-dir-path ()
+  "Return the path to the KV store directory: ~/.crichton/kv/"
+  (merge-pathnames #p"kv/" crichton/config:*agent-home*))
 
 (defun kv-file-path (skill-id)
   "Return the .age file path for SKILL-ID: ~/.crichton/kv/<skill-id>.age"
   (merge-pathnames (make-pathname :name skill-id :type "age")
-                   (merge-pathnames #p"kv/" crichton/config:*agent-home*)))
+                   (kv-dir-path)))
 
 ;;; --- JSON serialization ---
 
@@ -296,6 +300,119 @@
                *kv-cache*)
       (log:info "Flushed ~D KV store~:P" count)
       count)))
+
+;;; --- Operational tools ---
+
+(defun backup-kv-store (backup-dir)
+  "Flush all cached KV data and copy every .age file to BACKUP-DIR.
+   BACKUP-DIR is created if it does not exist.
+   Returns the count of files copied."
+  (ensure-directories-exist backup-dir)
+  (bt:with-lock-held (*kv-lock*)
+    ;; Flush any dirty cache entries first so backup captures current state.
+    (maphash (lambda (skill-id data-ht)
+               (handler-case (save-skill-kv skill-id data-ht)
+                 (error (c)
+                   (log:warn "backup-kv-store: failed to flush ~A before backup: ~A"
+                             skill-id c))))
+             *kv-cache*)
+    (let* ((pattern (merge-pathnames (make-pathname :name :wild :type "age")
+                                     (kv-dir-path)))
+           (files (directory pattern))
+           (count 0))
+      (dolist (file files)
+        (let ((dest (merge-pathnames (file-namestring file) backup-dir)))
+          (uiop:copy-file file dest)
+          (incf count)))
+      (log:info "backup-kv-store: backed up ~D KV store~:P to ~A" count backup-dir)
+      count)))
+
+(defun restore-kv-backup (backup-dir)
+  "Copy all .age files from BACKUP-DIR into the live KV directory,
+   then clear the in-memory cache so they are re-read on next access.
+   Returns the count of files restored."
+  (bt:with-lock-held (*kv-lock*)
+    (let* ((kv-dir (kv-dir-path))
+           (pattern (merge-pathnames (make-pathname :name :wild :type "age")
+                                     backup-dir))
+           (files (directory pattern))
+           (count 0))
+      (ensure-directories-exist kv-dir)
+      (dolist (file files)
+        (let ((dest (merge-pathnames (file-namestring file) kv-dir)))
+          (uiop:copy-file file dest)
+          (incf count)))
+      (clrhash *kv-cache*)
+      (log:info "restore-kv-backup: restored ~D KV store~:P from ~A" count backup-dir)
+      count)))
+
+(defun check-kv-integrity ()
+  "Decrypt and parse every .age file in the KV directory.
+   Returns a list of result plists, one per file:
+     (:SKILL-ID id :STATUS :OK    :ERROR nil)
+     (:SKILL-ID id :STATUS :CORRUPT :ERROR \"message\")"
+  (let* ((pattern (merge-pathnames (make-pathname :name :wild :type "age")
+                                   (kv-dir-path)))
+         (files (directory pattern))
+         results)
+    (dolist (file files)
+      (let ((skill-id (pathname-name file)))
+        (push
+         (handler-case
+             (progn
+               (load-skill-kv skill-id)
+               (list :skill-id skill-id :status :ok :error nil))
+           (error (c)
+             (list :skill-id skill-id :status :corrupt
+                   :error (format nil "~A" c))))
+         results)))
+    (nreverse results)))
+
+(defun repair-corrupt-kv (skill-id)
+  "Rename the on-disk KV file for SKILL-ID to <skill-id>.corrupt.age and
+   evict it from the in-memory cache.  Use this after CHECK-KV-INTEGRITY
+   identifies a corrupt store.
+   Returns the new path, or NIL if no file existed."
+  (bt:with-lock-held (*kv-lock*)
+    (remhash skill-id *kv-cache*)
+    (let ((path (kv-file-path skill-id)))
+      (when (probe-file path)
+        (let ((new-path (make-pathname :name (format nil "~A.corrupt" skill-id)
+                                       :type "age"
+                                       :defaults path)))
+          (rename-file path new-path)
+          (log:warn "repair-corrupt-kv: renamed corrupt store for ~A to ~A"
+                    skill-id new-path)
+          new-path)))))
+
+(defun kv-health-check (&key (stream *standard-output*))
+  "Print a formatted health report for the KV store subsystem to STREAM.
+   Checks directory accessibility, runs CHECK-KV-INTEGRITY, reports quotas
+   and per-skill usage.  Returns T when no corruption is found, NIL otherwise."
+  (let* ((kv-dir (kv-dir-path))
+         (dir-exists (ignore-errors
+                       (ensure-directories-exist kv-dir)
+                       (probe-file kv-dir)))
+         (integrity (check-kv-integrity))
+         (ok-count      (count :ok      integrity :key (lambda (r) (getf r :status))))
+         (corrupt-count (count :corrupt integrity :key (lambda (r) (getf r :status)))))
+    (format stream "~&KV Store Health Check~%")
+    (format stream "~A~%" (make-string 40 :initial-element #\-))
+    (format stream "  Directory  : ~A~%" kv-dir)
+    (format stream "  Accessible : ~:[NO~;yes~]~%" dir-exists)
+    (format stream "  Files      : ~D (~D OK, ~D corrupt)~%"
+            (length integrity) ok-count corrupt-count)
+    (when (plusp corrupt-count)
+      (format stream "~%  Corrupt files:~%")
+      (dolist (r integrity)
+        (when (eq (getf r :status) :corrupt)
+          (format stream "    ~A: ~A~%" (getf r :skill-id) (getf r :error)))))
+    (format stream "~A~%" (make-string 40 :initial-element #\-))
+    (format stream "  Quotas     : max-keys=~D, max-value=~D B, max-total=~D B~%"
+            (kv-max-keys) (kv-max-value-bytes) (kv-max-total-bytes))
+    (format stream "~%")
+    (kv-usage-report :stream stream)
+    (zerop corrupt-count)))
 
 ;;; --- Reporting ---
 

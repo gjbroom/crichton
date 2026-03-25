@@ -59,7 +59,7 @@
   "Return T if the amp CLI is available on PATH."
   (not (null (amp-binary))))
 
-;;; --- Config gate and policy (cricht-a4j) ---
+;;; --- Config gate and policy ---
 
 (defun amp-enabled-p ()
   "Return T if Amp orchestration is enabled in config.
@@ -142,7 +142,7 @@
         :binary-path (amp-binary)
         :allowed-repo-roots (amp-allowed-repo-roots)))
 
-;;; --- Credential mediation (cricht-a81) ---
+;;; --- Credential mediation ---
 
 (defun resolve-amp-api-key ()
   "Resolve the Amp API key from the credential store.
@@ -163,7 +163,7 @@
                   (when path (format nil "PATH=~A" path))
                   (format nil "AMP_API_KEY=~A" api-key)))))
 
-;;; --- ANSI stripping and output processing (cricht-c0d) ---
+;;; --- ANSI stripping and output processing ---
 
 (defvar *ansi-escape-regex*
   (let ((esc (string (code-char 27))))
@@ -181,7 +181,7 @@
       (values s nil)
       (values (subseq s 0 cap) t)))
 
-;;; --- Prompt input sanitization (cricht-ex8) ---
+;;; --- Prompt input sanitization ---
 
 (defparameter +amp-max-description-length+ 10000
   "Maximum length for a coding task description passed to Amp.")
@@ -237,7 +237,7 @@
         (crichton/logging:write-audit-event "amp.prompt.injection_markers" fields)))
     truncated))
 
-;;; --- Git status tracking (cricht-c0d) ---
+;;; --- Git status tracking ---
 
 (defun git-status-snapshot (repo-path)
   "Capture a git status snapshot for REPO-PATH.
@@ -277,7 +277,7 @@
         (pushnew (cdr entry) changed :test #'equal)))
     (sort changed #'string<)))
 
-;;; --- Structured audit logging (cricht-683) ---
+;;; --- Structured audit logging ---
 
 (defun log-amp-audit-event (event-type &key repo argv policy
                                          exit-code elapsed-seconds
@@ -318,7 +318,7 @@
             (coerce changed-files 'vector)))
     (crichton/logging:write-audit-event event-type fields)))
 
-;;; --- Direct process execution (cricht-t4o) ---
+;;; --- Direct process execution ---
 
 (defun run-command-argv (program argv &key directory environment (timeout-seconds 300))
   "Run PROGRAM with ARGV directly (no shell).  Returns a plist:
@@ -386,7 +386,7 @@
                        :error-truncated-p err-trunc)))))
       (sb-ext:process-close process))))
 
-;;; --- Core invocation (cricht-a4j, cricht-a81, cricht-vof) ---
+;;; --- Core invocation ---
 
 (defun %amp-invoke-internal (prompt &key repo-path (timeout-seconds 300))
   "Internal Amp invocation.  Assumes policy already validated."
@@ -440,7 +440,7 @@
               :error-truncated-p nil
               :changed-files nil
               :policy-decision policy)))
-    ;; Restarts (cricht-vof)
+    ;; Restarts
     (restart-case
         (let ((result (%amp-invoke-internal prompt
                                             :repo-path repo-path
@@ -482,7 +482,7 @@
 
 (defun build-code-prompt (description &key files context)
   "Build a structured prompt for a coding task.
-   Sanitizes DESCRIPTION and CONTEXT before embedding (cricht-ex8)."
+   Sanitizes DESCRIPTION and CONTEXT before embedding."
   (let ((safe-description (sanitize-for-amp-prompt description
                                                    :max-length +amp-max-description-length+
                                                    :label "description"))
@@ -518,7 +518,7 @@
           :output-truncated-p (getf result :output-truncated-p)
           :error-truncated-p (getf result :error-truncated-p))))
 
-;;; --- Direct test execution (cricht-t4o) ---
+;;; --- Direct test execution ---
 
 (defun run-test-command (test-runner test-args &key repo-path (timeout-seconds 60))
   "Run TEST-RUNNER with TEST-ARGS directly (no shell).
@@ -546,7 +546,7 @@
 (defun attempt-fix (iteration test-runner test-args repo-path timeout-seconds)
   "Invoke Amp to fix a failed test ITERATION. Mutates the iteration plist
    to record the fix attempt. Returns the fix elapsed seconds.
-   Sanitizes test output before embedding in the fix prompt (cricht-ex8)."
+   Sanitizes test output before embedding in the fix prompt."
   (let* ((command-str (format nil "~A~{ ~A~}" test-runner test-args))
          (safe-output (sanitize-for-amp-prompt (getf iteration :test-output)
                                                :max-length +amp-max-test-output-length+

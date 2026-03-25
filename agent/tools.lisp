@@ -53,12 +53,12 @@
   "Call the handler for tool NAME with INPUT (a hash-table from the LLM).
    Returns a result string. On error, returns an error description string.
    Offers :USE-VALUE and :REPORT-ERROR restarts.
-   Writes an audit event for every tool call (cricht-g7r)."
+   Writes an audit event for every tool call."
   (let ((tool (get-tool name)))
     (unless tool
       (return-from dispatch-tool
         (format nil "Error: unknown tool ~S" name)))
-    ;; Audit every tool invocation (cricht-g7r)
+    ;; Audit every tool invocation 
     (let ((fields (make-hash-table :test #'equal)))
       (setf (gethash "tool" fields) name)
       (crichton/logging:write-audit-event "agent.tool.call" fields))
@@ -697,7 +697,7 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
       (with-output-to-string (s)
         (crichton/skills:amp-report result :stream s)))))
 
-;;; --- Amp JSON tools (cricht-olb) ---
+;;; --- Amp JSON tools ---
 
 (defun %plist-to-json-ht (plist)
   "Recursively convert a plist to a JSON-compatible hash-table.
@@ -1357,7 +1357,7 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
     (t
      (format nil "Unknown HOOBS action: ~A" action))))
 
-;;; --- Channel tool allowlist (cricht-g7r) ---
+;;; --- Channel tool allowlist ---
 
 (defparameter *default-channel-allowed-tools*
   '("weather" "time" "ephemeris" "system_info" "rss" "battery" "resource_usage")

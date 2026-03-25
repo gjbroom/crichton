@@ -5,8 +5,8 @@
 /The quietly competent agent daemon./
 
 A secure background AI agent with WASM-sandboxed skills, encrypted credentials,
-network egress control, and Ed25519 code signing. Built in Common Lisp (SBCL),
-informed by a security audit of OpenClaw.
+per-skill persistent KV storage, network egress control, and Ed25519 code signing.
+Built in Common Lisp (SBCL), informed by a security audit of OpenClaw.
 
 Named for [[https://en.wikipedia.org/wiki/The_Admirable_Crichton][/The Admirable Crichton/]] —
 the servant who's actually the most capable person in the room.
