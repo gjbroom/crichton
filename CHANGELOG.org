@@ -46,6 +46,11 @@ For development details, see the git commit history and BEADS issue tracker.
 
 ** Changed
 
+- *Improved resilience against transient network failures*: the weather, RSS, Raindrop.io, GitHub, and HOOBS skills now automatically retry failed HTTP requests with exponential backoff (configurable via =[service] max_retries= in =config.toml=).  Transient errors (5xx, 429, timeouts, connection failures) are retried up to 3 times before surfacing as errors.  Permanent failures (404, 403) are not retried.
+- *WASM skill execution timeout*: WASM skills are now killed after 30 seconds by default, preventing a hung skill from blocking the daemon indefinitely.
+- *RPC rate limiting*: the local RPC server now enforces a limit of 600 requests per minute to protect against runaway clients.
+- *Anthropic API rate limit recovery*: the LLM provider now automatically waits and retries on rate limit (HTTP 429) responses, up to 5 times with exponential backoff.
+
 ** Fixed
 
 - *TUI erase-and-rewrite glitch* (cricht-jd2): the chat viewport no longer erases a streaming response and rewrites a shorter version after the final "done" message arrives.  The done-message text is now used only as a fallback when no streamed text was accumulated.
