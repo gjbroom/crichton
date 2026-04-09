@@ -164,24 +164,24 @@
 (defun fetch-feed (url)
   "Fetch and parse an RSS/Atom feed from URL.
    Returns (values items feed-title feed-format).
-   Offers :RETRY and :USE-VALUE restarts on failure."
+   Uses unified retry infrastructure for transient network failures."
   (log:info "Fetching RSS feed: ~A" url)
-  (restart-case
-      (multiple-value-bind (body status)
-          (dex:get url :headers '(("Accept" . "application/rss+xml, application/atom+xml, application/xml, text/xml")
-                                  ("User-Agent" . "Crichton/0.1")))
-        (unless (= status 200)
-          (error "Feed fetch returned HTTP ~D for ~A" status url))
-        (parse-feed-xml body))
-    (:retry ()
-      :report (lambda (s) (format s "Retry fetching ~A" url))
-      (fetch-feed url))
-    (:use-value (items &optional (title "") (fmt nil))
-      :report (lambda (s) (format s "Supply feed data for ~A" url))
-      :interactive (lambda ()
-                     (format *query-io* "~&Items (list): ")
-                     (list (eval (read *query-io*))))
-      (values items title fmt))))
+  (let ((config (get-retry-config :rss)))
+    (multiple-value-bind (body status)
+        (http-get-with-retry url
+                             :headers '(("Accept" . "application/rss+xml, application/atom+xml, application/xml, text/xml")
+                                        ("User-Agent" . "Crichton/0.1"))
+                             :context :rss
+                             :max-retries (getf config :max-retries)
+                             :connect-timeout 10
+                             :read-timeout 30)
+      (unless (= status 200)
+        (error "Feed fetch returned HTTP ~D for ~A" status url))
+      (with-retry (:context :rss :max-retries 2 :backoff-base 0.1)
+        (handler-case
+            (parse-feed-xml body)
+          (error (c)
+            (error "RSS XML parsing failed for ~A: ~A" url c)))))))
 
 ;;; --- Seen-item state for monitoring ---
 
@@ -465,51 +465,40 @@
    When KEYWORDS is non-nil, runs new items through the rss-filter WASM
    skill and only reports/notifies on matching items.
    Called by the scheduler callback registered via RSS-MONITOR-START.
-   Retries transient failures up to 2 times via fetch-feed's :RETRY restart."
-  (let ((attempts 0)
-        (max-retries 2))
-    (handler-bind
-        ((error (lambda (c)
-                  (let ((r (find-restart :retry c)))
-                    (when (and r (< attempts max-retries))
-                      (incf attempts)
-                      (log:warn "RSS monitor ~A: retrying (~D/~D) after: ~A"
-                                name attempts max-retries c)
-                      (invoke-restart r))))))
-      (handler-case
-          (let ((result (rss-check url)))
-            (when (plusp (getf result :new-count))
-              (let ((report-items (getf result :new-items))
-                    (report-count (getf result :new-count)))
-                ;; Apply WASM filter if keywords configured
-                (when keywords
-                  (let ((filter-result (run-rss-filter report-items keywords
-                                                       :match-mode (or match-mode "any")
-                                                       :search-fields (or search-fields '("title" "description")))))
-                    (when filter-result
-                      (let ((matches (gethash "matches" filter-result)))
-                        (setf report-count (length matches))
-                        ;; Convert matched hash-tables back to plists for logging
-                        (setf report-items
-                              (mapcar (lambda (m)
-                                        (list :id (gethash "id" m)
-                                              :title (gethash "title" m)
-                                              :link (gethash "link" m)
-                                              :matched-keywords (gethash "matched_keywords" m)))
-                                      (coerce matches 'list)))))))
-                (when (plusp report-count)
-                  (log:info "RSS ~A: ~D ~Aitem~:P" name report-count
-                            (if keywords "matching " ""))
-                  (dolist (item report-items)
-                    (log:info "  ~A: ~A" name (getf item :title)))
-                  (crichton/daemon:notification-post
-                   "rss"
-                   (format nil "~D ~Aitem~:P in ~A" report-count
-                           (if keywords "matching " "") name)
-                   name)))))
-        (error (c)
-          (log:warn "RSS monitor ~A failed after ~D attempt~:P: ~A"
-                    name (1+ attempts) c))))))
+   Transient network failures are retried automatically by fetch-feed."
+  (handler-case
+      (let ((result (rss-check url)))
+        (when (plusp (getf result :new-count))
+          (let ((report-items (getf result :new-items))
+                (report-count (getf result :new-count)))
+            ;; Apply WASM filter if keywords configured
+            (when keywords
+              (let ((filter-result (run-rss-filter report-items keywords
+                                                   :match-mode (or match-mode "any")
+                                                   :search-fields (or search-fields '("title" "description")))))
+                (when filter-result
+                  (let ((matches (gethash "matches" filter-result)))
+                    (setf report-count (length matches))
+                    ;; Convert matched hash-tables back to plists for logging
+                    (setf report-items
+                          (mapcar (lambda (m)
+                                    (list :id (gethash "id" m)
+                                          :title (gethash "title" m)
+                                          :link (gethash "link" m)
+                                          :matched-keywords (gethash "matched_keywords" m)))
+                                  (coerce matches 'list)))))))
+            (when (plusp report-count)
+              (log:info "RSS ~A: ~D ~Aitem~:P" name report-count
+                        (if keywords "matching " ""))
+              (dolist (item report-items)
+                (log:info "  ~A: ~A" name (getf item :title)))
+              (crichton/daemon:notification-post
+               "rss"
+               (format nil "~D ~Aitem~:P in ~A" report-count
+                       (if keywords "matching " "") name)
+               name)))))
+    (error (c)
+      (log:warn "RSS monitor ~A failed: ~A" name c))))
 
 (defun rss-monitor-start (name url interval-seconds &key (replace t) (persist t)
                                                           keywords match-mode search-fields)

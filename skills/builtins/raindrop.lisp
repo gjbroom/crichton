@@ -53,25 +53,15 @@
    PATH is appended to the base URL (e.g. \"/collections\").
    QUERY-PARAMS is an alist of (key . value) pairs appended as query string.
    Returns the parsed JSON response as a hash-table.
-   Offers :RETRY and :USE-VALUE restarts on failure."
+   Retries transient failures automatically."
   (let* ((token (raindrop-token))
          (url (build-raindrop-url path query-params)))
     (log:info "Raindrop GET: ~A" url)
-    (restart-case
-        (multiple-value-bind (body status)
-            (dex:get url :headers (raindrop-headers token))
-          (unless (= status 200)
-            (error "Raindrop.io API returned HTTP ~D for GET ~A" status path))
-          (shasht:read-json body))
-      (:retry ()
-        :report (lambda (s) (format s "Retry GET ~A" path))
-        (raindrop-get path :query-params query-params))
-      (:use-value (result)
-        :report (lambda (s) (format s "Supply result for GET ~A" path))
-        :interactive (lambda ()
-                       (format *query-io* "~&Result (hash-table): ")
-                       (list (eval (read *query-io*))))
-        result))))
+    (multiple-value-bind (body status)
+        (http-get-with-retry url :headers (raindrop-headers token))
+      (unless (= status 200)
+        (error "Raindrop.io API returned HTTP ~D for GET ~A" status path))
+      (shasht:read-json body))))
 
 (defun raindrop-post (path body-ht)
   "Make a POST request to the Raindrop.io API.
@@ -81,17 +71,13 @@
          (url (format nil "~A~A" *raindrop-api-base* path))
          (json-body (shasht:write-json body-ht nil)))
     (log:info "Raindrop POST: ~A" url)
-    (restart-case
-        (multiple-value-bind (body status)
-            (dex:post url
-              :headers (raindrop-headers token)
-              :content json-body)
-          (unless (= status 200)
-            (error "Raindrop.io API returned HTTP ~D for POST ~A" status path))
-          (shasht:read-json body))
-      (:retry ()
-        :report (lambda (s) (format s "Retry POST ~A" path))
-        (raindrop-post path body-ht)))))
+    (multiple-value-bind (body status)
+        (http-post-with-retry url
+          :headers (raindrop-headers token)
+          :content json-body)
+      (unless (= status 200)
+        (error "Raindrop.io API returned HTTP ~D for POST ~A" status path))
+      (shasht:read-json body))))
 
 (defun raindrop-put (path body-ht)
   "Make a PUT request to the Raindrop.io API.
@@ -101,17 +87,13 @@
          (url (format nil "~A~A" *raindrop-api-base* path))
          (json-body (shasht:write-json body-ht nil)))
     (log:info "Raindrop PUT: ~A" url)
-    (restart-case
-        (multiple-value-bind (body status)
-            (dex:put url
-              :headers (raindrop-headers token)
-              :content json-body)
-          (unless (= status 200)
-            (error "Raindrop.io API returned HTTP ~D for PUT ~A" status path))
-          (shasht:read-json body))
-      (:retry ()
-        :report (lambda (s) (format s "Retry PUT ~A" path))
-        (raindrop-put path body-ht)))))
+    (multiple-value-bind (body status)
+        (http-put-with-retry url
+          :headers (raindrop-headers token)
+          :content json-body)
+      (unless (= status 200)
+        (error "Raindrop.io API returned HTTP ~D for PUT ~A" status path))
+      (shasht:read-json body))))
 
 (defun raindrop-delete (path &key body-ht)
   "Make a DELETE request to the Raindrop.io API.
@@ -121,21 +103,14 @@
          (url (format nil "~A~A" *raindrop-api-base* path))
          (json-body (when body-ht (shasht:write-json body-ht nil))))
     (log:info "Raindrop DELETE: ~A" url)
-    (restart-case
-        (multiple-value-bind (body status)
-            (if json-body
-                (dex:delete url
-                  :headers (raindrop-headers token)
-                  :content json-body)
-                (dex:delete url
-                  :headers (raindrop-headers token)))
-          (unless (or (= status 200) (= status 204))
-            (error "Raindrop.io API returned HTTP ~D for DELETE ~A" status path))
-          (when (and body (plusp (length body)))
-            (shasht:read-json body)))
-      (:retry ()
-        :report (lambda (s) (format s "Retry DELETE ~A" path))
-        (raindrop-delete path :body-ht body-ht)))))
+    (multiple-value-bind (body status)
+        (http-delete-with-retry url
+          :headers (raindrop-headers token)
+          :content json-body)
+      (unless (or (= status 200) (= status 204))
+        (error "Raindrop.io API returned HTTP ~D for DELETE ~A" status path))
+      (when (and body (plusp (length body)))
+        (shasht:read-json body)))))
 
 (defun %url-encode-param (string)
   "Percent-encode a query parameter value (RFC 3986).

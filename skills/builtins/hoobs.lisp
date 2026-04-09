@@ -93,36 +93,33 @@
 
 (defun hoobs-request (method path &key body)
   "Make an authenticated request to the HOOBS API.
-   Re-authenticates once on 401.  METHOD is :get, :put, :post."
+   Re-authenticates once on 401.  METHOD is :get, :put, :post.
+   Retries transient failures with exponential backoff."
   (let ((url (format nil "~A~A" (hoobs-base-url) path))
         (token (hoobs-ensure-token)))
     (flet ((do-request (tok)
              (let ((headers (list (cons "Authorization" tok)
-                                  (cons "Content-Type" "application/json"))))
+                                  (cons "Content-Type" "application/json")))
+                   (json-body (when body (shasht:write-json body nil))))
                (ecase method
                  (:get
-                  (dex:get url :headers headers))
+                  (http-get-with-retry url :headers headers))
                  (:put
-                  (dex:put url :headers headers
-                               :content (when body (shasht:write-json body nil))))
+                  (http-put-with-retry url :headers headers :content json-body))
                  (:post
-                  (dex:post url :headers headers
-                                :content (when body (shasht:write-json body nil))))))))
-      (handler-case
-          (multiple-value-bind (response-body status)
-              (do-request token)
-            (when (= status 401)
-              ;; Token expired — re-auth and retry once
-              (log:info "HOOBS: token expired, re-authenticating")
-              (setf *hoobs-token* nil)
-              (multiple-value-setq (response-body status)
-                (do-request (hoobs-authenticate))))
-            (unless (< status 400)
-              (error "HOOBS API error ~D for ~A ~A" status method path))
-            (when (plusp (length response-body))
-              (shasht:read-json response-body)))
-        (dex:http-request-failed (c)
-          (error "HOOBS request failed: ~A" c))))))
+                  (http-post-with-retry url :headers headers :content json-body))))))
+      (multiple-value-bind (response-body status)
+          (do-request token)
+        (when (= status 401)
+          ;; Token expired — re-auth and retry once
+          (log:info "HOOBS: token expired, re-authenticating")
+          (setf *hoobs-token* nil)
+          (multiple-value-setq (response-body status)
+            (do-request (hoobs-authenticate))))
+        (unless (< status 400)
+          (error "HOOBS API error ~D for ~A ~A" status method path))
+        (when (plusp (length response-body))
+          (shasht:read-json response-body))))))
 
 ;;; --- Accessories ---
 

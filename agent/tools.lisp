@@ -13,10 +13,21 @@
 ;;; --- Tool registry ---
 
 (defclass agent-tool ()
-  ((name :initarg :name :accessor agent-tool-name :initform "" :type string)
-   (description :initarg :description :accessor agent-tool-description :initform "" :type string)
-   (input-schema :initarg :input-schema :accessor agent-tool-input-schema :initform nil)
-   (handler :initarg :handler :accessor agent-tool-handler :initform nil :type (or null function))))
+  ((name :initarg :name
+         :accessor agent-tool-name
+         :initform ""
+         :type string)
+   (description :initarg :description
+                :accessor agent-tool-description
+                :initform ""
+                :type string)
+   (input-schema :initarg :input-schema
+                 :accessor agent-tool-input-schema
+                 :initform nil)
+   (handler :initarg :handler
+            :accessor agent-tool-handler
+            :initform nil
+            :type (or null function))))
 
 (defun %make-agent-tool (&key (name "") (description "") input-schema handler)
   (make-instance 'agent-tool :name name :description description

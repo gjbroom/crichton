@@ -193,12 +193,27 @@ when a :RETRY restart is available (established by the LLM provider)."
       (handle-streaming-chat-request id msg *current-rpc-stream* *current-rpc-stream-lock*)
       (handle-blocking-chat-request id msg)))
 
+;;; --- Rate limiting ---
+
+(defvar *rpc-rate-limiter*
+  (make-instance 'crichton/skills:rate-limiter
+                 :requests-per-window 600
+                 :window-seconds 60)
+  "Rate limiter for RPC requests (600 requests per 60 seconds).")
+
 ;;; --- Request dispatch ---
 
 (defun rpc-dispatch (msg)
   "Dispatch a parsed NDJSON request and return a response hash-table."
   (let ((id (crichton/rpc:msg-id msg))
         (op (crichton/rpc:msg-op msg)))
+    (multiple-value-bind (allowed-p retry-after)
+        (crichton/skills:check-rate-limit *rpc-rate-limiter* "local")
+      (unless allowed-p
+        (return-from rpc-dispatch
+          (crichton/rpc:make-error-response
+           id "rate_limited"
+           (format nil "Rate limited; retry after ~Ds" retry-after)))))
     (handler-case
         (crichton/config:string-case op
           ("ping"

@@ -244,6 +244,9 @@
              name json-size *max-skill-json-input-bytes*))
     params))
 
+(defparameter *wasm-execution-timeout* 30
+  "Maximum seconds allowed for a single WASM skill execution.")
+
 (defun dispatch-skill-call (entry entry-point effective-abi params)
   "Execute the WASM skill call using the resolved ABI.
    Returns the skill's result value."
@@ -297,7 +300,10 @@
       (lambda ()
         (handler-bind ((error (lambda (c)
                                 (log:error "Skill ~A failed: ~A" name c))))
-          (dispatch-skill-call entry entry-point effective-abi params))))))
+          (with-timeout (*wasm-execution-timeout*
+                         :error-message (format nil "Skill ~A execution timed out after ~As"
+                                                name *wasm-execution-timeout*))
+            (dispatch-skill-call entry entry-point effective-abi params)))))))
 
 ;;; --- Unloading ---
 

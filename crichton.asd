@@ -43,7 +43,8 @@ signing. Informed by a security audit of OpenClaw."
                 :components ((:file "ffi")
                              (:file "engine")))
                (:module "skills"
-                :components ((:file "manifest")
+                :components ((:file "retry-infrastructure")
+                             (:file "manifest")
                              (:file "signing")
                              (:file "kv-store")
                              (:file "registry")

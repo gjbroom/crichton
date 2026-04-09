@@ -361,7 +361,22 @@
            #:git-unstage
            #:git-commit
            #:git-create-branch
-           #:git-checkout))
+           #:git-checkout
+           ;; retry infrastructure
+           #:with-retry
+           #:with-timeout
+           #:http-get-with-retry
+           #:http-post-with-retry
+           #:http-put-with-retry
+           #:http-delete-with-retry
+           #:get-retry-config
+           #:transient-error-p
+           #:rate-limiter
+           #:check-rate-limit
+           #:cleanup-rate-limiter
+           #:*default-max-retries*
+           #:*default-backoff-base*
+           #:*default-max-backoff*))
 
 (defpackage #:crichton/llm
   (:use #:cl)

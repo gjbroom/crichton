@@ -35,7 +35,8 @@
 
 (defun github-get (path &key query-params)
   "GET PATH from the GitHub API.  Returns parsed JSON.
-   QUERY-PARAMS is an alist of (key . value) string pairs."
+   QUERY-PARAMS is an alist of (key . value) string pairs.
+   Retries transient failures automatically."
   (let ((url (format nil "~A~A~A" *github-api-base* path
                      (if query-params
                          (with-output-to-string (s)
@@ -45,29 +46,24 @@
                                  when rest do (write-char #\& s)))
                          ""))))
     (log:info "GitHub GET: ~A" path)
-    (handler-case
-        (multiple-value-bind (body status)
-            (dex:get url :headers (github-headers))
-          (cond
-            ((= status 404) (error "GitHub: not found: ~A" path))
-            ((>= status 400) (error "GitHub API error ~D for ~A" status path))
-            (t (shasht:read-json body))))
-      (dex:http-request-failed (c)
-        (error "GitHub request failed: ~A" c)))))
+    (multiple-value-bind (body status)
+        (http-get-with-retry url :headers (github-headers) :context :github)
+      (cond
+        ((= status 404) (error "GitHub: not found: ~A" path))
+        ((>= status 400) (error "GitHub API error ~D for ~A" status path))
+        (t (shasht:read-json body))))))
 
 (defun github-post (path body-ht)
-  "POST to PATH with BODY-HT as JSON.  Returns parsed JSON."
+  "POST to PATH with BODY-HT as JSON.  Returns parsed JSON.
+   Retries transient failures automatically."
   (let ((url (format nil "~A~A" *github-api-base* path))
         (json-body (shasht:write-json body-ht nil)))
     (log:info "GitHub POST: ~A" path)
-    (handler-case
-        (multiple-value-bind (body status)
-            (dex:post url :headers (github-headers) :content json-body)
-          (unless (member status '(200 201) :test #'=)
-            (error "GitHub API error ~D for POST ~A" status path))
-          (shasht:read-json body))
-      (dex:http-request-failed (c)
-        (error "GitHub request failed: ~A" c)))))
+    (multiple-value-bind (body status)
+        (http-post-with-retry url :headers (github-headers) :content json-body :context :github)
+      (unless (member status '(200 201) :test #'=)
+        (error "GitHub API error ~D for POST ~A" status path))
+      (shasht:read-json body))))
 
 ;;; --- JSON navigation ---
 
