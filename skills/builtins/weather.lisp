@@ -23,6 +23,14 @@
 (defparameter *weather-default-city* "Victoria"
   "Default city for weather queries. Override via config [weather] city.")
 
+;;; --- Retry configuration ---
+
+(defparameter *max-weather-retries* 3
+  "Maximum number of automatic retries on transient weather API failures.")
+
+(defparameter *weather-backoff-base* 1
+  "Base delay in seconds for exponential backoff; doubles each retry.")
+
 (defun check-weather-egress ()
   "Signal an error if the network egress policy prohibits the weather API host.
    Checks [network] allowed_builtin_http_domains in config.  If the list is absent,
@@ -33,6 +41,44 @@
                (not (member *weather-api-host* allowed :test #'string-equal)))
       (error "Egress denied: ~A not in [network] allowed_builtin_http_domains"
              *weather-api-host*))))
+
+;;; --- Network retry infrastructure ---
+
+(defun weather-error-retryable-p (condition)
+  "Return T if CONDITION represents a transient network error worth retrying."
+  (or
+   ;; Network connection failures
+   (and (typep condition 'usocket:socket-error))
+   ;; dexador timeout errors
+   (and (typep condition 'dex:http-request-failed)
+        (let ((status (dex:response-status condition)))
+          ;; Retry on 5xx server errors, 429 rate limit, 503 service unavailable
+          (or (>= status 500)
+              (= status 429)
+              (= status 503))))
+   ;; General network timeout conditions
+   (search "timeout" (format nil "~A" condition) :test #'char-equal)
+   (search "connection" (format nil "~A" condition) :test #'char-equal)))
+
+(defmacro with-weather-retry (&body body)
+  "Execute BODY, retrying on transient network errors with exponential backoff.
+   Sleeps (* *weather-backoff-base* 2^attempt) seconds between retries.
+   Re-signals the original error after *max-weather-retries* attempts are exhausted."
+  (let ((attempt (gensym "ATTEMPT"))
+        (c (gensym "COND"))
+        (delay (gensym "DELAY")))
+    `(loop for ,attempt from 0
+           do (handler-case
+                  (return (progn ,@body))
+                (error (,c)
+                  (if (and (< ,attempt *max-weather-retries*)
+                           (weather-error-retryable-p ,c))
+                      (let ((,delay (* *weather-backoff-base*
+                                       (expt 2 ,attempt))))
+                        (log:warn "Weather API error; retrying in ~,1Fs (attempt ~D/~D): ~A"
+                                  ,delay (1+ ,attempt) *max-weather-retries* ,c)
+                        (sleep ,delay))
+                      (error ,c)))))))
 
 ;;; --- API access ---
 
@@ -56,19 +102,34 @@
 
 (defun fetch-weather-json (city-query)
   "Fetch weather data for CITY-QUERY from api.weather.gc.ca.
-   Returns the parsed JSON as nested hash-tables/vectors, or signals an error."
+   Returns the parsed JSON as nested hash-tables/vectors, or signals an error.
+   Automatically retries transient network failures with exponential backoff."
   (check-weather-egress)
   (let ((url (weather-api-url city-query)))
     (log:info "Fetching weather for ~S from ~A" city-query *weather-api-base*)
-    (handler-case
-        (multiple-value-bind (body status headers)
-            (dex:get url :headers '(("Accept" . "application/json")))
-          (declare (ignore headers))
-          (unless (= status 200)
-            (error "Weather API returned HTTP ~D" status))
-          (shasht:read-json body))
-      (error (c)
-        (error "Weather fetch failed for ~S: ~A" city-query c)))))
+    (with-weather-retry
+      (handler-case
+          (multiple-value-bind (body status headers)
+              (dex:get url 
+                       :headers '(("Accept" . "application/json"))
+                       :connect-timeout 10
+                       :read-timeout 30)
+            (declare (ignore headers))
+            (cond
+              ((= status 404)
+               ;; 404 is not retryable - city not found
+               (error "Weather data not found for city: ~S" city-query))
+              ((/= status 200)
+               ;; Other non-200 status codes may be retryable
+               (error "Weather API returned HTTP ~D" status))
+              (t
+               (handler-case
+                   (shasht:read-json body)
+                 (error (c)
+                   (error "Failed to parse weather JSON response: ~A" c))))))
+        (error (c)
+          ;; Let the retry macro handle this
+          (error c))))))
 
 ;;; --- JSON navigation helpers ---
 ;;; The API nests values under en/fr language keys.
@@ -183,7 +244,8 @@
 
 (defun weather-report (&key (city nil) (forecasts 6) (stream *standard-output*))
   "Fetch and display a weather report for CITY (default from config or Victoria).
-   Returns the raw feature properties hash-table."
+   Returns the raw feature properties hash-table.
+   Automatically retries transient network failures."
   (let* ((city-name (or city
                         (crichton/config:config-section-get :weather :city)
                         *weather-default-city*))
@@ -204,7 +266,8 @@
 
 (defun weather-conditions (&key (city nil))
   "Fetch current conditions for CITY. Returns a plist.
-   Suitable for programmatic use by other daemon components."
+   Suitable for programmatic use by other daemon components.
+   Automatically retries transient network failures."
   (let* ((city-name (or city
                         (crichton/config:config-section-get :weather :city)
                         *weather-default-city*))
