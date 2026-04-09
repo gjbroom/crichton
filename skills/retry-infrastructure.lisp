@@ -56,7 +56,7 @@
   "RSS feed specific error classification."
   (or
    ;; XML parsing errors might be transient (incomplete download)
-   (typep condition 'xmls:xml-parse-error)
+   (typep condition 'xmls::xml-parse-error)
    ;; Use default network classification
    (call-next-method)))
 
@@ -225,8 +225,8 @@
 (defmethod cleanup-rate-limiter ((limiter rate-limiter))
   "Remove old client buckets to prevent memory leaks."
   (bt:with-lock-held ((rate-limiter-lock limiter))
-    (let ((now (get-universal-time))
-          (cleanup-before (- now (* 2 (rate-limiter-window-seconds limiter)))))
+    (let* ((now (get-universal-time))
+           (cleanup-before (- now (* 2 (rate-limiter-window-seconds limiter)))))
       (loop for client-id being the hash-keys of (rate-limiter-clients limiter)
             using (hash-value bucket)
             when (and (null (client-bucket-requests bucket))

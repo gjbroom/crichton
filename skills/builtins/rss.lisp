@@ -546,7 +546,8 @@
 
 ;;; --- Feed writing/generation ---
 
-(defconstant +rss-pub-namespace+ "rss-pub"
+(defconstant +rss-pub-namespace+
+  (if (boundp '+rss-pub-namespace+) +rss-pub-namespace+ "rss-pub")
   "Storage namespace for published (generated) RSS feeds.")
 
 (defconstant +rss-default-max-items+ 100
