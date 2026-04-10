@@ -79,18 +79,18 @@
       ((listp roots) roots)
       (t nil))))
 
-(defun %ensure-trailing-slash (path)
+(defun ensure-trailing-slash (path)
   "Ensure PATH ends with a slash."
   (let ((s (namestring path)))
     (if (char= (char s (1- (length s))) #\/)
         s
         (concatenate 'string s "/"))))
 
-(defun %canonical-dir (path)
+(defun canonical-dir (path)
   "Return a canonical directory namestring for PATH, or NIL if it doesn't exist."
   (handler-case
       (let ((truepath (truename (parse-namestring path))))
-        (%ensure-trailing-slash truepath))
+        (ensure-trailing-slash truepath))
     (error () nil)))
 
 (defun amp-repo-allowed-p (repo-path)
@@ -99,11 +99,11 @@
   (let ((roots (amp-allowed-repo-roots)))
     (when (null roots)
       (return-from amp-repo-allowed-p t))
-    (let ((canonical-repo (%canonical-dir repo-path)))
+    (let ((canonical-repo (canonical-dir repo-path)))
       (unless canonical-repo
         (return-from amp-repo-allowed-p nil))
       (dolist (root roots nil)
-        (let ((canonical-root (%canonical-dir root)))
+        (let ((canonical-root (canonical-dir root)))
           (when (and canonical-root
                      (>= (length canonical-repo) (length canonical-root))
                      (string= canonical-repo canonical-root
@@ -388,7 +388,7 @@
 
 ;;; --- Core invocation ---
 
-(defun %amp-invoke-internal (prompt &key repo-path (timeout-seconds 300))
+(defun amp-invoke-internal (prompt &key repo-path (timeout-seconds 300))
   "Internal Amp invocation.  Assumes policy already validated."
   (let* ((binary (amp-binary))
          (directory (when repo-path (namestring (truename repo-path))))
@@ -442,7 +442,7 @@
               :policy-decision policy)))
     ;; Restarts
     (restart-case
-        (let ((result (%amp-invoke-internal prompt
+        (let ((result (amp-invoke-internal prompt
                                             :repo-path repo-path
                                             :timeout-seconds timeout-seconds)))
           ;; Log audit event for completion

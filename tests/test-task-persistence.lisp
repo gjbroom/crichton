@@ -38,7 +38,7 @@
                 #:register-schedulable-action
                 #:get-schedulable-action
                 #:user-tasks-file-path
-                #:%make-scheduled-task)
+                #:make-scheduled-task)
   (:export #:run-all
            #:test-user-task-predicate
            #:test-serialization
@@ -55,37 +55,37 @@
 (defvar *pass-count* 0)
 (defvar *fail-count* 0)
 
-(defun %reset-counts ()
+(defun reset-counts ()
   (setf *pass-count* 0 *fail-count* 0))
 
-(defun %pass (label)
+(defun pass (label)
   (incf *pass-count*)
   (format t "  PASS  ~A~%" label))
 
-(defun %fail (label message)
+(defun fail (label message)
   (incf *fail-count*)
   (format t "  FAIL  ~A — ~A~%" label message))
 
 (defmacro check (label condition &optional message)
   `(if ,condition
-       (%pass ,label)
-       (%fail ,label (or ,message (format nil "expected truthy, got ~S" ,condition)))))
+       (pass ,label)
+       (fail ,label (or ,message (format nil "expected truthy, got ~S" ,condition)))))
 
 (defmacro check= (label got expected)
   `(let ((g ,got) (e ,expected))
      (if (equal g e)
-         (%pass ,label)
-         (%fail ,label (format nil "expected ~S, got ~S" e g)))))
+         (pass ,label)
+         (fail ,label (format nil "expected ~S, got ~S" e g)))))
 
-(defun %print-summary (suite-name)
+(defun print-summary (suite-name)
   (format t "  → ~A: ~D passed, ~D failed~%~%"
           suite-name *pass-count* *fail-count*))
 
 ;;; --- Helpers ---
 
-(defun %make-test-task (name kind &key (interval 3600) (hour 9) (minute 0) (next-ut nil))
+(defun make-test-task (name kind &key (interval 3600) (hour 9) (minute 0) (next-ut nil))
   "Create a scheduled-task for testing."
-  (%make-scheduled-task
+  (make-scheduled-task
    :name name
    :kind kind
    :fn (constantly :test-result)
@@ -95,7 +95,7 @@
    :daily-minute (when (eq kind :daily) minute)
    :next-ut (or next-ut (+ (get-universal-time) 3600))))
 
-(defun %with-temp-task-file (thunk)
+(defun with-temp-task-file (thunk)
   "Run THUNK with a temporary tasks file path, restoring the original after."
   (let* ((orig-path (user-tasks-file-path))
          (temp-path (merge-pathnames "tasks/test-user-tasks.age"
@@ -109,14 +109,14 @@
 
 (defun test-user-task-predicate ()
   "Test the user-task-p predicate."
-  (%reset-counts)
+  (reset-counts)
   (format t "~&--- Suite: user-task-p predicate ---~%")
 
-  (let ((user-task   (%make-test-task "user:rss-monitor" :every))
-        (system-task (%make-test-task "battery-monitor"  :every))
-        (user-daily  (%make-test-task "user:daily-check" :daily))
-        (short-name  (%make-test-task "usr"              :every))
-        (user-exact  (%make-test-task "user:"            :one-shot)))
+  (let ((user-task   (make-test-task "user:rss-monitor" :every))
+        (system-task (make-test-task "battery-monitor"  :every))
+        (user-daily  (make-test-task "user:daily-check" :daily))
+        (short-name  (make-test-task "usr"              :every))
+        (user-exact  (make-test-task "user:"            :one-shot)))
 
     (check= "user:rss-monitor → true"  (user-task-p user-task)   t)
     (check= "user:daily-check → true"  (user-task-p user-daily)  t)
@@ -124,18 +124,18 @@
     (check= "short name 'usr' → false" (user-task-p short-name)  nil)
     (check= "bare 'user:' → true"      (user-task-p user-exact)  t))
 
-  (%print-summary "user-task-p"))
+  (print-summary "user-task-p"))
 
 ;;; --- Suite 2: Serialization roundtrip ---
 
 (defun test-serialization ()
   "Test task → plist → JSON bytes → plist roundtrip."
-  (%reset-counts)
+  (reset-counts)
   (format t "~&--- Suite: serialization roundtrip ---~%")
 
-  (let* ((task-every (%make-test-task "user:every-test" :every :interval 7200 :next-ut 1000000))
-         (task-daily (%make-test-task "user:daily-test" :daily :hour 14 :minute 30 :next-ut 2000000))
-         (task-once  (%make-test-task "user:once-test"  :one-shot :next-ut 3000000))
+  (let* ((task-every (make-test-task "user:every-test" :every :interval 7200 :next-ut 1000000))
+         (task-daily (make-test-task "user:daily-test" :daily :hour 14 :minute 30 :next-ut 2000000))
+         (task-once  (make-test-task "user:once-test"  :one-shot :next-ut 3000000))
          (tasks (list task-every task-daily task-once)))
 
     ;; Plist conversion
@@ -172,17 +172,17 @@
           (check= "json: daily minute"   (getf r-daily :daily-minute)     30)
           (check= "json: once next-ut"   (getf r-once :next-ut)           3000000)))))
 
-  (%print-summary "serialization"))
+  (print-summary "serialization"))
 
 ;;; --- Suite 3: Encryption roundtrip ---
 
 (defun test-encryption-roundtrip ()
   "Test save-user-tasks → load-user-tasks roundtrip through age encryption."
-  (%reset-counts)
+  (reset-counts)
   (format t "~&--- Suite: encryption roundtrip (writes to disk) ---~%")
 
   (let* ((future-ut (+ (get-universal-time) 7200))
-         (task (%make-test-task "user:enc-test" :every :interval 3600 :next-ut future-ut)))
+         (task (make-test-task "user:enc-test" :every :interval 3600 :next-ut future-ut)))
 
     ;; Save one task
     (let ((count (save-user-tasks (list task))))
@@ -207,13 +207,13 @@
     (let ((plists (load-user-tasks)))
       (check= "empty save → empty load" (length plists) 0)))
 
-  (%print-summary "encryption-roundtrip"))
+  (print-summary "encryption-roundtrip"))
 
 ;;; --- Suite 4: Restore edge cases ---
 
 (defun test-restore-edge-cases ()
   "Test restore-user-tasks edge cases: missing action, corrupt file, past one-shot."
-  (%reset-counts)
+  (reset-counts)
   (format t "~&--- Suite: restore edge cases ---~%")
 
   ;; Edge case 1: No file exists
@@ -223,9 +223,9 @@
   (handler-case
       (progn
         (restore-user-tasks)
-        (%pass "restore with no file does not signal"))
+        (pass "restore with no file does not signal"))
     (error (c)
-      (%fail "restore with no file does not signal"
+      (fail "restore with no file does not signal"
              (format nil "signalled ~A" c))))
 
   ;; Edge case 2: Past one-shot task is skipped, not errored
@@ -244,9 +244,9 @@
     (handler-case
         (progn
           (restore-user-tasks)
-          (%pass "past one-shot restore does not signal"))
+          (pass "past one-shot restore does not signal"))
       (error (c)
-        (%fail "past one-shot restore does not signal"
+        (fail "past one-shot restore does not signal"
                (format nil "signalled ~A" c))))
     ;; The task should NOT have been scheduled (it was in the past)
     (let ((tasks (list-tasks)))
@@ -269,9 +269,9 @@
     (handler-case
         (progn
           (restore-user-tasks)
-          (%pass "missing-action restore does not signal"))
+          (pass "missing-action restore does not signal"))
       (error (c)
-        (%fail "missing-action restore does not signal"
+        (fail "missing-action restore does not signal"
                (format nil "signalled ~A" c))))
     (let ((tasks (list-tasks)))
       (check= "missing-action task not scheduled"
@@ -287,21 +287,21 @@
       (progn
         (load-user-tasks)
         ;; May return nil or signal — both acceptable
-        (%pass "corrupt file: load-user-tasks does not crash fatally"))
+        (pass "corrupt file: load-user-tasks does not crash fatally"))
     (error ()
-      (%pass "corrupt file: load-user-tasks signals (acceptable)")))
+      (pass "corrupt file: load-user-tasks signals (acceptable)")))
 
   ;; Cleanup
   (when (probe-file (user-tasks-file-path))
     (delete-file (user-tasks-file-path)))
 
-  (%print-summary "restore-edge-cases"))
+  (print-summary "restore-edge-cases"))
 
 ;;; --- Suite 5: Full persist/restore cycle ---
 
 (defun test-persist-restore-cycle ()
   "Schedule tasks, persist, cancel them, restore — verify they come back."
-  (%reset-counts)
+  (reset-counts)
   (format t "~&--- Suite: persist/restore cycle ---~%")
 
   ;; Clean slate
@@ -358,13 +358,13 @@
   (cancel-task "user:cycle-every")
   (cancel-task "user:cycle-daily")
 
-  (%print-summary "persist-restore-cycle"))
+  (print-summary "persist-restore-cycle"))
 
 ;;; --- Suite 6: list-unrestorable-tasks ---
 
 (defun test-list-unrestorable ()
   "Test list-unrestorable-tasks detects tasks with missing actions."
-  (%reset-counts)
+  (reset-counts)
   (format t "~&--- Suite: list-unrestorable-tasks ---~%")
 
   ;; Write two tasks to storage: one with a known action, one without
@@ -391,13 +391,13 @@
   (when (probe-file (user-tasks-file-path))
     (delete-file (user-tasks-file-path)))
 
-  (%print-summary "list-unrestorable"))
+  (print-summary "list-unrestorable"))
 
 ;;; --- Suite 7: export-user-tasks ---
 
 (defun test-export ()
   "Test export-user-tasks returns valid JSON describing live tasks."
-  (%reset-counts)
+  (reset-counts)
   (format t "~&--- Suite: export-user-tasks ---~%")
 
   ;; Schedule a task to export
@@ -419,7 +419,7 @@
     (check "empty export returns string" (stringp json))
     (check "empty export is non-empty"   (plusp (length json))))
 
-  (%print-summary "export"))
+  (print-summary "export"))
 
 ;;; --- Run all ---
 
@@ -437,7 +437,7 @@
                      test-persist-restore-cycle
                      test-list-unrestorable
                      test-export))
-      (%reset-counts)
+      (reset-counts)
       (funcall suite)
       (incf total-pass *pass-count*)
       (incf total-fail *fail-count*))

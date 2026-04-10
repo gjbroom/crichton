@@ -40,18 +40,18 @@
       (namestring (merge-pathnames ".emacs.d/org-roam.db"
                                    (user-homedir-pathname)))))
 
-(defun %om-ensure-trailing-slash (path)
+(defun om-ensure-trailing-slash (path)
   "Ensure PATH ends with a slash."
   (let ((s (namestring path)))
     (if (char= (char s (1- (length s))) #\/)
         s
         (concatenate 'string s "/"))))
 
-(defun %om-canonical-dir (path)
+(defun om-canonical-dir (path)
   "Return a canonical directory namestring for PATH, or NIL if it doesn't exist."
   (handler-case
       (let ((truepath (truename (parse-namestring path))))
-        (%om-ensure-trailing-slash truepath))
+        (om-ensure-trailing-slash truepath))
     (error () nil)))
 
 (defun orgmode-path-allowed-p (path)
@@ -66,21 +66,21 @@
       (unless canonical
         (return-from orgmode-path-allowed-p nil))
       (dolist (root roots nil)
-        (let ((canonical-root (%om-canonical-dir root)))
+        (let ((canonical-root (om-canonical-dir root)))
           (when (and canonical-root
                      (>= (length canonical) (length canonical-root))
                      (string= canonical canonical-root
                               :end1 (length canonical-root)))
             (return canonical-root)))))))
 
-(defun %om-validate-enabled ()
+(defun om-validate-enabled ()
   "Check that orgmode is enabled. Signals error if not."
   (unless (orgmode-enabled-p)
     (error "Org-mode skill is disabled (set [orgmode] enable = true in config.toml)")))
 
-(defun %om-validate-path (path)
+(defun om-validate-path (path)
   "Validate PATH is allowed. Returns canonical path string. Signals error if denied."
-  (%om-validate-enabled)
+  (om-validate-enabled)
   (let ((canonical (handler-case
                        (namestring (truename path))
                      (error ()
@@ -89,10 +89,10 @@
       (error "Path ~A is not under any allowed orgmode root" canonical))
     canonical))
 
-(defun %om-validate-new-path (path)
+(defun om-validate-new-path (path)
   "Validate a path for a new file (parent must exist and be allowed).
    Returns the path string. Signals error if denied."
-  (%om-validate-enabled)
+  (om-validate-enabled)
   (let* ((dir (directory-namestring path))
          (canonical-dir (handler-case
                             (namestring (truename dir))
@@ -592,7 +592,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
      (sqlite:with-open-database (,db-var db-path)
        ,@body)))
 
-(defun %om-filter-by-allowed-paths (rows &key (file-key "file"))
+(defun om-filter-by-allowed-paths (rows &key (file-key "file"))
   "Filter a list of row plists, keeping only those whose FILE-KEY value
    is under an allowed path."
   (remove-if-not (lambda (row)
@@ -600,7 +600,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                      (and file (orgmode-path-allowed-p file))))
                  rows))
 
-(defun %om-sql-rows-to-plists (stmt column-names)
+(defun om-sql-rows-to-plists (stmt column-names)
   "Read all rows from a sqlite statement, returning a list of plists."
   (let (result)
     (loop for row = (sqlite:step-statement stmt)
@@ -639,8 +639,8 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                      (sqlite:bind-parameter stmt 2 tag)
                      (sqlite:bind-parameter stmt 3 limit))
                    (sqlite:bind-parameter stmt 2 limit))
-               (%om-filter-by-allowed-paths
-                (%om-sql-rows-to-plists stmt cols)))
+               (om-filter-by-allowed-paths
+                (om-sql-rows-to-plists stmt cols)))
           (sqlite:finalize-statement stmt))))))
 
 (defun org-roam-backlinks (node-id &key (limit 50))
@@ -657,8 +657,8 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
            (progn
              (sqlite:bind-parameter stmt 1 node-id)
              (sqlite:bind-parameter stmt 2 limit)
-             (%om-filter-by-allowed-paths
-              (%om-sql-rows-to-plists stmt '("id" "file" "title" "level"))))
+             (om-filter-by-allowed-paths
+              (om-sql-rows-to-plists stmt '("id" "file" "title" "level"))))
         (sqlite:finalize-statement stmt)))))
 
 (defun org-roam-forward-links (node-id &key (limit 50))
@@ -675,8 +675,8 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
            (progn
              (sqlite:bind-parameter stmt 1 node-id)
              (sqlite:bind-parameter stmt 2 limit)
-             (%om-filter-by-allowed-paths
-              (%om-sql-rows-to-plists stmt '("id" "file" "title" "level"))))
+             (om-filter-by-allowed-paths
+              (om-sql-rows-to-plists stmt '("id" "file" "title" "level"))))
         (sqlite:finalize-statement stmt)))))
 
 (defun org-roam-list-tags ()
@@ -688,8 +688,8 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                  ORDER BY t.tag")
            (stmt (sqlite:prepare-statement db sql)))
       (unwind-protect
-           (let* ((rows (%om-sql-rows-to-plists stmt '("tag" "file")))
-                  (allowed (%om-filter-by-allowed-paths rows))
+           (let* ((rows (om-sql-rows-to-plists stmt '("tag" "file")))
+                  (allowed (om-filter-by-allowed-paths rows))
                   (tag-names nil))
              (dolist (row allowed)
                (pushnew (getf row :tag) tag-names :test #'string-equal))
@@ -706,8 +706,8 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
       (unwind-protect
            (progn
              (sqlite:bind-parameter stmt 1 node-id)
-             (let ((results (%om-filter-by-allowed-paths
-                             (%om-sql-rows-to-plists
+             (let ((results (om-filter-by-allowed-paths
+                             (om-sql-rows-to-plists
                               stmt '("id" "file" "title" "level" "todo" "priority")))))
                (first results)))
         (sqlite:finalize-statement stmt)))))
@@ -733,7 +733,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
          (slug (string-right-trim "_" (string-left-trim "_" slug)))
          (filename (format nil "~A-~A.org" timestamp slug)))
     (merge-pathnames filename (parse-namestring
-                               (%om-ensure-trailing-slash root)))))
+                               (om-ensure-trailing-slash root)))))
 
 (defun render-org-preamble (title &key id filetags setupfile)
   "Generate an org file preamble string."
@@ -750,7 +750,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
 ;;; Recursive file scanning
 ;;; ====================================================================
 
-(defun %om-recursive-scan-p ()
+(defun om-recursive-scan-p ()
   "Return T if recursive scanning is enabled (default: T)."
   (let ((val (crichton/config:config-section-get :orgmode :recursive-scan)))
     (cond
@@ -760,7 +760,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
       ((and (stringp val) (string-equal val "false")) nil)
       (t t))))
 
-(defun %om-max-scan-depth ()
+(defun om-max-scan-depth ()
   "Return max directory depth for recursive scan (default: 5)."
   (let ((val (crichton/config:config-section-get :orgmode :max-scan-depth)))
     (cond
@@ -795,18 +795,18 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                        (when (>= count limit) (return))
                        (scan-dir subdir (1+ depth))))
                  (error () nil))))
-      (let ((canonical (%om-canonical-dir root)))
+      (let ((canonical (om-canonical-dir root)))
         (when canonical
           (scan-dir (parse-namestring canonical) 0))))
     (nreverse results)))
 
-(defun %om-collect-org-files (root)
+(defun om-collect-org-files (root)
   "Collect .org files under ROOT, respecting recursive_scan config."
-  (if (%om-recursive-scan-p)
-      (org-files-under root :max-depth (%om-max-scan-depth))
+  (if (om-recursive-scan-p)
+      (org-files-under root :max-depth (om-max-scan-depth))
       (directory (merge-pathnames "*.org"
                                  (parse-namestring
-                                  (%om-ensure-trailing-slash root))))))
+                                  (om-ensure-trailing-slash root))))))
 
 ;;; ====================================================================
 ;;; Public API
@@ -816,7 +816,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
   "Read and parse an org file.
    PATH-OR-ID can be a file path or an org-roam node ID (UUID).
    Returns parsed document as plist."
-  (%om-validate-enabled)
+  (om-validate-enabled)
   (let ((path (if (and (= (length path-or-id) 36)
                        (cl-ppcre:scan "^[0-9a-f-]+$" path-or-id))
                   ;; Looks like a UUID — resolve via org-roam DB
@@ -825,7 +825,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                       (error "Node ~A not found in org-roam database" path-or-id))
                     (getf node :file))
                   path-or-id)))
-    (let ((canonical (%om-validate-path path)))
+    (let ((canonical (om-validate-path path)))
       (document-to-plist (parse-org-file canonical) :include-raw include-raw))))
 
 (defun orgmode-search (query &key (mode :auto) tag (limit 50))
@@ -833,7 +833,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
    MODE: :AUTO (default, uses DB then files), :DB (org-roam only), :FILES (scan only).
    TAG: filter by org-roam tag (DB modes only).
    Returns list of match plists."
-  (%om-validate-enabled)
+  (om-validate-enabled)
   (let ((db-results nil)
         (file-results nil))
     ;; DB search
@@ -856,7 +856,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
         ;; Scan allowed paths
         (dolist (root (orgmode-allowed-paths))
           (when (<= remaining 0) (return))
-          (dolist (file (%om-collect-org-files root))
+          (dolist (file (om-collect-org-files root))
             (when (<= remaining 0) (return))
             (let ((fpath (namestring file)))
               (unless (gethash fpath seen-files)
@@ -871,7 +871,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
 
 (defun orgmode-list-tags ()
   "List all tags from the org-roam database."
-  (%om-validate-enabled)
+  (om-validate-enabled)
   (if (org-roam-db-available-p)
       (org-roam-list-tags)
       (error "Org-roam database not available")))
@@ -880,13 +880,13 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
   "Get links for a node.
    DIRECTION: :BACKLINKS (default), :FORWARD, :BOTH.
    ID-OR-PATH: org-roam node ID or file path."
-  (%om-validate-enabled)
+  (om-validate-enabled)
   (let ((node-id (if (and (= (length id-or-path) 36)
                           (cl-ppcre:scan "^[0-9a-f-]+$" id-or-path))
                      id-or-path
                      ;; Resolve file path to node ID via preamble parse
                      (let ((preamble (parse-org-preamble
-                                      (%om-validate-path id-or-path))))
+                                      (om-validate-path id-or-path))))
                        (or (getf preamble :file-id)
                            (error "File ~A has no :ID: property" id-or-path))))))
     (let ((back (when (member direction '(:backlinks :both))
@@ -901,7 +901,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
    ROOT defaults to the first allowed path.
    Generates a UUID for :ID: if not provided.
    Returns the path of the created file."
-  (%om-validate-enabled)
+  (om-validate-enabled)
   (let* ((root (or root (first (orgmode-allowed-paths))))
          (id (or id (format nil "~(~A~)" (ironclad:byte-array-to-hex-string
                                            (ironclad:random-data 16)))))
@@ -914,7 +914,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                  id))
          (path (generate-roam-filename title :root root))
          (setupfile (crichton/config:config-section-get :orgmode :setupfile)))
-    (%om-validate-new-path path)
+    (om-validate-new-path path)
     (let ((preamble (render-org-preamble title :id id :filetags filetags
                                               :setupfile setupfile)))
       (bt:with-lock-held (*orgmode-write-lock*)
@@ -932,7 +932,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
   "Append TEXT to an org file.
    If HEADLINE is given, append under the first matching headline.
    PATH-OR-ID can be a file path or org-roam node ID."
-  (%om-validate-enabled)
+  (om-validate-enabled)
   (let ((path (if (and (= (length path-or-id) 36)
                        (cl-ppcre:scan "^[0-9a-f-]+$" path-or-id))
                   (let ((node (org-roam-node-by-id path-or-id)))
@@ -940,7 +940,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                       (error "Node ~A not found in org-roam database" path-or-id))
                     (getf node :file))
                   path-or-id)))
-    (let ((canonical (%om-validate-path path)))
+    (let ((canonical (om-validate-path path)))
       (bt:with-lock-held (*orgmode-write-lock*)
         (if headline
             ;; Insert under specific headline
@@ -972,7 +972,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
   "List org files under allowed paths, returning preamble data.
    ROOT: specific root to list (must be in allowed_paths).
    Returns list of preamble plists."
-  (%om-validate-enabled)
+  (om-validate-enabled)
   (let ((roots (if root
                    (if (orgmode-path-allowed-p
                         (namestring (truename root)))
@@ -983,7 +983,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
         (count 0))
     (dolist (r roots)
       (when (>= count limit) (return))
-      (dolist (file (%om-collect-org-files r))
+      (dolist (file (om-collect-org-files r))
         (when (>= count limit) (return))
         (push (parse-org-preamble file) results)
         (incf count)))
@@ -1000,19 +1000,19 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
 ;;; TODO management
 ;;; ====================================================================
 
-(defun %om-active-todo-keywords ()
+(defun om-active-todo-keywords ()
   "Return active (non-done) TODO keywords from config or defaults."
   (or (let ((val (crichton/config:config-section-get :orgmode :todo-keywords)))
         (when (listp val) val))
       '("TODO" "NEXT" "WAITING" "SOMEDAY")))
 
-(defun %om-done-keywords ()
+(defun om-done-keywords ()
   "Return done TODO keywords from config or defaults."
   (or (let ((val (crichton/config:config-section-get :orgmode :done-keywords)))
         (when (listp val) val))
       '("DONE" "CANCELLED")))
 
-(defun %om-todo-from-db (state priority tag limit include-done)
+(defun om-todo-from-db (state priority tag limit include-done)
   "Query org-roam DB for TODO headlines, filtered by allowed paths."
   (when (org-roam-db-available-p)
     (handler-case
@@ -1024,7 +1024,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
               ;; Skip the exclusion when state is explicit — the equality
               ;; filter below is already restrictive, and combining both
               ;; would produce a contradiction for done-state queries.
-              (let ((done (%om-done-keywords)))
+              (let ((done (om-done-keywords)))
                 (push (format nil "n.todo NOT IN (~{?~^, ~})"
                               (make-list (length done) :initial-element nil))
                       conditions)
@@ -1051,15 +1051,15 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                      (when tag
                        (sqlite:bind-parameter stmt (incf param-idx) tag))
                      (sqlite:bind-parameter stmt (incf param-idx) limit)
-                     (%om-filter-by-allowed-paths
-                      (%om-sql-rows-to-plists
+                     (om-filter-by-allowed-paths
+                      (om-sql-rows-to-plists
                        stmt '("id" "file" "title" "level" "todo" "priority"))))
                 (sqlite:finalize-statement stmt)))))
       (error (c)
         (log:warn "Org-roam TODO query failed: ~A" c)
         nil))))
 
-(defun %om-scan-file-todos (path active-kws done-kws state priority include-done)
+(defun om-scan-file-todos (path active-kws done-kws state priority include-done)
   "Lightweight headline-only scan of PATH for TODO items.
    Reads line-by-line without loading the full file into memory.
    Returns a list of TODO plists."
@@ -1112,15 +1112,15 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
       (error () nil))
     (nreverse results)))
 
-(defun %om-todo-from-files (file state priority include-done limit existing-count)
+(defun om-todo-from-files (file state priority include-done limit existing-count)
   "Scan org files for TODO headlines. Returns list of plists."
   (let ((results nil)
         (remaining (- limit existing-count))
-        (active-kws (%om-active-todo-keywords))
-        (done-kws (%om-done-keywords)))
+        (active-kws (om-active-todo-keywords))
+        (done-kws (om-done-keywords)))
     (flet ((scan-file (path)
              (when (<= remaining 0) (return-from scan-file))
-             (let ((todos (%om-scan-file-todos
+             (let ((todos (om-scan-file-todos
                            path active-kws done-kws
                            state priority include-done)))
                (dolist (todo todos)
@@ -1129,12 +1129,12 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                  (decf remaining)))))
       (if file
           ;; Single file mode
-          (let ((canonical (%om-validate-path file)))
+          (let ((canonical (om-validate-path file)))
             (scan-file canonical))
           ;; Scan all allowed paths
           (dolist (root (orgmode-allowed-paths))
             (when (<= remaining 0) (return))
-            (dolist (f (%om-collect-org-files root))
+            (dolist (f (om-collect-org-files root))
               (when (<= remaining 0) (return))
               (scan-file (namestring f))))))
     (nreverse results)))
@@ -1147,13 +1147,13 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
    FILE: restrict to a single file path.
    INCLUDE-DONE: include DONE/CANCELLED items.
    Returns list of TODO item plists."
-  (%om-validate-enabled)
+  (om-validate-enabled)
   (let ((db-results (unless file
-                      (%om-todo-from-db state priority tag limit include-done))))
+                      (om-todo-from-db state priority tag limit include-done))))
     (if (and db-results (>= (length db-results) limit))
         db-results
         ;; Supplement with file scanning when DB results are insufficient
-        (let ((file-results (%om-todo-from-files
+        (let ((file-results (om-todo-from-files
                              file state priority include-done limit
                              (length db-results))))
           (if db-results
@@ -1168,7 +1168,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                                    file-results)))
               file-results)))))
 
-(defun %om-format-timestamp ()
+(defun om-format-timestamp ()
   "Format current time as an org-mode inactive timestamp: YYYY-MM-DD Day HH:MM."
   (multiple-value-bind (sec min hr day mon yr dow)
       (get-decoded-time)
@@ -1183,7 +1183,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
    TAGS: list of tag strings (replaces all existing filetags).
    An empty list removes the #+FILETAGS line entirely.
    Returns the canonical path of the modified file."
-  (%om-validate-enabled)
+  (om-validate-enabled)
   (let ((path (if (and (= (length path-or-id) 36)
                        (cl-ppcre:scan "^[0-9a-f-]+$" path-or-id))
                   (let ((node (org-roam-node-by-id path-or-id)))
@@ -1191,7 +1191,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                       (error "Node ~A not found in org-roam database" path-or-id))
                     (getf node :file))
                   path-or-id)))
-    (let ((canonical (%om-validate-path path)))
+    (let ((canonical (om-validate-path path)))
       (bt:with-lock-held (*orgmode-write-lock*)
         (let* ((text (uiop:read-file-string canonical))
                (lines (cl-ppcre:split "\\n" text))
@@ -1236,7 +1236,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
    HEADLINE: title of the headline to modify.
    NEW-STATE: new TODO keyword (e.g. \"DONE\") or NIL/empty string to clear.
    Returns the canonical path of the modified file."
-  (%om-validate-enabled)
+  (om-validate-enabled)
   (let ((path (if (and (= (length path-or-id) 36)
                        (cl-ppcre:scan "^[0-9a-f-]+$" path-or-id))
                   (let ((node (org-roam-node-by-id path-or-id)))
@@ -1244,7 +1244,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                       (error "Node ~A not found in org-roam database" path-or-id))
                     (getf node :file))
                   path-or-id)))
-    (let ((canonical (%om-validate-path path)))
+    (let ((canonical (om-validate-path path)))
       (bt:with-lock-held (*orgmode-write-lock*)
         (let* ((text (uiop:read-file-string canonical))
                (lines (cl-ppcre:split "\\n" text))
@@ -1283,10 +1283,10 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
             (setf (nth line-idx result-lines) new-line)
             ;; Handle CLOSED timestamp for done transitions
             (when (and new-state
-                       (member new-state (%om-done-keywords) :test #'string-equal)
+                       (member new-state (om-done-keywords) :test #'string-equal)
                        (not (headline-closed target)))
               (let ((closed-line (format nil "    CLOSED: [~A]"
-                                        (%om-format-timestamp)))
+                                        (om-format-timestamp)))
                     (insert-at (1+ line-idx)))
                 ;; Skip property drawer if present
                 (when (and (< insert-at (length result-lines))

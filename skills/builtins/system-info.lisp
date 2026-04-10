@@ -403,7 +403,7 @@
         :interval
         (or (crichton/config:config-section-get :system :interval) 300)))
 
-(defun %system-alert-new-p (key currently-over)
+(defun system-alert-new-p (key currently-over)
   "Return T if CURRENTLY-OVER and the alert for KEY was not already active.
    Updates the stored alert state. Used to prevent duplicate notifications."
   (bt:with-lock-held (*system-monitor-active-alerts-lock*)
@@ -411,22 +411,22 @@
       (setf (gethash key *system-monitor-active-alerts*) currently-over)
       (and currently-over (not was-active)))))
 
-(defun %clear-all-system-alerts ()
+(defun clear-all-system-alerts ()
   "Clear all system monitoring alert states (call on stop/restart)."
   (bt:with-lock-held (*system-monitor-active-alerts-lock*)
     (clrhash *system-monitor-active-alerts*)))
 
-(defun %system-check-memory (memory config)
+(defun system-check-memory (memory config)
   "Check memory against the threshold. Returns a list of alert strings, or NIL."
   (let ((ratio (getf memory :mem-used-ratio))
         (alert-pct (getf config :mem-alert-percent)))
     (when (and ratio alert-pct)
       (let ((over-p (>= ratio (/ (coerce alert-pct 'double-float) 100.0d0))))
-        (when (%system-alert-new-p :memory over-p)
+        (when (system-alert-new-p :memory over-p)
           (list (format nil "Memory usage at ~,1F% (threshold: ~A%)"
                         (* 100 ratio) alert-pct)))))))
 
-(defun %system-check-cpu (loadavg config)
+(defun system-check-cpu (loadavg config)
   "Check CPU load-per-CPU against the threshold. Returns a list of alert strings, or NIL."
   (let ((load-per-cpu (getf loadavg :load1-per-cpu))
         (alert-load (coerce (or (getf config :cpu-alert-load)
@@ -434,13 +434,13 @@
                             'double-float)))
     (when load-per-cpu
       (let ((over-p (>= load-per-cpu alert-load)))
-        (when (%system-alert-new-p :cpu over-p)
+        (when (system-alert-new-p :cpu over-p)
           (list (format nil "CPU load/CPU at ~,2F (threshold: ~,2F); 1m avg: ~,2F on ~A core~:P"
                         load-per-cpu alert-load
                         (or (getf loadavg :load1) 0)
                         (or (getf loadavg :cpu-count) 1))))))))
 
-(defun %system-check-disks (disks config)
+(defun system-check-disks (disks config)
   "Check disk usage. Returns a list of alert strings, or NIL."
   (let ((alert-pct (getf config :disk-alert-percent))
         alerts)
@@ -451,13 +451,13 @@
                ;; Key: :DISK-/ or :DISK-/home etc.
                (key (intern (string-upcase (format nil "DISK-~A" mount)) :keyword))
                (over-p (and ratio (>= ratio (/ (coerce alert-pct 'double-float) 100.0d0)))))
-          (when (and ratio (%system-alert-new-p key over-p))
+          (when (and ratio (system-alert-new-p key over-p))
             (push (format nil "Disk ~A at ~,1F% full (threshold: ~A%)"
                           mount (* 100 ratio) alert-pct)
                   alerts)))))
     (nreverse alerts)))
 
-(defun %system-check-thermal (thermals config)
+(defun system-check-thermal (thermals config)
   "Check thermal zones. Returns a list of alert strings, or NIL."
   (let ((alert-c (coerce (or (getf config :temp-alert-celsius)
                              *system-monitor-default-temp-alert-celsius*)
@@ -469,7 +469,7 @@
              (zone-type (or (getf zone :type) "unknown"))
              (key (intern (string-upcase (format nil "TEMP-~A" zone-name)) :keyword))
              (over-p (and temp (>= temp alert-c))))
-        (when (and temp (%system-alert-new-p key over-p))
+        (when (and temp (system-alert-new-p key over-p))
           (push (format nil "Thermal zone ~A (~A) at ~,1F°C (threshold: ~,1F°C)"
                         zone-name zone-type temp alert-c)
                 alerts))))
@@ -483,13 +483,13 @@
              (snap (system-snapshot :mounts '("/" "/home") :include-battery nil))
              (alerts nil))
         (when (getf snap :memory)
-          (setf alerts (nconc alerts (%system-check-memory (getf snap :memory) config))))
+          (setf alerts (nconc alerts (system-check-memory (getf snap :memory) config))))
         (when (getf snap :loadavg)
-          (setf alerts (nconc alerts (%system-check-cpu (getf snap :loadavg) config))))
+          (setf alerts (nconc alerts (system-check-cpu (getf snap :loadavg) config))))
         (when (getf snap :disks)
-          (setf alerts (nconc alerts (%system-check-disks (getf snap :disks) config))))
+          (setf alerts (nconc alerts (system-check-disks (getf snap :disks) config))))
         (when (getf snap :thermals)
-          (setf alerts (nconc alerts (%system-check-thermal (getf snap :thermals) config))))
+          (setf alerts (nconc alerts (system-check-thermal (getf snap :thermals) config))))
         (dolist (msg alerts)
           (log:warn "System monitor: ~A" msg)
           (crichton/daemon:notification-post "system" msg "system-monitor")))
@@ -539,7 +539,7 @@
    When PERSIST is T (default), saves the disabled state to storage."
   (when (cancel-task *system-monitoring-task-name*)
     (log:info "System monitoring stopped.")
-    (%clear-all-system-alerts)
+    (clear-all-system-alerts)
     (when persist
       (persist-system-monitoring-state nil 300))
     t))

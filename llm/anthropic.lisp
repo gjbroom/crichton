@@ -405,7 +405,7 @@
          (when partial
            (push partial (gethash idx (sstate-tool-json-parts s)))))))))
 
-(defun %finalize-tool-block (state idx)
+(defun finalize-tool-block (state idx)
   "Finalize a tool-use content block at IDX, parsing accumulated JSON fragments."
   (let* ((parts (nreverse (gethash idx (sstate-tool-json-parts state))))
          (full-json (format nil "~{~A~}" parts))
@@ -417,7 +417,7 @@
     (setf (getf block :input) input)
     (push block (sstate-content-blocks state))))
 
-(defun %finalize-text-block (state)
+(defun finalize-text-block (state)
   "Finalize the current text content block, draining the text accumulator."
   (let ((text-so-far (get-output-stream-string (sstate-text-accum state))))
     (when (plusp (length text-so-far))
@@ -430,9 +430,9 @@
   (let ((idx (gethash "index" json)))
     (cond
       ((gethash idx (sstate-tool-blocks s))
-       (%finalize-tool-block s idx))
+       (finalize-tool-block s idx))
       ((string= (sstate-current-block-type s) "text")
-       (%finalize-text-block s)))))
+       (finalize-text-block s)))))
 
 (defmethod handle-sse-event ((s stream-state) (event (eql :message-delta))
                              json on-event)
@@ -479,7 +479,7 @@
 
 ;;; --- Streaming HTTP helpers ---
 
-(defun %extract-dex-error-body (condition)
+(defun extract-dex-error-body (condition)
   "Extract a string body from a dexador HTTP-REQUEST-FAILED condition."
   (let ((body (dex:response-body condition)))
     (cond
@@ -492,7 +492,7 @@
          (flexi-streams:octets-to-string octets :external-format :utf-8)))
       (t (format nil "~A" body)))))
 
-(defun %drain-stream-to-string (stream)
+(defun drain-stream-to-string (stream)
   "Read all lines from STREAM into a string, then close it."
   (let ((buf (make-string-output-stream)))
     (loop for line = (read-line stream nil nil)
@@ -500,7 +500,7 @@
     (close stream)
     (get-output-stream-string buf)))
 
-(defun %anthropic-streaming-post (provider json-body)
+(defun anthropic-streaming-post (provider json-body)
   "POST JSON-BODY to the Anthropic Messages API with streaming enabled.
    Returns the response stream.  Signals LLM conditions on failure."
   (let ((url (format nil "~A/v1/messages" (anthropic-api-base provider))))
@@ -515,17 +515,17 @@
           (dex:http-request-failed (c)
             (classify-anthropic-error
              (dex:response-status c)
-             (%extract-dex-error-body c)
+             (extract-dex-error-body c)
              provider))
           (error (c)
             (error 'llm-error :provider provider
                               :message (format nil "HTTP request failed: ~A" c))))
       (unless (= status 200)
         (classify-anthropic-error
-         status (%drain-stream-to-string response-stream) provider))
+         status (drain-stream-to-string response-stream) provider))
       response-stream)))
 
-(defun %dispatch-sse-event (state on-event event-type data)
+(defun dispatch-sse-event (state on-event event-type data)
   "Parse DATA as JSON and dispatch to the appropriate HANDLE-SSE-EVENT method.
    Logs and swallows errors so a single bad event does not abort the stream."
   (handler-case
@@ -534,7 +534,7 @@
     (error (c)
       (log:warn "Error processing SSE event ~A: ~A" event-type c))))
 
-(defun %process-sse-stream (response-stream state on-event)
+(defun process-sse-stream (response-stream state on-event)
   "Read SSE events from RESPONSE-STREAM, dispatching to STATE methods.
    Ensures RESPONSE-STREAM is closed on exit."
   (unwind-protect
@@ -543,7 +543,7 @@
          (parse-sse-events
           char-stream
           (lambda (event-type data)
-            (%dispatch-sse-event state on-event event-type data))))
+            (dispatch-sse-event state on-event event-type data))))
     (close response-stream)))
 
 ;;; --- stream-message method ---
@@ -570,7 +570,7 @@
                 (provider-model provider)
                 (or max-tokens *anthropic-default-max-tokens*))
       (with-rate-limit-retry
-        (let ((response-stream (%anthropic-streaming-post provider json-body))
+        (let ((response-stream (anthropic-streaming-post provider json-body))
               (state (make-instance 'stream-state)))
-          (%process-sse-stream response-stream state on-event)
+          (process-sse-stream response-stream state on-event)
           (stream-state-result state))))))

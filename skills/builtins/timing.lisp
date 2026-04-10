@@ -15,7 +15,7 @@
   (let ((units-per-us (/ internal-time-units-per-second 1000000)))
     (round (/ (- end start) units-per-us))))
 
-(defun %log-timing (level label elapsed-us)
+(defun log-timing (level label elapsed-us)
   "Log a timing measurement at the given level."
   (let ((msg (format nil "~@[~A: ~]~D µs (~,3F ms)"
                      label elapsed-us (/ elapsed-us 1000.0d0))))
@@ -36,7 +36,7 @@
             (,t1 (get-internal-real-time))
             (,elapsed (elapsed-us ,t0 ,t1)))
        ,@(when log-p
-           `((%log-timing ,log-level ,label ,elapsed)))
+           `((log-timing ,log-level ,label ,elapsed)))
        (values-list (append ,vals (list ,elapsed))))))
 
 ;;; --- Stopwatch accumulator ---
@@ -71,19 +71,9 @@
          :type t
          :accessor stopwatch-lock)))
 
-(defun %make-stopwatch (&key (name "") (count 0) (total-us 0) (min-us most-positive-fixnum) (max-us 0) (last-us 0) (lock (bt:make-lock "stopwatch")))
-  (make-instance 'stopwatch
-                 :name name
-                 :count count
-                 :total-us total-us
-                 :min-us min-us
-                 :max-us max-us
-                 :last-us last-us
-                 :lock lock))
-
 (defun make-stopwatch (name)
   "Create a new stopwatch accumulator with the given NAME."
-  (%make-stopwatch :name (string name)))
+  (make-instance 'stopwatch :name (string name)))
 
 (defun stopwatch-record (sw elapsed-us)
   "Record an elapsed time (in microseconds) into stopwatch SW. Thread-safe."

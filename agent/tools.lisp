@@ -29,7 +29,7 @@
             :initform nil
             :type (or null function))))
 
-(defun %make-agent-tool (&key (name "") (description "") input-schema handler)
+(defun make-agent-tool (&key (name "") (description "") input-schema handler)
   (make-instance 'agent-tool :name name :description description
                  :input-schema input-schema :handler handler))
 
@@ -39,7 +39,7 @@
 (defun register-tool (name description input-schema handler)
   "Register a tool for agent use."
   (setf (gethash name *agent-tools*)
-        (%make-agent-tool :name name
+        (make-agent-tool :name name
                           :description description
                           :input-schema input-schema
                           :handler handler)))
@@ -93,7 +93,7 @@
 
 ;;; --- Helper: hash-table key access with default ---
 
-(defun %hget (ht key &optional default)
+(defun hget (ht key &optional default)
   "Get KEY from hash-table HT, returning DEFAULT if missing."
   (if (and ht (hash-table-p ht))
       (multiple-value-bind (val found) (gethash key ht)
@@ -134,12 +134,12 @@
 ;;; --- define-tool macro ---
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (defun %symbol-to-underscored (sym)
+  (defun symbol-to-underscored (sym)
     "Convert a Lisp symbol to an underscored lowercase string.
      E.g. SYSTEM-INFO → \"system_info\"."
     (substitute #\_ #\- (string-downcase (symbol-name sym))))
 
-  (defun %extract-declarations (body)
+  (defun extract-declarations (body)
     "Separate leading DECLARE forms from BODY.
      Returns (values declarations remaining-body)."
     (loop for (form . rest) on body
@@ -147,7 +147,7 @@
           collect form into decls
           finally (return (values decls (cons form rest)))))
 
-  (defun %register-fn-name (name)
+  (defun register-fn-name (name)
     "Derive the REGISTER-<NAME>-TOOL function name symbol, always interned
      in the CRICHTON/AGENT package."
     (intern (format nil "~A~A~A"
@@ -170,8 +170,8 @@ BODY is wrapped in (BLOCK HANDLER ...) so RETURN-FROM HANDLER is available.
 Leading DECLARE forms in BODY are placed before the BLOCK."
   (let* ((tool-str (if tool-name-p
                        tool-name
-                       (%symbol-to-underscored name)))
-         (register-fn (%register-fn-name name)))
+                       (symbol-to-underscored name)))
+         (register-fn (register-fn-name name)))
     ;; Build the make-properties argument forms and the let-bindings
     (let ((prop-forms
             (loop for spec in params
@@ -180,7 +180,7 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
                                                           default)
                       spec
                     (declare (ignore default))
-                    (let ((name-str (%symbol-to-underscored var)))
+                    (let ((name-str (symbol-to-underscored var)))
                       `(list ,name-str ,type ,desc
                              ,@(when required-p '(:required-p t))
                              ,@(when enum `(:enum (list ,@enum))))))))
@@ -191,12 +191,12 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
                                                           default)
                       spec
                     (declare (ignore type desc required-p enum))
-                    (let ((name-str (%symbol-to-underscored var)))
+                    (let ((name-str (symbol-to-underscored var)))
                       (if default
-                          `(,var (%hget input ,name-str ,default))
-                          `(,var (%hget input ,name-str))))))))
+                          `(,var (hget input ,name-str ,default))
+                          `(,var (hget input ,name-str))))))))
       (multiple-value-bind (declarations real-body)
-          (%extract-declarations body)
+          (extract-declarations body)
         (if params
             ;; --- With parameters ---
             `(defun ,register-fn ()
@@ -267,45 +267,45 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
 
 ;;; --- Scheduler tool helpers ---
 
-(defun %scheduler-schedule-every (action-name interval-seconds task-name)
+(defun scheduler-schedule-every (action-name interval-seconds task-name)
   "Handle the schedule_every scheduler action."
   (unless action-name
-    (return-from %scheduler-schedule-every
+    (return-from scheduler-schedule-every
       "Error: 'action_name' is required. Use action 'actions' to list available."))
   (unless interval-seconds
-    (return-from %scheduler-schedule-every "Error: 'interval_seconds' is required."))
+    (return-from scheduler-schedule-every "Error: 'interval_seconds' is required."))
   (let ((act (crichton/skills:get-schedulable-action action-name)))
     (unless act
-      (return-from %scheduler-schedule-every
+      (return-from scheduler-schedule-every
         (format nil "Error: unknown action '~A'. Use action 'actions' to list available." action-name)))
     (crichton/skills:schedule-every task-name interval-seconds (getf act :fn)
                                     :replace t :action-name action-name)
     (format nil "Scheduled '~A' every ~Ds as task '~A'." action-name interval-seconds task-name)))
 
-(defun %scheduler-schedule-daily (action-name hour minute task-name)
+(defun scheduler-schedule-daily (action-name hour minute task-name)
   "Handle the schedule_daily scheduler action."
   (unless action-name
-    (return-from %scheduler-schedule-daily "Error: 'action_name' is required."))
+    (return-from scheduler-schedule-daily "Error: 'action_name' is required."))
   (unless hour
-    (return-from %scheduler-schedule-daily "Error: 'hour' is required for schedule_daily."))
+    (return-from scheduler-schedule-daily "Error: 'hour' is required for schedule_daily."))
   (let ((act (crichton/skills:get-schedulable-action action-name))
         (min (or minute 0)))
     (unless act
-      (return-from %scheduler-schedule-daily
+      (return-from scheduler-schedule-daily
         (format nil "Error: unknown action '~A'." action-name)))
     (crichton/skills:schedule-daily task-name hour min (getf act :fn)
                                     :replace t :action-name action-name)
     (format nil "Scheduled '~A' daily at ~2,'0D:~2,'0D as task '~A'." action-name hour min task-name)))
 
-(defun %scheduler-schedule-once (action-name delay-seconds task-name)
+(defun scheduler-schedule-once (action-name delay-seconds task-name)
   "Handle the schedule_once scheduler action."
   (unless action-name
-    (return-from %scheduler-schedule-once "Error: 'action_name' is required."))
+    (return-from scheduler-schedule-once "Error: 'action_name' is required."))
   (unless delay-seconds
-    (return-from %scheduler-schedule-once "Error: 'delay_seconds' is required."))
+    (return-from scheduler-schedule-once "Error: 'delay_seconds' is required."))
   (let ((act (crichton/skills:get-schedulable-action action-name)))
     (unless act
-      (return-from %scheduler-schedule-once
+      (return-from scheduler-schedule-once
         (format nil "Error: unknown action '~A'." action-name)))
     (crichton/skills:schedule-at task-name (+ (get-universal-time) delay-seconds) (getf act :fn)
                                  :replace t :action-name action-name)
@@ -347,11 +347,11 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
                  (format s "  ~A - ~A~%" (getf a :name) (getf a :description))))
              "No schedulable actions registered.")))
       ((string-equal action "schedule_every")
-       (%scheduler-schedule-every action-name interval-seconds task-name))
+       (scheduler-schedule-every action-name interval-seconds task-name))
       ((string-equal action "schedule_daily")
-       (%scheduler-schedule-daily action-name hour minute task-name))
+       (scheduler-schedule-daily action-name hour minute task-name))
       ((string-equal action "schedule_once")
-       (%scheduler-schedule-once action-name delay-seconds task-name))
+       (scheduler-schedule-once action-name delay-seconds task-name))
       ((string-equal action "cancel")
        (unless name
          (return-from handler "Error: 'name' is required for cancel."))
@@ -587,7 +587,7 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
 
 ;;; --- Daemon log inspector tool ---
 
-(defun %format-log-entries (entries)
+(defun format-log-entries (entries)
   "Format a list of log entry hash-tables as human-readable text."
   (with-output-to-string (s)
     (if (null entries)
@@ -619,15 +619,15 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
      (with-output-to-string (s)
        (crichton/skills:log-report :stream s :count count)))
     ((string-equal action "recent")
-     (%format-log-entries
+     (format-log-entries
       (crichton/skills:read-log-tail :count count)))
      ((string-equal action "errors")
-      (%format-log-entries
+      (format-log-entries
       (crichton/skills:search-log :level "ERROR" :count count)))
      ((string-equal action "search")
       (if (and (null pattern) (null level))
           "Error: 'pattern' and/or 'level' required for search action."
-          (%format-log-entries
+          (format-log-entries
           (crichton/skills:search-log :pattern pattern
                                       :level level
                                       :count count))))
@@ -710,7 +710,7 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
 
 ;;; --- Amp JSON tools ---
 
-(defun %plist-to-json-ht (plist)
+(defun plist-to-json-ht (plist)
   "Recursively convert a plist to a JSON-compatible hash-table.
    Keyword keys become lowercase underscore strings."
   (cond
@@ -722,23 +722,23 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
              do (setf (gethash (substitute #\_ #\-
                                  (string-downcase (symbol-name k)))
                                ht)
-                      (%plist-to-json-ht v)))
+                      (plist-to-json-ht v)))
        ht))
-    ((listp plist) (mapcar #'%plist-to-json-ht plist))
-    ((vectorp plist) (map 'vector #'%plist-to-json-ht plist))
+    ((listp plist) (mapcar #'plist-to-json-ht plist))
+    ((vectorp plist) (map 'vector #'plist-to-json-ht plist))
     (t plist)))
 
-(defun %json-string (plist)
+(defun json-string (plist)
   "Convert a plist to a JSON string."
   (let ((*print-pretty* nil))
     (with-output-to-string (s)
-      (shasht:write-json (%plist-to-json-ht plist) s))))
+      (shasht:write-json (plist-to-json-ht plist) s))))
 
 (define-tool amp-check-json
     (:description "Check Amp CLI status and return structured JSON. Includes enabled state, binary availability, binary path, and allowed repo roots."
      :tool-name "amp_check_json")
   ()
-  (%json-string (crichton/skills:amp-status)))
+  (json-string (crichton/skills:amp-status)))
 
 (define-tool amp-code-json
     (:description "Delegate a coding task to the Amp CLI agent and return structured JSON result. Includes success, output, error, exit code, elapsed time, changed files, and truncation flags."
@@ -759,7 +759,7 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
   (let ((file-list (when files
                      (mapcar (lambda (f) (string-trim '(#\Space) f))
                              (cl-ppcre:split "," files)))))
-    (%json-string (crichton/skills:amp-code-task
+    (json-string (crichton/skills:amp-code-task
                    description
                    :repo-path repo-path
                    :files file-list
@@ -787,7 +787,7 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
   (let ((args-list (when test-args
                      (mapcar (lambda (a) (string-trim '(#\Space) a))
                              (cl-ppcre:split "," test-args)))))
-    (%json-string (crichton/skills:amp-test-task
+    (json-string (crichton/skills:amp-test-task
                    test-runner
                    :test-args args-list
                    :repo-path repo-path
@@ -926,11 +926,11 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
 
 ;;; --- Skills tool helpers ---
 
-(defun %skills-run-pipeline (steps)
+(defun skills-run-pipeline (steps)
   "Execute a multi-step skill pipeline from the STEPS array.
    Returns a formatted result string."
   (unless steps
-    (return-from %skills-run-pipeline
+    (return-from skills-run-pipeline
       "Error: 'steps' array is required for pipeline action."))
   (handler-case
       (let* ((step-list (coerce steps 'list))
@@ -987,7 +987,7 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
        (error (c)
          (format nil "Error invoking skill '~A': ~A" name c))))
     ((string-equal action "pipeline")
-     (%skills-run-pipeline steps))
+     (skills-run-pipeline steps))
     ((string-equal action "save_pipeline")
      (unless name
        (return-from handler "Error: 'name' is required for save_pipeline."))

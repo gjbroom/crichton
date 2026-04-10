@@ -36,7 +36,7 @@
              :type string
              :accessor feed-item-pub-date)))
 
-(defun %make-feed-item (&key (title "") (link "") (guid "") (description "") (pub-date ""))
+(defun make-feed-item (&key (title "") (link "") (guid "") (description "") (pub-date ""))
   (make-instance 'feed-item
                  :title title
                  :link link
@@ -103,7 +103,7 @@
 
 (defun parse-rss-item (item-node)
   "Parse an RSS <item> element into a feed-item struct."
-  (%make-feed-item
+  (make-feed-item
    :title (or (xml-child-text "title" item-node) "")
    :link (or (xml-child-text "link" item-node) "")
    :guid (or (xml-child-text "guid" item-node)
@@ -115,7 +115,7 @@
 (defun parse-atom-entry (entry-node)
   "Parse an Atom <entry> element into a feed-item struct."
   (let ((link-node (xml-find-child "link" entry-node)))
-    (%make-feed-item
+    (make-feed-item
      :title (or (xml-child-text "title" entry-node) "")
      :link (or (when link-node (xml-attr "href" link-node))
                (xml-child-text "link" entry-node) "")
@@ -553,7 +553,7 @@
 (defconstant +rss-default-max-items+ 100
   "Default maximum number of items retained per published feed.")
 
-(defun %xml-escape (text)
+(defun xml-escape (text)
   "Escape special XML characters in TEXT for use in element content."
   (with-output-to-string (s)
     (loop for ch across (or text "") do
@@ -563,7 +563,7 @@
         (#\> (write-string "&gt;" s))
         (otherwise (write-char ch s))))))
 
-(defun %format-rfc822-date (universal-time)
+(defun format-rfc822-date (universal-time)
   "Format UNIVERSAL-TIME (seconds since CL epoch) as an RFC 822 date string (UTC)."
   (multiple-value-bind (sec min hour day month year dow)
       (decode-universal-time universal-time 0)
@@ -573,15 +573,15 @@
       (format nil "~A, ~2,'0D ~A ~4D ~2,'0D:~2,'0D:~2,'0D +0000"
               (aref days dow) day (aref months month) year hour min sec))))
 
-(defun %feed-config-key (name)
+(defun feed-config-key (name)
   (format nil "feed-config:~A" name))
 
-(defun %feed-items-key (name)
+(defun feed-items-key (name)
   (format nil "feed-items:~A" name))
 
-(defun %feed-config (name)
+(defun feed-config (name)
   "Return the configuration hash-table for feed NAME, or a default config."
-  (or (crichton/storage:store-get +rss-pub-namespace+ (%feed-config-key name))
+  (or (crichton/storage:store-get +rss-pub-namespace+ (feed-config-key name))
       (let ((config (make-hash-table :test #'equal)))
         (setf (gethash "title" config) name
               (gethash "description" config) ""
@@ -594,13 +594,13 @@
    NAME is the feed identifier used in publish/xml/clear/delete calls.
    TITLE, DESCRIPTION, LINK set RSS <channel> metadata.
    MAX-ITEMS caps retained items (oldest dropped when exceeded; default 100)."
-  (let* ((existing (%feed-config name))
+  (let* ((existing (feed-config name))
          (config (make-hash-table :test #'equal)))
     (setf (gethash "title" config)       (or title       (gethash "title" existing)       name)
           (gethash "description" config) (or description (gethash "description" existing) "")
           (gethash "link" config)        (or link        (gethash "link" existing)        "")
           (gethash "max_items" config)   (or max-items   (gethash "max_items" existing)   +rss-default-max-items+))
-    (crichton/storage:store-set +rss-pub-namespace+ (%feed-config-key name) config)
+    (crichton/storage:store-set +rss-pub-namespace+ (feed-config-key name) config)
     (log:info "RSS feed configured: ~A (max ~D items)"
               name (gethash "max_items" config))
     name))
@@ -616,11 +616,11 @@
                                  (format nil "~A#~D" link now)
                                  (format nil "urn:crichton:~A:~D" name now))))
          (pub-date-str (or (and pub-date (plusp (length pub-date)) pub-date)
-                           (%format-rfc822-date now)))
+                           (format-rfc822-date now)))
          (item (make-hash-table :test #'equal))
-         (config (%feed-config name))
+         (config (feed-config name))
          (max-items (or (gethash "max_items" config) +rss-default-max-items+))
-         (existing (or (crichton/storage:store-get +rss-pub-namespace+ (%feed-items-key name))
+         (existing (or (crichton/storage:store-get +rss-pub-namespace+ (feed-items-key name))
                        #()))
          (existing-list (coerce existing 'list)))
     (setf (gethash "title"       item) title
@@ -632,7 +632,7 @@
            (capped   (if (> (length new-list) max-items)
                          (subseq new-list 0 max-items)
                          new-list)))
-      (crichton/storage:store-set +rss-pub-namespace+ (%feed-items-key name)
+      (crichton/storage:store-set +rss-pub-namespace+ (feed-items-key name)
                                   (coerce capped 'vector)))
     (log:info "RSS feed ~A: published item ~S" name title)
     effective-guid))
@@ -640,7 +640,7 @@
 (defun rss-feed-items (name)
   "Return the items of feed NAME as a list of plists, newest first.
    Each plist has :title :description :link :guid :pub-date."
-  (let ((raw (crichton/storage:store-get +rss-pub-namespace+ (%feed-items-key name))))
+  (let ((raw (crichton/storage:store-get +rss-pub-namespace+ (feed-items-key name))))
     (when raw
       (remove nil
               (mapcar (lambda (ht)
@@ -656,7 +656,7 @@
   "Generate a valid RSS 2.0 XML document for feed NAME.
    Returns the XML as a string. Feed config (title/description/link) is read
    from storage; items are the last MAX-ITEMS published via RSS-FEED-PUBLISH."
-  (let* ((config (%feed-config name))
+  (let* ((config (feed-config name))
          (title       (or (gethash "title"       config) name))
          (description (or (gethash "description" config) ""))
          (link        (or (gethash "link"        config) ""))
@@ -665,22 +665,22 @@
       (format s "<?xml version=\"1.0\" encoding=\"UTF-8\"?>~%")
       (format s "<rss version=\"2.0\">~%")
       (format s "  <channel>~%")
-      (format s "    <title>~A</title>~%" (%xml-escape title))
-      (format s "    <link>~A</link>~%" (%xml-escape link))
-      (format s "    <description>~A</description>~%" (%xml-escape description))
+      (format s "    <title>~A</title>~%" (xml-escape title))
+      (format s "    <link>~A</link>~%" (xml-escape link))
+      (format s "    <description>~A</description>~%" (xml-escape description))
       (format s "    <generator>Crichton</generator>~%")
       (dolist (item items)
         (format s "    <item>~%")
         (format s "      <title>~A</title>~%"
-                (%xml-escape (getf item :title)))
+                (xml-escape (getf item :title)))
         (when (plusp (length (getf item :link)))
           (format s "      <link>~A</link>~%"
-                  (%xml-escape (getf item :link))))
+                  (xml-escape (getf item :link))))
         (when (plusp (length (getf item :description)))
           (format s "      <description>~A</description>~%"
-                  (%xml-escape (getf item :description))))
+                  (xml-escape (getf item :description))))
         (format s "      <guid isPermaLink=\"false\">~A</guid>~%"
-                (%xml-escape (getf item :guid)))
+                (xml-escape (getf item :guid)))
         (when (plusp (length (getf item :pub-date)))
           (format s "      <pubDate>~A</pubDate>~%" (getf item :pub-date)))
         (format s "    </item>~%"))
@@ -690,15 +690,15 @@
 (defun rss-feed-clear (name)
   "Remove all items from feed NAME. Configuration is preserved.
    Returns T."
-  (crichton/storage:store-delete +rss-pub-namespace+ (%feed-items-key name))
+  (crichton/storage:store-delete +rss-pub-namespace+ (feed-items-key name))
   (log:info "RSS feed ~A: cleared all items" name)
   t)
 
 (defun rss-feed-delete (name)
   "Delete feed NAME entirely, removing both configuration and items.
    Returns T."
-  (crichton/storage:store-delete +rss-pub-namespace+ (%feed-config-key name))
-  (crichton/storage:store-delete +rss-pub-namespace+ (%feed-items-key name))
+  (crichton/storage:store-delete +rss-pub-namespace+ (feed-config-key name))
+  (crichton/storage:store-delete +rss-pub-namespace+ (feed-items-key name))
   (log:info "RSS feed ~A: deleted" name)
   t)
 

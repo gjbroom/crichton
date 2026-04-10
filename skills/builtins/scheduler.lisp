@@ -72,7 +72,7 @@
                               :initform nil
                               :type (or null string))))
 
-(defun %make-scheduled-task (&key (name "")
+(defun make-scheduled-task (&key (name "")
                                (kind :one-shot)
                                (fn (constantly nil))
                                action-name
@@ -303,7 +303,7 @@
 (defun schedule-at (name time fn &key replace action-name)
   "Schedule a one-shot task to run at universal-time TIME.
    If REPLACE is true, cancel any existing task with the same NAME."
-  (let ((task (%make-scheduled-task
+  (let ((task (make-scheduled-task
                :name (string name) :kind :one-shot
                :fn fn :next-ut time
                :action-name action-name)))
@@ -322,7 +322,7 @@
   "Schedule a recurring task to run every INTERVAL-SECONDS seconds.
    START-AT is a universal-time for the first run (default: now + interval)."
   (let* ((start (or start-at (+ (get-universal-time) interval-seconds)))
-         (task (%make-scheduled-task
+         (task (make-scheduled-task
                 :name (string name) :kind :every
                 :fn fn :next-ut start
                 :interval-seconds interval-seconds
@@ -342,7 +342,7 @@
 (defun schedule-daily (name hour minute fn &key replace (allow-overlap nil) action-name)
   "Schedule a task to run daily at HOUR:MINUTE (local time)."
   (let* ((next (next-daily-ut hour minute))
-         (task (%make-scheduled-task
+         (task (make-scheduled-task
                 :name (string name) :kind :daily
                 :fn fn :next-ut next
                 :daily-hour hour :daily-minute minute

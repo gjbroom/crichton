@@ -112,7 +112,7 @@
       (when (and body (plusp (length body)))
         (shasht:read-json body)))))
 
-(defun %url-encode-param (string)
+(defun url-encode-param (string)
   "Percent-encode a query parameter value (RFC 3986).
    Encodes everything except unreserved characters: A-Z a-z 0-9 - _ . ~"
   (with-output-to-string (out)
@@ -131,7 +131,7 @@
                            when v
                            collect (format nil "~A=~A"
                                            (princ-to-string k)
-                                           (%url-encode-param
+                                           (url-encode-param
                                             (princ-to-string v))))))
           (if parts
               (format nil "~A?~{~A~^&~}" base parts)

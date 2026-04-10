@@ -40,7 +40,7 @@ When reporting tool results, summarize the key information clearly."
                 (crichton/llm:make-tool-result-block (getf tu :id) result)))
             tool-uses)))
 
-(defun %initialize-messages (user-input messages)
+(defun initialize-messages (user-input messages)
   "Build the initial message list for an agent loop invocation.
    Destructively appends USER-INPUT to MESSAGES when both are provided."
   (if messages
@@ -51,7 +51,7 @@ When reporting tool results, summarize the key information clearly."
       (when user-input
         (list (list :role :user :content user-input)))))
 
-(defun %run-agent-loop (msgs send-fn label max-iterations)
+(defun run-agent-loop (msgs send-fn label max-iterations)
   "Core agent loop: call SEND-FN to get an LLM response, dispatch tool calls,
    and iterate until the LLM returns text or MAX-ITERATIONS is reached.
    SEND-FN is (lambda (msgs) → response-plist).
@@ -78,7 +78,7 @@ When reporting tool results, summarize the key information clearly."
 
 ;;; --- Agent loop ---
 
-(defun %resolve-system-prompt (system session-type)
+(defun resolve-system-prompt (system session-type)
   "Resolve the system prompt: use SYSTEM if provided, otherwise build
 from bootstrap files for SESSION-TYPE."
   (or system
@@ -86,7 +86,7 @@ from bootstrap files for SESSION-TYPE."
           (crichton/state:bootstrap-system-prompt :session-type session-type)
           *default-system-prompt*)))
 
-(defun %sanitize-input-for-session (user-input session-type)
+(defun sanitize-input-for-session (user-input session-type)
   "Sanitize USER-INPUT according to SESSION-TYPE trust level.
    Channel sessions (external sources) use a tighter length limit.
    Returns the sanitised string or NIL."
@@ -99,7 +99,7 @@ from bootstrap files for SESSION-TYPE."
                              :max-length +max-direct-input-length+
                              :source (symbol-name session-type)))))
 
-(defun %resolve-tools-for-session (tools session-type)
+(defun resolve-tools-for-session (tools session-type)
   "Return the effective tool list for SESSION-TYPE.
    Channel sessions use the restricted channel-safe allowlist unless
    an explicit TOOLS list was supplied by the caller."
@@ -126,12 +126,12 @@ SESSION-TYPE controls bootstrap files and tool access:
   :subagent — full tool access, sub-agent calls
 MAX-ITERATIONS prevents runaway tool loops."
   (let* ((provider (or provider (crichton/llm:ensure-llm-provider)))
-         (system   (%resolve-system-prompt system session-type))
-         (tools    (%resolve-tools-for-session tools session-type))
-         (safe-input (%sanitize-input-for-session user-input session-type))
-         (msgs     (%initialize-messages safe-input messages)))
+         (system   (resolve-system-prompt system session-type))
+         (tools    (resolve-tools-for-session tools session-type))
+         (safe-input (sanitize-input-for-session user-input session-type))
+         (msgs     (initialize-messages safe-input messages)))
     (log:info "Agent start [~A]: ~A" session-type (truncate-for-log user-input))
-    (%run-agent-loop
+    (run-agent-loop
      msgs
      (lambda (msgs)
        (crichton/llm:send-message provider msgs
@@ -149,12 +149,12 @@ ON-DELTA is called with each text delta string during the final streaming respon
 SESSION-TYPE controls bootstrap files and tool access (same as run-agent).
 Returns (values response-text all-messages last-response), same as run-agent."
   (let* ((provider (or provider (crichton/llm:ensure-llm-provider)))
-         (system   (%resolve-system-prompt system session-type))
-         (tools    (%resolve-tools-for-session tools session-type))
-         (safe-input (%sanitize-input-for-session user-input session-type))
-         (msgs     (%initialize-messages safe-input messages)))
+         (system   (resolve-system-prompt system session-type))
+         (tools    (resolve-tools-for-session tools session-type))
+         (safe-input (sanitize-input-for-session user-input session-type))
+         (msgs     (initialize-messages safe-input messages)))
     (log:info "Agent/stream start [~A]: ~A" session-type (truncate-for-log user-input))
-    (%run-agent-loop
+    (run-agent-loop
      msgs
      (lambda (msgs)
        (handler-case

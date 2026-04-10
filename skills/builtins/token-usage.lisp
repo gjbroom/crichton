@@ -77,21 +77,13 @@
                    :type (or null double-float)
                    :accessor usage-record-estimated-cost)))
 
-(defun %make-usage-record (&key (timestamp 0) (tier "") (input-units 0) (output-units 0) (estimated-cost nil))
+(defun make-usage-record (meter-name tier input-units output-units)
   (make-instance 'usage-record
-                 :timestamp timestamp
+                 :timestamp (get-universal-time)
                  :tier tier
                  :input-units input-units
                  :output-units output-units
-                 :estimated-cost estimated-cost))
-
-(defun make-usage-record (meter-name tier input-units output-units)
-  (%make-usage-record
-   :timestamp (get-universal-time)
-   :tier tier
-   :input-units input-units
-   :output-units output-units
-   :estimated-cost (estimate-cost meter-name tier input-units output-units)))
+                 :estimated-cost (estimate-cost meter-name tier input-units output-units)))
 
 ;;; ====================================================================
 ;;; Meter — thread-safe accumulator for one named service
@@ -135,7 +127,7 @@
          :type t
          :accessor meter-lock)))
 
-(defun %make-meter (&key (name "") (start-time (get-universal-time)) (total-input 0) (total-output 0) (total-cost 0.0d0) (call-count 0) (history nil) (max-history 1000) (lock (bt:make-lock "meter")))
+(defun make-meter (&key (name "") (start-time (get-universal-time)) (total-input 0) (total-output 0) (total-cost 0.0d0) (call-count 0) (history nil) (max-history 1000) (lock (bt:make-lock "meter")))
   (make-instance 'meter
                  :name name
                  :start-time start-time
@@ -163,7 +155,7 @@
     (bt:with-lock-held (*meters-lock*)
       (or (gethash key *meters*)
           (setf (gethash key *meters*)
-                (%make-meter :name key))))))
+                (make-meter :name key))))))
 
 (defun list-meters ()
   "Return a list of all meter names."
@@ -177,14 +169,14 @@
   (let ((key (string name)))
     (bt:with-lock-held (*meters-lock*)
       (setf (gethash key *meters*)
-            (%make-meter :name key)))))
+            (make-meter :name key)))))
 
 (defun reset-all-meters ()
   "Reset all meters."
   (bt:with-lock-held (*meters-lock*)
     (maphash (lambda (k v)
                (declare (ignore v))
-               (setf (gethash k *meters*) (%make-meter :name k)))
+               (setf (gethash k *meters*) (make-meter :name k)))
              *meters*)))
 
 ;;; ====================================================================
@@ -371,7 +363,7 @@
 
 (defun plist-to-meter (plist)
   "Create a METER object from a persisted plist."
-  (%make-meter :name (getf plist :name)
+  (make-meter :name (getf plist :name)
                :start-time (getf plist :start-time (get-universal-time))
                :total-input (getf plist :total-input 0)
                :total-output (getf plist :total-output 0)

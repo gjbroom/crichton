@@ -59,37 +59,37 @@
 (defvar *pass-count* 0)
 (defvar *fail-count* 0)
 
-(defun %reset-counts ()
+(defun reset-counts ()
   (setf *pass-count* 0 *fail-count* 0))
 
-(defun %pass (label)
+(defun pass (label)
   (incf *pass-count*)
   (format t "  PASS  ~A~%" label))
 
-(defun %fail (label message)
+(defun fail (label message)
   (incf *fail-count*)
   (format t "  FAIL  ~A — ~A~%" label message))
 
 (defmacro check (label condition &optional message)
   `(if ,condition
-       (%pass ,label)
-       (%fail ,label (or ,message (format nil "expected truthy, got ~S" ,condition)))))
+       (pass ,label)
+       (fail ,label (or ,message (format nil "expected truthy, got ~S" ,condition)))))
 
 (defmacro check= (label got expected)
   `(let ((g ,got) (e ,expected))
      (if (equal g e)
-         (%pass ,label)
-         (%fail ,label (format nil "expected ~S, got ~S" e g)))))
+         (pass ,label)
+         (fail ,label (format nil "expected ~S, got ~S" e g)))))
 
 (defmacro check-signals (label condition-type &body body)
   `(let ((signaled nil))
      (handler-case (progn ,@body)
        (,condition-type () (setf signaled t)))
      (if signaled
-         (%pass ,label)
-         (%fail ,label (format nil "expected ~S to be signaled" ',condition-type)))))
+         (pass ,label)
+         (fail ,label (format nil "expected ~S to be signaled" ',condition-type)))))
 
-(defun %print-summary (suite-name)
+(defun print-summary (suite-name)
   (format t "  → ~A: ~D passed, ~D failed~%~%" suite-name *pass-count* *fail-count*))
 
 ;;; --- Test skill IDs (isolated from real skills) ---
@@ -97,7 +97,7 @@
 (defparameter +test-skill+ "crichton.test.kv.primary")
 (defparameter +test-skill-b+ "crichton.test.kv.secondary")
 
-(defun %cleanup ()
+(defun cleanup ()
   "Remove test skill data and clear cache between suites."
   (ignore-errors (kv-clear-skill +test-skill+))
   (ignore-errors (kv-clear-skill +test-skill-b+)))
@@ -106,8 +106,8 @@
 
 (defun test-basic-crud ()
   "Test set/get/delete/exists-p."
-  (%reset-counts)
-  (%cleanup)
+  (reset-counts)
+  (cleanup)
   (format t "~&--- Suite: basic CRUD ---~%")
 
   ;; get on missing key returns nil
@@ -143,15 +143,15 @@
   (kv-set +test-skill+ "shared-key" "from-primary")
   (check= "skill isolation" (kv-get +test-skill-b+ "shared-key") nil)
 
-  (%cleanup)
-  (%print-summary "basic CRUD"))
+  (cleanup)
+  (print-summary "basic CRUD"))
 
 ;;; --- Suite 2: List and prefix filtering ---
 
 (defun test-prefix-list ()
   "Test kv-list with and without prefix."
-  (%reset-counts)
-  (%cleanup)
+  (reset-counts)
+  (cleanup)
   (format t "~&--- Suite: prefix list ---~%")
 
   (kv-set +test-skill+ "alpha:a" "1")
@@ -186,15 +186,15 @@
   (let ((empty (kv-list +test-skill-b+)))
     (check= "empty skill list" empty nil))
 
-  (%cleanup)
-  (%print-summary "prefix list"))
+  (cleanup)
+  (print-summary "prefix list"))
 
 ;;; --- Suite 3: Quota enforcement ---
 
 (defun test-quota-enforcement ()
   "Test that quota violations signal KV-QUOTA-EXCEEDED."
-  (%reset-counts)
-  (%cleanup)
+  (reset-counts)
+  (cleanup)
   (format t "~&--- Suite: quota enforcement ---~%")
 
   ;; max-value-bytes: default 10240. A value of 10241 bytes should fail.
@@ -207,13 +207,13 @@
     (handler-case
         (progn
           (kv-set +test-skill+ "maxval" ok-value)
-          (%pass "max-value-bytes boundary accepted"))
+          (pass "max-value-bytes boundary accepted"))
       (kv-quota-exceeded (c)
-        (%fail "max-value-bytes boundary accepted"
+        (fail "max-value-bytes boundary accepted"
                (format nil "unexpected quota error: ~A" c)))))
 
   ;; After the boundary write, the store has data. Clean for next tests.
-  (%cleanup)
+  (cleanup)
 
   ;; max-keys: default 100. Fill 100 keys, then adding a 101st should fail.
   (dotimes (i 100)
@@ -224,20 +224,20 @@
   (handler-case
       (progn
         (kv-set +test-skill+ "k0" "new-value")
-        (%pass "overwrite existing key at max-keys boundary"))
+        (pass "overwrite existing key at max-keys boundary"))
     (kv-quota-exceeded (c)
-      (%fail "overwrite existing key at max-keys boundary"
+      (fail "overwrite existing key at max-keys boundary"
              (format nil "unexpected quota error: ~A" c))))
 
-  (%cleanup)
-  (%print-summary "quota enforcement"))
+  (cleanup)
+  (print-summary "quota enforcement"))
 
 ;;; --- Suite 4: Cache management ---
 
 (defun test-cache-management ()
   "Test that clear-kv-cache forces a disk reload."
-  (%reset-counts)
-  (%cleanup)
+  (reset-counts)
+  (cleanup)
   (format t "~&--- Suite: cache management ---~%")
 
   (kv-set +test-skill+ "persistent" "yes")
@@ -263,15 +263,15 @@
   (check= "value accessible after preload"
           (kv-get +test-skill+ "persistent") "yes")
 
-  (%cleanup)
-  (%print-summary "cache management"))
+  (cleanup)
+  (print-summary "cache management"))
 
 ;;; --- Suite 5: Admin API ---
 
 (defun test-admin-api ()
   "Test kv-skill-usage, kv-global-usage, kv-clear-skill."
-  (%reset-counts)
-  (%cleanup)
+  (reset-counts)
+  (cleanup)
   (format t "~&--- Suite: admin API ---~%")
 
   (kv-set +test-skill+ "a" "hello")
@@ -300,16 +300,16 @@
   ;; secondary skill unaffected by clearing primary
   (check= "secondary skill intact" (kv-get +test-skill-b+ "x") "foo")
 
-  (%cleanup)
-  (%print-summary "admin API"))
+  (cleanup)
+  (print-summary "admin API"))
 
 ;;; --- Suite 6: Backup and restore ---
 
-(defun %backup-dir ()
+(defun backup-dir ()
   (merge-pathnames "kv-test-backup/" crichton/config:*agent-home*))
 
-(defun %cleanup-backup ()
-  (let ((bdir (%backup-dir)))
+(defun cleanup-backup ()
+  (let ((bdir (backup-dir)))
     (when (probe-file bdir)
       (dolist (f (directory (merge-pathnames (make-pathname :name :wild :type "age")
                                              bdir)))
@@ -318,9 +318,9 @@
 
 (defun test-backup-restore ()
   "Test backup-kv-store / restore-kv-backup roundtrip."
-  (%reset-counts)
-  (%cleanup)
-  (%cleanup-backup)
+  (reset-counts)
+  (cleanup)
+  (cleanup-backup)
   (format t "~&--- Suite: backup/restore ---~%")
 
   ;; Populate test skill.
@@ -328,12 +328,12 @@
   (kv-set +test-skill+ "key2" "value2")
 
   ;; Backup.
-  (let ((backed-up (backup-kv-store (%backup-dir))))
+  (let ((backed-up (backup-kv-store (backup-dir))))
     (check "backup-kv-store returns non-negative count" (>= backed-up 0))
     ;; At least the primary test skill should be among backed-up files.
     (let ((backup-file (merge-pathnames
                         (make-pathname :name +test-skill+ :type "age")
-                        (%backup-dir))))
+                        (backup-dir))))
       (check "backup file exists on disk" (probe-file backup-file))))
 
   ;; Wipe the live skill.
@@ -341,23 +341,23 @@
   (check= "data gone before restore" (kv-get +test-skill+ "key1") nil)
 
   ;; Restore from backup.
-  (let ((restored (restore-kv-backup (%backup-dir))))
+  (let ((restored (restore-kv-backup (backup-dir))))
     (check "restore-kv-backup returns positive count" (>= restored 1)))
 
   ;; Data should be accessible again.
   (check= "key1 restored" (kv-get +test-skill+ "key1") "value1")
   (check= "key2 restored" (kv-get +test-skill+ "key2") "value2")
 
-  (%cleanup)
-  (%cleanup-backup)
-  (%print-summary "backup/restore"))
+  (cleanup)
+  (cleanup-backup)
+  (print-summary "backup/restore"))
 
 ;;; --- Suite 7: Integrity check ---
 
 (defun test-integrity-check ()
   "Test check-kv-integrity reports :ok for good stores and :corrupt for bad ones."
-  (%reset-counts)
-  (%cleanup)
+  (reset-counts)
+  (cleanup)
   (format t "~&--- Suite: integrity check ---~%")
 
   ;; Write a good store.
@@ -396,14 +396,14 @@
     ;; Clean up the garbage file.
     (ignore-errors (crichton/config:delete-file-if-exists corrupt-path)))
 
-  (%cleanup)
-  (%print-summary "integrity check"))
+  (cleanup)
+  (print-summary "integrity check"))
 
 ;;; --- Suite 8: Repair corrupt KV ---
 
 (defun test-repair ()
   "Test repair-corrupt-kv renames the corrupt file and evicts the cache entry."
-  (%reset-counts)
+  (reset-counts)
   (format t "~&--- Suite: repair corrupt KV ---~%")
 
   (let* ((repair-skill "crichton.test.kv.repair")
@@ -443,14 +443,14 @@
     ;; Clean up.
     (ignore-errors (delete-file corrupt-ext-path)))
 
-  (%print-summary "repair corrupt KV"))
+  (print-summary "repair corrupt KV"))
 
 ;;; --- Suite 9: Health check ---
 
 (defun test-health-check ()
   "Test that kv-health-check runs without error and returns a boolean."
-  (%reset-counts)
-  (%cleanup)
+  (reset-counts)
+  (cleanup)
   (format t "~&--- Suite: health check ---~%")
 
   (kv-set +test-skill+ "hc-key" "hc-value")
@@ -465,8 +465,8 @@
     (check "health-check mentions quotas"
            (search "Quota" text)))
 
-  (%cleanup)
-  (%print-summary "health check"))
+  (cleanup)
+  (print-summary "health check"))
 
 ;;; --- Top-level runner ---
 
@@ -475,7 +475,7 @@
   (let ((total-pass 0)
         (total-fail 0))
     (flet ((run-suite (fn)
-             (%reset-counts)
+             (reset-counts)
              (funcall fn)
              (incf total-pass *pass-count*)
              (incf total-fail *fail-count*)))

@@ -35,7 +35,7 @@
   "Regex patterns that may indicate prompt injection attempts in user input.
    Detection is heuristic: matches are audit-logged but input is NOT rejected.")
 
-(defun %strip-control-chars (text)
+(defun strip-control-chars (text)
   "Remove null bytes and non-printable control characters from TEXT.
    Newline (#\\Newline), tab (#\\Tab), and carriage return (#\\Return) are kept."
   (with-output-to-string (s)
@@ -46,7 +46,7 @@
                    (char= ch #\Return))
             do (write-char ch s))))
 
-(defun %count-injection-markers (text)
+(defun count-injection-markers (text)
   "Return the number of distinct injection marker patterns matched in TEXT."
   (loop for pattern in *injection-marker-patterns*
         count (when (cl-ppcre:scan pattern text) 1)))
@@ -67,14 +67,14 @@
    log and audit messages).  Returns the sanitised string."
   (when (null text)
     (return-from sanitize-user-input nil))
-  (let* ((stripped (%strip-control-chars text))
+  (let* ((stripped (strip-control-chars text))
          (truncated (if (> (length stripped) max-length)
                         (progn
                           (log:warn "Input from ~A truncated: ~D → ~D chars"
                                     (or source "unknown") (length stripped) max-length)
                           (subseq stripped 0 max-length))
                         stripped))
-         (marker-count (%count-injection-markers truncated)))
+         (marker-count (count-injection-markers truncated)))
     (when (plusp marker-count)
       (let ((fields (make-hash-table :test #'equal)))
         (setf (gethash "source" fields) (or source "unknown")

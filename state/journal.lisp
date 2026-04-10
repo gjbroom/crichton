@@ -30,14 +30,14 @@ Used for context window budget estimation, not billing.")
 
 ;;; --- Date helpers ---
 
-(defun %today-date-string ()
+(defun today-date-string ()
   "Return today's date as YYYY-MM-DD in local time."
   (multiple-value-bind (sec min hour day month year)
       (get-decoded-time)
     (declare (ignore sec min hour))
     (format nil "~4,'0D-~2,'0D-~2,'0D" year month day)))
 
-(defun %date-string-to-filename (date-string)
+(defun date-string-to-filename (date-string)
   "Convert a YYYY-MM-DD date string to a journal filename."
   (format nil "~A.org" date-string))
 
@@ -45,12 +45,12 @@ Used for context window budget estimation, not billing.")
 
 (defun journal-today-path ()
   "Return the full path for today's journal file."
-  (merge-pathnames (%date-string-to-filename (%today-date-string))
+  (merge-pathnames (date-string-to-filename (today-date-string))
                    (journal-dir)))
 
 (defun journal-path-for-date (date-string)
   "Return the full path for the journal file for DATE-STRING (YYYY-MM-DD)."
-  (merge-pathnames (%date-string-to-filename date-string)
+  (merge-pathnames (date-string-to-filename date-string)
                    (journal-dir)))
 
 ;;; --- Journal append ---
@@ -67,7 +67,7 @@ a #+TITLE header if it doesn't exist yet.  Returns the journal file path."
                             :if-does-not-exist :create
                             :external-format :utf-8)
       (unless exists
-        (format s "#+TITLE: Journal — ~A~%~%" (%today-date-string)))
+        (format s "#+TITLE: Journal — ~A~%~%" (today-date-string)))
       (format s "** ~A~%~A~%~%" timestamp content))
     #+sbcl (sb-posix:chmod (namestring (truename path)) #o600)
     (log:debug "Journal append: ~A (~D chars)" path (length content))
@@ -95,7 +95,7 @@ a #+TITLE header if it doesn't exist yet.  Returns the file path."
 
 ;;; --- Journal search ---
 
-(defun %journal-files-in-range (days-back)
+(defun journal-files-in-range (days-back)
   "Return a list of (date-string . path) pairs for journal files
 within the last DAYS-BACK days, most recent first."
   (let* ((now (get-universal-time))
@@ -118,7 +118,7 @@ within the last DAYS-BACK days, most recent first."
               (push (cons name path) results))))))
     (sort results #'string> :key #'car)))
 
-(defun %search-file-for-query (path query)
+(defun search-file-for-query (path query)
   "Search PATH for lines containing QUERY (case-insensitive).
 Returns a list of matching context strings (the matched line plus
 surrounding heading context)."
@@ -146,7 +146,7 @@ surrounding heading context)."
   "Search journal files for QUERY within the last DAYS-BACK days.
 Returns a formatted string with matching excerpts, limited to MAX-RESULTS.
 Case-insensitive substring matching."
-  (let ((files (%journal-files-in-range days-back))
+  (let ((files (journal-files-in-range days-back))
         (total-matches 0)
         (output (make-string-output-stream)))
     (when (null files)
@@ -156,7 +156,7 @@ Case-insensitive substring matching."
       (when (>= total-matches max-results)
         (format output "~%... (truncated at ~D results)~%" max-results)
         (return))
-      (let ((matches (%search-file-for-query (cdr file-pair) query)))
+      (let ((matches (search-file-for-query (cdr file-pair) query)))
         (when matches
           (format output "~%--- ~A ---~%" (car file-pair))
           (dolist (match matches)
@@ -170,7 +170,7 @@ Case-insensitive substring matching."
 
 ;;; --- Pre-compaction journal flush ---
 
-(defun %extract-message-text (message)
+(defun extract-message-text (message)
   "Extract text content from a MESSAGE plist.
 Content may be a string or a list of content blocks."
   (let ((content (getf message :content)))
@@ -188,7 +188,7 @@ Content may be a string or a list of content blocks."
   "Estimate the total token count for MESSAGES using character count heuristic."
   (let ((total-chars 0))
     (dolist (msg messages)
-      (incf total-chars (length (%extract-message-text msg))))
+      (incf total-chars (length (extract-message-text msg))))
     (ceiling total-chars *chars-per-token*)))
 
 (defun flush-session-to-journal (messages &key (max-chars 8000))
@@ -205,7 +205,7 @@ Returns the journal file path, or NIL if there was nothing to flush."
     (format output "Pre-compaction session snapshot:~%")
     (dolist (msg messages)
       (let* ((role (getf msg :role))
-             (text (%extract-message-text msg))
+             (text (extract-message-text msg))
              (trimmed (string-trim '(#\Space #\Tab #\Newline) text)))
         (when (and (plusp (length trimmed))
                    (member role '(:user :assistant)))
