@@ -58,6 +58,10 @@
 (defun init-skills ()
   "Initialize skill subsystems: scheduler, tasks, discovery, battery monitoring."
   (crichton/skills:start-scheduler)
+  (guarded "Periodic storage sync startup failed"
+    (crichton/skills:schedule-every "storage-sync" 60
+      (lambda () (crichton/storage:flush-all-storage))
+      :replace t))
   (guarded "Task restoration at startup failed"
     (crichton/skills:restore-user-tasks))
   (guarded "RSS monitor restoration at startup failed"

@@ -310,7 +310,8 @@
       (maphash (lambda (name steps)
                  (setf (gethash name ht) steps))
                *saved-pipelines*)
-      (crichton/storage:store-set "pipelines" "saved" ht)))
+      (crichton/storage:store-set "pipelines" "saved" ht)
+      (crichton/storage:flush-all-storage)))
   (log:debug "Persisted ~D saved pipeline~:P"
              (hash-table-count *saved-pipelines*)))
 

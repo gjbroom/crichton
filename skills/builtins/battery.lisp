@@ -293,7 +293,8 @@
   (let ((ht (make-hash-table :test #'equal)))
     (setf (gethash "enabled" ht) enabled
           (gethash "interval" ht) interval)
-    (crichton/storage:store-set "battery" "monitoring" ht))
+    (crichton/storage:store-set "battery" "monitoring" ht)
+    (crichton/storage:flush-all-storage))
   (log:debug "Persisted battery monitoring state: enabled=~A interval=~D" enabled interval))
 
 (defun restore-battery-monitoring ()

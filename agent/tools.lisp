@@ -280,6 +280,7 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
         (format nil "Error: unknown action '~A'. Use action 'actions' to list available." action-name)))
     (crichton/skills:schedule-every task-name interval-seconds (getf act :fn)
                                     :replace t :action-name action-name)
+    (crichton/skills:persist-user-tasks)
     (format nil "Scheduled '~A' every ~Ds as task '~A'." action-name interval-seconds task-name)))
 
 (defun scheduler-schedule-daily (action-name hour minute task-name)
@@ -295,6 +296,7 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
         (format nil "Error: unknown action '~A'." action-name)))
     (crichton/skills:schedule-daily task-name hour min (getf act :fn)
                                     :replace t :action-name action-name)
+    (crichton/skills:persist-user-tasks)
     (format nil "Scheduled '~A' daily at ~2,'0D:~2,'0D as task '~A'." action-name hour min task-name)))
 
 (defun scheduler-schedule-once (action-name delay-seconds task-name)
@@ -309,6 +311,7 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
         (format nil "Error: unknown action '~A'." action-name)))
     (crichton/skills:schedule-at task-name (+ (get-universal-time) delay-seconds) (getf act :fn)
                                  :replace t :action-name action-name)
+    (crichton/skills:persist-user-tasks)
     (format nil "Scheduled '~A' to run once in ~Ds as task '~A'." action-name delay-seconds task-name)))
 
 ;;; --- Scheduler tool ---
@@ -356,7 +359,9 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
        (unless name
          (return-from handler "Error: 'name' is required for cancel."))
        (if (crichton/skills:cancel-task name)
-           (format nil "Cancelled task '~A'." name)
+           (progn
+             (crichton/skills:persist-user-tasks)
+             (format nil "Cancelled task '~A'." name))
            (format nil "No task found with name '~A'." name)))
       ((string-equal action "persist")
        (let ((count (crichton/skills:persist-user-tasks)))
