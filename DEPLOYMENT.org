@@ -188,6 +188,69 @@ The cost of starting the Ansible repo is an afternoon.  The payoff is that
 every subsequent Pi or VM takes an hour instead of a day, and you always
 know what's on each machine.
 
+* Voron 3D Printers
+
+Two Vorons, each with a Pi running Klipper.  Already out of sync.
+Ansible is the right fix.
+
+** What to Manage with Ansible
+
+These should be identical across both printers — drift here is a bug:
+
+- Klipper, Moonraker, Mainsail/Fluidd — pinned to the same git commit or
+  tag on both machines
+- ~moonraker.conf~ — templated; mostly identical with ~{{ printer_name }}~
+  substituted per host
+- Shared macro library — ~PRINT_START~, filament change macros, etc.
+  Deployed from the repo to both printers.  This is the main source of
+  current drift.
+- System packages, udev rules for serial/USB access
+- User/group permissions (~klipper~ user, dialout group, etc.)
+- systemd units for klipper and moonraker services
+
+** What NOT to Manage with Ansible
+
+These diverge /correctly/ between two physical machines and must never be
+levelled:
+
+- ~printer.cfg~ — stepper calibration, PID tuning, physical geometry,
+  endstop positions.  These are measurements, not configuration.  Keep
+  them local on each printer, back them up separately.
+- ~moonraker.db~ — runtime state, print history
+- Slicer profiles — per-printer, per-filament, not infrastructure
+
+** Ansible Role Structure
+
+#+begin_example
+roles/
+  klipper/          # clone klipper repo, systemd unit, virtualenv
+  moonraker/        # clone moonraker repo, moonraker.conf template, systemd unit
+  mainsail/         # or fluidd/ — deploy web interface
+  klipper-macros/   # deploy shared macro files to ~/printer_data/config/macros/
+
+host_vars/
+  voron1.yaml       # printer_name, serial_port, MCU path, IP
+  voron2.yaml       # same structure, different values
+
+printers.yaml       # playbook: applies klipper stack to printer group
+#+end_example
+
+** Note on KIAUH
+
+KIAUH (the standard Klipper installer) is an interactive shell script —
+not Ansible-friendly.  Bypass it.  Install Klipper, Moonraker, and
+Mainsail directly from their git repos with systemd units, which is what
+KIAUH does under the hood anyway.  Community Ansible roles exist on Galaxy
+if you don't want to write from scratch.
+
+** Crichton Integration (future)
+
+Once the Voron Pis are in the ~homelab~ inventory, Node Exporter on each
+gives Prometheus visibility into Pi health (temperature, load, disk).
+Moonraker's API could eventually give Crichton print status — "is the
+printer running?", "how long until the print finishes?" — though this is
+low priority.
+
 * Monitoring Architecture
 
 ** Principle: Crichton Is the Intelligence Layer, Not the Data Layer
