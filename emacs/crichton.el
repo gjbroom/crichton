@@ -86,6 +86,10 @@ sent by the daemon."
   "Non-nil after chat_done has delivered the response.
 Prevents the ok response from duplicating output.")
 
+(defvar crichton--delta-received nil
+  "Non-nil if at least one chat_delta has been written to the chat buffer.
+Used by chat_done to skip re-outputting text already streamed.")
+
 ;;;; NDJSON protocol
 
 (defun crichton--next-id ()
@@ -343,7 +347,8 @@ Built on `comint-mode' — use \\[comint-send-input] to send,
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert (format "--- Query: %s ---\n" input))))
-    (setq crichton--streaming-done nil)
+    (setq crichton--streaming-done nil
+          crichton--delta-received nil)
     (crichton--show-thinking)
     (crichton--send-request "chat"
                             'text input
@@ -363,14 +368,17 @@ Built on `comint-mode' — use \\[comint-send-input] to send,
 
 (defun crichton--handle-chat-delta (msg)
   "Handle an incremental chat_delta push message.
-Deltas stream into the hidden process buffer; the chat buffer
-shows only a [thinking…] indicator (like SLIME's inferior-lisp)."
+Streams text directly into the chat buffer as it arrives."
   (let ((text (alist-get 'text msg)))
     (when (and text crichton--streaming-buffer)
+      (unless crichton--delta-received
+        (crichton--remove-thinking)
+        (setq crichton--delta-received t))
+      (crichton--output text)
       (crichton--process-output text))))
 
 (defun crichton--handle-chat-done (msg)
-  "Handle a chat_done push message — show final response in chat buffer."
+  "Handle a chat_done push message — finalise the response in the chat buffer."
   (let ((text (alist-get 'text msg))
         (session (alist-get 'session_id msg)))
     (when session
@@ -379,7 +387,8 @@ shows only a [thinking…] indicator (like SLIME's inferior-lisp)."
       (setq crichton--last-response text))
     (crichton--remove-thinking)
     (when crichton--streaming-buffer
-      (when text
+      ;; If no deltas arrived (non-streaming fallback), output the text now.
+      (when (and text (not crichton--delta-received))
         (crichton--output text))
       (crichton--output "\n\n❯ "))
     (setq crichton--streaming-buffer nil)
