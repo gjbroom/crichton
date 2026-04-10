@@ -81,6 +81,19 @@
   (guarded "Channel startup failed"
     (crichton/channels:start-channels)))
 
+(defun run-startup-checklist ()
+  "Run the agent startup checklist in a background thread after all subsystems are up."
+  (bt:make-thread
+   (lambda ()
+     (sleep 3)
+     (log:info "Running startup checklist")
+     (handler-case
+         (crichton/agent:run-agent
+          "The daemon has just started up. Run your startup checklist from your memory.")
+       (error (c)
+         (log:warn "Startup checklist failed: ~A" c))))
+   :name "startup-checklist"))
+
 (defun start-daemon (&key (foreground nil))
   "Start the Crichton daemon.  Idempotent — returns NIL if already running.
    When FOREGROUND is T, blocks until stop-daemon is called (for systemd)."
@@ -97,6 +110,7 @@
   (init-storage)
   (init-skills)
   (init-network)
+  (run-startup-checklist)
   (log:info "Crichton ~A daemon started (PID ~D)"
             crichton/config:*crichton-version* (sb-posix:getpid))
   (when foreground

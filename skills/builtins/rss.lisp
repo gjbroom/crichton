@@ -401,7 +401,8 @@
                      (setf (gethash "search_fields" entry) (coerce (getf config :search-fields) 'vector)))
                    (setf (gethash name ht) entry)))
                *rss-monitors*)
-      (crichton/storage:store-set "rss" "monitors" ht)))
+      (crichton/storage:store-set "rss" "monitors" ht)
+      (crichton/storage:flush-all-storage)))
   (log:debug "Persisted ~D RSS monitor~:P" (hash-table-count *rss-monitors*)))
 
 (defun restore-rss-monitors ()
