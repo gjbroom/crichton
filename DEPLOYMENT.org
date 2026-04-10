@@ -1,0 +1,197 @@
+#+TITLE: Crichton Deployment & Infrastructure Notes
+#+AUTHOR: Gordon J. Broom
+#+DATE: 2026-04-10
+
+Notes on deploying Crichton to permanent infrastructure, integrating home
+network monitoring, and extending it with IoT sensor data.
+
+* Hardware
+
+** Available
+
+- Pi CM4 — idle, available for assignment
+- Pi CM5 — idle, available for assignment
+- HOOBS bridge — HomeKit integration, already planned
+
+** Planned / In Progress
+
+- Greenhouse wireless temperature node — hardware in transit; will publish
+  to MQTT when operational
+
+* Deployment Target: Home Rack Pi
+
+Crichton currently runs on the laptop and travels between home and office.
+The goal is to move it (or run a permanent instance) on one of the rack Pis
+so it operates 24/7.
+
+** Motivations
+
+- Always-on scheduler (RSS monitors, daily briefings, etc.)
+- Network-local access to rack machines and IoT sensors
+- Pushover notifications reachable even when at the office
+- SWANK server accessible over SSH tunnel for remote development
+
+** Open Work
+
+- Choose which Pi (CM4 or CM5) hosts Crichton
+- Write systemd unit for automatic start on boot
+- Verify SWANK tunnels correctly across the network (port 4005)
+- Store Pushover credentials on the Pi instance
+- Test ~ssh -L /path/to/local.sock:/path/to/remote.sock host~ for Emacs
+  client access to the remote daemon socket
+
+* Monitoring Architecture
+
+** Principle: Crichton Is the Intelligence Layer, Not the Data Layer
+
+Crichton should *read* from purpose-built monitoring infrastructure and
+*decide* when something is worth acting on.  It is not a time-series
+database, a dashboard, or a polling agent.
+
+The division of labour:
+
+| Layer        | Tool                   | Crichton's role              |
+|--------------+------------------------+------------------------------|
+| Collection   | Node Exporter, sensors | None — tools do this         |
+| Storage      | Prometheus / InfluxDB  | None — tools do this         |
+| Dashboards   | Grafana                | None — tools do this         |
+| Aggregation  | Home Assistant         | Query via REST skill         |
+| IoT pub/sub  | Mosquitto (MQTT)       | Subscribe to topics of interest |
+| Alerting     | Crichton + Pushover    | Interpret, decide, notify    |
+
+** Recommended Stack on the Rack Pi
+
+*** Mosquitto (MQTT broker)
+
+The hub everything connects to.  Lightweight, runs fine on a Pi.
+Greenhouse node, any future sensors, and optionally Home Assistant all
+speak to it.
+
+- Install: ~apt install mosquitto mosquitto-clients~
+- Configure: TLS + password auth if exposed beyond localhost
+- Topics convention (proposed):
+  : sensors/greenhouse/temperature
+  : sensors/greenhouse/humidity
+  : rack/<hostname>/health
+  : home/<device>/state
+
+*** Node Exporter (per rack machine)
+
+One binary on each machine.  No config.  Exposes CPU, memory, disk,
+network over HTTP on port 9100.  Prometheus scrapes it.
+
+- Install: standard Prometheus Node Exporter package or binary
+- Run as a systemd service on each rack machine
+- Firewall: only the Prometheus host needs access to port 9100
+
+*** Prometheus (on the rack Pi)
+
+Scrapes all Node Exporters on a schedule.  Stores time-series.
+Provides a query API that Crichton can call on demand.
+
+- Prometheus query API: ~GET /api/v1/query?query=<PromQL>~
+- Crichton use case: answer "how's rack2 doing?" without polling
+
+*** Grafana (optional, on the rack Pi)
+
+Dashboards over Prometheus.  Not Crichton's job.  Worth running if you
+want a visual overview — especially useful during initial setup.
+
+*** Home Assistant (optional but high-leverage)
+
+If set up, HA bridges:
+- HOOBS / HomeKit devices
+- MQTT sensors (it subscribes to topics you configure)
+- Many other integrations
+
+Single REST API gives Crichton access to everything HA knows about.
+One skill, one API key, the whole home.  Highest-leverage single
+addition if you want Crichton to be home-aware.
+
+** What Crichton Needs (New Skills / Channels)
+
+*** MQTT Subscriber Channel (highest priority for IoT)
+
+Not a poller.  A long-lived connection to Mosquitto that reacts when
+messages arrive on subscribed topics.
+
+Architecture fits the existing channel pattern (Discord is already a
+long-lived inbound connection).  When a message crosses a configured
+threshold or matches a pattern, Crichton evaluates whether to act
+(e.g. send a Pushover notification).
+
+Likely implementation: ~cl-mqtt~ library, daemon-side built-in, similar
+to how ~crichton/channels~ is structured.
+
+#+begin_example
+(subscribe-mqtt-topic "sensors/greenhouse/temperature"
+  (lambda (topic payload)
+    (when (< (parse-float payload) 5.0)
+      (pushover-send "Greenhouse below 5°C!" :title "Temperature Alert"
+                                             :priority 1))))
+#+end_example
+
+*** Prometheus Query Skill (rack health)
+
+Simple HTTP GET to Prometheus query API.  On-demand only — not a
+background poller.  Used when you ask Crichton "how is rack2 doing?"
+
+#+begin_src lisp
+(prometheus-query "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)")
+#+end_src
+
+*** Home Assistant Skill (if HA is deployed)
+
+REST API calls to HA.  Covers HOOBS/HomeKit, MQTT sensors HA has
+subscribed to, temperature readings, lock states, everything HA tracks.
+
+- Endpoint: ~GET /api/states/<entity_id>~
+- Auth: long-lived access token stored in credential store
+
+** What NOT to Build in Crichton
+
+- Do not poll machines on a timer — Prometheus does that
+- Do not store time-series data — Prometheus/InfluxDB does that
+- Do not subscribe to every MQTT topic — only topics Crichton has been
+  told to care about
+- Do not build dashboards — Grafana does that
+
+** Crichton's Value Add Over Raw Monitoring
+
+Raw monitoring tells you /what/.  Crichton tells you /so what/:
+
+- "The greenhouse has been below 10°C for 45 minutes — sending alert"
+- "rack1 CPU is unusually high compared to the same time last week"
+- "Front door has been unlocked since 9pm" (via HOOBS/HA)
+- "Two rack machines show elevated temperatures — possible airflow issue"
+
+The LLM layer provides context, correlation, and judgment that a
+dashboard cannot.
+
+* Recommended Order of Operations
+
+1. Choose the host Pi (CM4 or CM5) and install Crichton + systemd unit
+2. Install Mosquitto on the Pi; configure the greenhouse node to publish
+3. Add Node Exporter to each rack machine
+4. Install Prometheus on the Pi; configure scrape targets
+5. Install Grafana (optional but useful during bringup)
+6. Decide on Home Assistant — if yes, set it up as the aggregation layer
+7. Build the MQTT subscriber channel in Crichton
+8. Build the Prometheus query skill
+9. Build the Home Assistant skill (if applicable)
+10. Wire up Pushover alerts for conditions worth bothering you about
+
+* Pi CM4 vs CM5 Assignment (TBD)
+
+Both are sitting idle.  Possible assignments:
+
+| Pi   | Candidate role                          |
+|------+-----------------------------------------|
+| CM4  | Crichton daemon + Mosquitto + Prometheus |
+| CM5  | Home Assistant (heavier workload)        |
+
+Or consolidate everything on the CM5 (more capable) and keep the CM4 as
+a spare / secondary node.
+
+Decision deferred until greenhouse hardware arrives and the scope of HA
+integration is clearer.
