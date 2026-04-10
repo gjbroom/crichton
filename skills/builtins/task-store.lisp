@@ -27,6 +27,7 @@
   (list :name (scheduled-task-name task)
         :kind (scheduled-task-kind task)
         :action-name (scheduled-task-action-name task)
+        :agent-prompt (scheduled-task-agent-prompt task)
         :interval-seconds (scheduled-task-interval-seconds task)
         :daily-hour (scheduled-task-daily-hour task)
         :daily-minute (scheduled-task-daily-minute task)
@@ -45,6 +46,7 @@
                      (gethash "kind" ht) (string-downcase
                                           (symbol-name (getf plist :kind)))
                      (gethash "action_name" ht) (getf plist :action-name)
+                     (gethash "agent_prompt" ht) (getf plist :agent-prompt)
                      (gethash "interval_seconds" ht) (getf plist :interval-seconds)
                      (gethash "daily_hour" ht) (getf plist :daily-hour)
                      (gethash "daily_minute" ht) (getf plist :daily-minute)
@@ -70,6 +72,7 @@
                    (list :name (gethash "name" ht)
                          :kind (intern (string-upcase kind-str) :keyword)
                          :action-name (gethash "action_name" ht)
+                         :agent-prompt (gethash "agent_prompt" ht)
                          :interval-seconds (gethash "interval_seconds" ht)
                          :daily-hour (gethash "daily_hour" ht)
                          :daily-minute (gethash "daily_minute" ht)

@@ -27,6 +27,10 @@
                               :accessor scheduled-task-action-name
                               :initform nil
                               :type (or null string))
+   (agent-prompt              :initarg :agent-prompt
+                              :accessor scheduled-task-agent-prompt
+                              :initform nil
+                              :type (or null string))
    (next-ut                   :initarg :next-ut
                               :accessor scheduled-task-next-ut
                               :initform 0
@@ -76,6 +80,7 @@
                                (kind :one-shot)
                                (fn (constantly nil))
                                action-name
+                               agent-prompt
                                (next-ut 0)
                                (interval-seconds 0)
                                (daily-hour 0)
@@ -91,6 +96,7 @@
                                  :kind kind
                                  :fn fn
                                  :action-name action-name
+                                 :agent-prompt agent-prompt
                                  :next-ut next-ut
                                  :interval-seconds interval-seconds
                                  :daily-hour daily-hour
@@ -300,13 +306,14 @@
 
 ;;; --- Public API: scheduling ---
 
-(defun schedule-at (name time fn &key replace action-name)
+(defun schedule-at (name time fn &key replace action-name agent-prompt)
   "Schedule a one-shot task to run at universal-time TIME.
    If REPLACE is true, cancel any existing task with the same NAME."
   (let ((task (make-scheduled-task
                :name (string name) :kind :one-shot
                :fn fn :next-ut time
-               :action-name action-name)))
+               :action-name action-name
+               :agent-prompt agent-prompt)))
     (bt:with-lock-held (*scheduler-lock*)
       (when replace (remove-task-by-name (string name)))
       (when (find (string name) *scheduled-tasks*
@@ -318,7 +325,7 @@
     name))
 
 (defun schedule-every (name interval-seconds fn
-                       &key (start-at nil) replace (allow-overlap nil) action-name)
+                       &key (start-at nil) replace (allow-overlap nil) action-name agent-prompt)
   "Schedule a recurring task to run every INTERVAL-SECONDS seconds.
    START-AT is a universal-time for the first run (default: now + interval)."
   (let* ((start (or start-at (+ (get-universal-time) interval-seconds)))
@@ -327,7 +334,8 @@
                 :fn fn :next-ut start
                 :interval-seconds interval-seconds
                 :allow-overlap-p allow-overlap
-                :action-name action-name)))
+                :action-name action-name
+                :agent-prompt agent-prompt)))
     (bt:with-lock-held (*scheduler-lock*)
       (when replace (remove-task-by-name (string name)))
       (when (find (string name) *scheduled-tasks*
@@ -339,7 +347,7 @@
               name interval-seconds (format-ut start))
     name))
 
-(defun schedule-daily (name hour minute fn &key replace (allow-overlap nil) action-name)
+(defun schedule-daily (name hour minute fn &key replace (allow-overlap nil) action-name agent-prompt)
   "Schedule a task to run daily at HOUR:MINUTE (local time)."
   (let* ((next (next-daily-ut hour minute))
          (task (make-scheduled-task
@@ -347,7 +355,8 @@
                 :fn fn :next-ut next
                 :daily-hour hour :daily-minute minute
                 :allow-overlap-p allow-overlap
-                :action-name action-name)))
+                :action-name action-name
+                :agent-prompt agent-prompt)))
     (bt:with-lock-held (*scheduler-lock*)
       (when replace (remove-task-by-name (string name)))
       (when (find (string name) *scheduled-tasks*
@@ -358,6 +367,32 @@
     (log:info "Scheduled ~A daily at ~2,'0D:~2,'0D (next: ~A)"
               name hour minute (format-ut next))
     name))
+
+;;; --- Prompt-task helpers ---
+
+(defun schedule-prompt-every (name interval-seconds prompt &key (start-at nil) replace)
+  "Schedule an agent prompt to run every INTERVAL-SECONDS seconds.
+   The prompt string is persisted so the task survives daemon restarts."
+  (schedule-every name interval-seconds
+                  (lambda () (crichton/agent:run-agent prompt))
+                  :start-at start-at :replace replace
+                  :agent-prompt prompt))
+
+(defun schedule-prompt-daily (name hour minute prompt &key replace)
+  "Schedule an agent prompt to run daily at HOUR:MINUTE (local time).
+   The prompt string is persisted so the task survives daemon restarts."
+  (schedule-daily name hour minute
+                  (lambda () (crichton/agent:run-agent prompt))
+                  :replace replace
+                  :agent-prompt prompt))
+
+(defun schedule-prompt-at (name time prompt &key replace)
+  "Schedule an agent prompt to run once at universal-time TIME.
+   The prompt string is persisted so the task survives daemon restarts."
+  (schedule-at name time
+               (lambda () (crichton/agent:run-agent prompt))
+               :replace replace
+               :agent-prompt prompt))
 
 ;;; --- Public API: management ---
 
@@ -375,6 +410,7 @@
   (list :name (scheduled-task-name task)
         :kind (scheduled-task-kind task)
         :action-name (scheduled-task-action-name task)
+        :agent-prompt (scheduled-task-agent-prompt task)
         :next-fire (format-ut (scheduled-task-next-ut task))
         :next-fire-ut (scheduled-task-next-ut task)
         :running-p (scheduled-task-running-p task)
@@ -456,34 +492,44 @@
         (dolist (plist task-plists)
           (handler-case
               (let* ((action-name (getf plist :action-name))
+                     (agent-prompt (getf plist :agent-prompt))
                      (action (when action-name
-                               (get-schedulable-action action-name))))
-                (if (null action)
+                               (get-schedulable-action action-name)))
+                     (fn (cond
+                           (agent-prompt
+                            (let ((p agent-prompt))
+                              (lambda () (crichton/agent:run-agent p))))
+                           (action (getf action :fn))
+                           (t nil))))
+                (if (null fn)
                     (progn
                       (log:warn "Cannot restore task ~A: action ~A not found"
                                 (getf plist :name) action-name)
                       (incf failed))
-                    (let ((fn (getf action :fn)))
+                    (progn
                       (case (getf plist :kind)
                         (:every
                          (schedule-every (getf plist :name)
                                          (getf plist :interval-seconds)
                                          fn
                                          :replace t
-                                         :action-name action-name))
+                                         :action-name action-name
+                                         :agent-prompt agent-prompt))
                         (:daily
                          (schedule-daily (getf plist :name)
                                          (getf plist :daily-hour)
                                          (getf plist :daily-minute)
                                          fn
                                          :replace t
-                                         :action-name action-name))
+                                         :action-name action-name
+                                         :agent-prompt agent-prompt))
                         (:one-shot
                          (let ((next-ut (getf plist :next-ut)))
                            (if (> next-ut (get-universal-time))
                                (schedule-at (getf plist :name) next-ut fn
                                             :replace t
-                                            :action-name action-name)
+                                            :action-name action-name
+                                            :agent-prompt agent-prompt)
                                (progn
                                  (log:info "Skipping past one-shot task ~A"
                                            (getf plist :name))

@@ -317,21 +317,23 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
 ;;; --- Scheduler tool ---
 
 (define-tool scheduler
-    (:description "Manage the daemon's task scheduler.  Actions: 'status' (overview), 'list' (all tasks), 'actions' (list schedulable actions), 'schedule_every' (recurring task), 'schedule_daily' (daily at specific time), 'schedule_once' (one-shot after delay), 'cancel' (remove a task by name), 'persist' (manually save user tasks to disk), 'list_unrestorable' (show tasks that would be lost on restart due to missing actions).")
+    (:description "Manage the daemon's task scheduler.  Actions: 'status' (overview), 'list' (all tasks), 'actions' (list schedulable actions), 'schedule_every' (recurring built-in action), 'schedule_daily' (daily built-in action), 'schedule_once' (one-shot built-in action), 'schedule_prompt_every' (run an agent prompt on a recurring interval), 'schedule_prompt_daily' (run an agent prompt daily at a set time), 'schedule_prompt_once' (run an agent prompt once after a delay), 'cancel' (remove a task by name), 'persist' (manually save user tasks to disk), 'list_unrestorable' (show tasks that would be lost on restart).")
   ((action "string"
            "The scheduler action to perform."
-           :enum ("status" "list" "actions" "schedule_every" "schedule_daily" "schedule_once" "cancel" "persist" "list_unrestorable")
+           :enum ("status" "list" "actions" "schedule_every" "schedule_daily" "schedule_once" "schedule_prompt_every" "schedule_prompt_daily" "schedule_prompt_once" "cancel" "persist" "list_unrestorable")
            :required-p t)
    (action-name "string"
                 "Name of the schedulable action to run (use 'actions' to list available). Required for schedule_every, schedule_daily, schedule_once.")
+   (prompt "string"
+           "Agent prompt to run on schedule. Required for schedule_prompt_every, schedule_prompt_daily, schedule_prompt_once.")
    (interval-seconds "integer"
-                     "Interval in seconds for schedule_every. Required for schedule_every.")
+                     "Interval in seconds for schedule_every / schedule_prompt_every. Required for those actions.")
    (hour "integer"
-         "Hour (0-23) for schedule_daily. Required for schedule_daily.")
+         "Hour (0-23) for schedule_daily / schedule_prompt_daily. Required for those actions.")
    (minute "integer"
-           "Minute (0-59) for schedule_daily. Required for schedule_daily.")
+           "Minute (0-59) for schedule_daily / schedule_prompt_daily. Required for those actions.")
    (delay-seconds "integer"
-                  "Delay in seconds from now for schedule_once. Required for schedule_once.")
+                  "Delay in seconds from now for schedule_once / schedule_prompt_once. Required for those actions.")
    (name "string"
          "Task name. Auto-generated with 'user:' prefix if omitted."))
   (let ((task-name (or name (when action-name
@@ -355,6 +357,34 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
        (scheduler-schedule-daily action-name hour minute task-name))
       ((string-equal action "schedule_once")
        (scheduler-schedule-once action-name delay-seconds task-name))
+      ((string-equal action "schedule_prompt_every")
+       (unless prompt
+         (return-from handler "Error: 'prompt' is required for schedule_prompt_every."))
+       (unless interval-seconds
+         (return-from handler "Error: 'interval_seconds' is required for schedule_prompt_every."))
+       (let ((task-name (or name (format nil "user:prompt-~A" (crichton/rpc:next-id)))))
+         (crichton/skills:schedule-prompt-every task-name interval-seconds prompt :replace t)
+         (crichton/skills:persist-user-tasks)
+         (format nil "Scheduled prompt task '~A' every ~Ds." task-name interval-seconds)))
+      ((string-equal action "schedule_prompt_daily")
+       (unless prompt
+         (return-from handler "Error: 'prompt' is required for schedule_prompt_daily."))
+       (unless hour
+         (return-from handler "Error: 'hour' is required for schedule_prompt_daily."))
+       (let ((task-name (or name (format nil "user:prompt-~A" (crichton/rpc:next-id))))
+             (min (or minute 0)))
+         (crichton/skills:schedule-prompt-daily task-name hour min prompt :replace t)
+         (crichton/skills:persist-user-tasks)
+         (format nil "Scheduled prompt task '~A' daily at ~2,'0D:~2,'0D." task-name hour min)))
+      ((string-equal action "schedule_prompt_once")
+       (unless prompt
+         (return-from handler "Error: 'prompt' is required for schedule_prompt_once."))
+       (unless delay-seconds
+         (return-from handler "Error: 'delay_seconds' is required for schedule_prompt_once."))
+       (let ((task-name (or name (format nil "user:prompt-~A" (crichton/rpc:next-id)))))
+         (crichton/skills:schedule-prompt-at task-name (+ (get-universal-time) delay-seconds) prompt :replace t)
+         (crichton/skills:persist-user-tasks)
+         (format nil "Scheduled prompt task '~A' to run once in ~Ds." task-name delay-seconds)))
       ((string-equal action "cancel")
        (unless name
          (return-from handler "Error: 'name' is required for cancel."))

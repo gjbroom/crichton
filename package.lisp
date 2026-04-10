@@ -184,6 +184,9 @@
            #:schedule-at
            #:schedule-every
            #:schedule-daily
+           #:schedule-prompt-at
+           #:schedule-prompt-every
+           #:schedule-prompt-daily
            #:cancel-task
            #:list-tasks
            #:scheduler-status
