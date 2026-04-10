@@ -181,10 +181,14 @@
    (lock :initform (bt:make-lock "rate-limiter")
          :reader rate-limiter-lock)))
 
-(defstruct client-bucket
-  "Sliding window rate limit bucket for a single client."
-  (requests nil :type list)  ; List of timestamps
-  (blocked-until 0 :type integer))  ; Universal-time when blocking expires
+(defclass client-bucket ()
+  ((requests :initform nil
+             :accessor client-bucket-requests
+             :type list)
+   (blocked-until :initform 0
+                  :accessor client-bucket-blocked-until
+                  :type integer))
+  (:documentation "Sliding window rate limit bucket for a single client."))
 
 (defmethod check-rate-limit ((limiter rate-limiter) client-id)
   "Check if CLIENT-ID is within rate limits. Returns (values allowed-p retry-after-seconds)."
@@ -193,7 +197,7 @@
            (window-start (- now (rate-limiter-window-seconds limiter)))
            (bucket (or (gethash client-id (rate-limiter-clients limiter))
                        (setf (gethash client-id (rate-limiter-clients limiter))
-                             (make-client-bucket)))))
+                             (make-instance 'client-bucket)))))
       
       ;; Check if client is in penalty box
       (when (> (client-bucket-blocked-until bucket) now)
