@@ -18,11 +18,37 @@ network monitoring, and extending it with IoT sensor data.
 - Greenhouse wireless temperature node — hardware in transit; will publish
   to MQTT when operational
 
-* Deployment Target: Home Rack Pi
+* Pi Assignment
+
+** CM5 → Crichton (primary)
+
+Crichton belongs on the better machine:
+
+- SBCL has a meaningful memory footprint (~200–400MB for runtime + loaded
+  systems); the CM5's extra headroom matters
+- Crichton is the primary interaction point — put the faster CPU under the
+  thing you talk to
+- The CM5's Cortex-A76 cores leave the door open for local model
+  experimentation (Ollama, llama.cpp) if that ever becomes interesting
+- Mosquitto co-located here — the MQTT subscriber channel will be a local
+  socket connection with no network hop
+
+Note: Crichton's "heavy lifting" is entirely remote (Anthropic API).  The
+local daemon is an orchestrator: scheduling, HTTP requests, WASM skill
+execution.  The Pi CPU is mostly idle during a chat response.
+
+** CM4 → Monitoring infrastructure
+
+- Prometheus (scrapes Node Exporters across the rack)
+- Grafana (dashboards over Prometheus)
+- Home Assistant (if adopted — bridges HOOBS, MQTT sensors, etc.)
+
+These services are all lightweight-to-moderate and well-suited to a CM4.
+
+* Deployment Target: Home Rack
 
 Crichton currently runs on the laptop and travels between home and office.
-The goal is to move it (or run a permanent instance) on one of the rack Pis
-so it operates 24/7.
+The goal is a permanent instance on the CM5, operating 24/7.
 
 ** Motivations
 
@@ -33,12 +59,134 @@ so it operates 24/7.
 
 ** Open Work
 
-- Choose which Pi (CM4 or CM5) hosts Crichton
 - Write systemd unit for automatic start on boot
 - Verify SWANK tunnels correctly across the network (port 4005)
-- Store Pushover credentials on the Pi instance
+- Store Pushover credentials on the CM5 instance
 - Test ~ssh -L /path/to/local.sock:/path/to/remote.sock host~ for Emacs
   client access to the remote daemon socket
+
+* Infrastructure Reproducibility
+
+** The Problem with Hand-Rolling
+
+Every hand-rolled machine accumulates undocumented decisions: packages
+installed once and forgotten, config files tweaked by hand, services added
+ad-hoc.  When a machine dies or is replaced, you're guessing what was on it.
+
+The goal is not full enterprise automation — it's /documentation that
+executes/.  The setup procedure should live in a repo, not in memory.
+
+** The Right Tool at This Scale: Ansible
+
+Ansible hits the sweet spot for a small home deployment:
+
+- *No server required* — runs from the laptop over SSH, pushing config to
+  each machine
+- *Playbooks are the documentation* — reading a playbook tells you exactly
+  what is installed, how it is configured, and in what order
+- *Idempotent* — run the same playbook twice, same result; safe to re-run
+  after changes
+- *Shallow learning curve* — basic playbooks are just YAML lists of tasks
+- *Community roles* — Mosquitto, Prometheus, Node Exporter, and most
+  common services have ready-made roles on Ansible Galaxy
+
+What to automate at this scale:
+- Package installation
+- systemd units
+- Config file deployment (templates with variables)
+- User accounts and SSH keys
+- Firewall rules
+
+What NOT to automate (yet):
+- Crichton's runtime state (~/.crichton/) — that's data, not infrastructure
+- Credentials — manage separately (age-encrypted, not in the Ansible repo)
+- Personal dotfiles — separate concern, separate repo
+
+** Ansible Repo Structure (suggested)
+
+#+begin_example
+homelab/
+  inventory.yaml          # hosts: rack-cm5, rack-cm4, laptop, ...
+  group_vars/
+    all.yaml              # common vars (timezone, SSH keys, etc.)
+    rack.yaml             # rack-specific vars
+  host_vars/
+    rack-cm5.yaml         # CM5-specific overrides
+    rack-cm4.yaml         # CM4-specific overrides
+  roles/
+    common/               # baseline every machine gets
+    crichton/             # SBCL, Quicklisp, repo clone, systemd unit
+    mosquitto/            # MQTT broker
+    prometheus/           # Prometheus server + config
+    node-exporter/        # runs on every monitored machine
+    grafana/              # dashboards
+  site.yaml               # top-level playbook: applies roles to hosts
+  rack-cm5.yaml           # playbook: just the CM5
+  rack-cm4.yaml           # playbook: just the CM4
+#+end_example
+
+Running ~ansible-playbook rack-cm5.yaml~ from the laptop rebuilds the CM5
+to its documented state.  The playbook is the runbook.
+
+** The Crichton Role
+
+What the Crichton Ansible role should do:
+
+1. Install SBCL from the Debian/Raspbian package or upstream binary
+2. Install Quicklisp bootstrap
+3. Clone the Crichton repo to ~/devel/crichton (or wherever)
+4. Install the systemd unit file from a template
+5. Enable and start the service
+6. Create ~/.crichton/ with correct permissions (but not populate it —
+   that's runtime data)
+
+What it should NOT do:
+- Write ~/.crichton/config.toml with secrets — handle separately
+- Store the age key — that lives outside the repo
+
+** etckeeper: Cheap Win for Ad-Hoc Changes
+
+Even with Ansible, you will make one-off changes on machines.  etckeeper
+tracks /etc in git automatically on every package install and lets you
+commit manual changes.
+
+#+begin_src shell
+apt install etckeeper   # that's it — sets itself up
+#+end_src
+
+Every package install auto-commits.  Manual edits: ~cd /etc && git commit -am "reason"~.
+When a machine dies, ~git log /etc~ on the backup tells you what diverged
+from the Ansible baseline.
+
+** Alternatives Considered
+
+| Tool      | Verdict                                                      |
+|-----------+--------------------------------------------------------------|
+| NixOS     | True reproducibility, entire system declared in one file,    |
+|           | instant rollback.  Real cost: unusual language (Nix          |
+|           | expressions), steep initial curve, migrating existing        |
+|           | machines is non-trivial.  Worth it at a higher scale or if   |
+|           | you want to commit to learning it — not the pragmatic choice |
+|           | here.                                                        |
+| Docker    | Good for stateless services; awkward for SBCL daemon with    |
+|           | hot-reload via SWANK.  Adds complexity without enough gain.  |
+| Terraform | Cloud/VM IaC.  Not relevant for bare metal Pis.              |
+| Shell     | Better than nothing; not idempotent; hard to maintain.       |
+|           | Use for one-offs, not for system state.                      |
+
+** Recommended Sequencing
+
+1. Create a private ~homelab~ git repo (separate from Crichton)
+2. Write a ~common~ role: timezone, locale, SSH key, ufw basics, etckeeper
+3. Write a ~node-exporter~ role — simple, good first Ansible exercise
+4. Apply to each rack machine as you build them up
+5. Write the ~crichton~ role when you're ready to install on the CM5
+6. Write ~mosquitto~, ~prometheus~, ~grafana~ roles as you add services
+7. Let the repo grow organically — don't try to automate everything upfront
+
+The cost of starting the Ansible repo is an afternoon.  The payoff is that
+every subsequent Pi or VM takes an hour instead of a day, and you always
+know what's on each machine.
 
 * Monitoring Architecture
 
@@ -59,13 +207,13 @@ The division of labour:
 | IoT pub/sub  | Mosquitto (MQTT)       | Subscribe to topics of interest |
 | Alerting     | Crichton + Pushover    | Interpret, decide, notify    |
 
-** Recommended Stack on the Rack Pi
+** Recommended Stack
 
-*** Mosquitto (MQTT broker)
+*** Mosquitto (MQTT broker) — on CM5 with Crichton
 
-The hub everything connects to.  Lightweight, runs fine on a Pi.
-Greenhouse node, any future sensors, and optionally Home Assistant all
-speak to it.
+The hub everything connects to.  Greenhouse node, future sensors, and
+optionally Home Assistant all speak to it.  Co-located with Crichton so
+the subscriber channel is a local connection.
 
 - Install: ~apt install mosquitto mosquitto-clients~
 - Configure: TLS + password auth if exposed beyond localhost
@@ -80,33 +228,30 @@ speak to it.
 One binary on each machine.  No config.  Exposes CPU, memory, disk,
 network over HTTP on port 9100.  Prometheus scrapes it.
 
-- Install: standard Prometheus Node Exporter package or binary
 - Run as a systemd service on each rack machine
-- Firewall: only the Prometheus host needs access to port 9100
+- Firewall: only the Prometheus host (CM4) needs access to port 9100
 
-*** Prometheus (on the rack Pi)
+*** Prometheus — on CM4
 
 Scrapes all Node Exporters on a schedule.  Stores time-series.
-Provides a query API that Crichton can call on demand.
+Provides a query API Crichton can call on demand.
 
 - Prometheus query API: ~GET /api/v1/query?query=<PromQL>~
 - Crichton use case: answer "how's rack2 doing?" without polling
 
-*** Grafana (optional, on the rack Pi)
+*** Grafana — on CM4 (optional)
 
-Dashboards over Prometheus.  Not Crichton's job.  Worth running if you
-want a visual overview — especially useful during initial setup.
+Dashboards over Prometheus.  Not Crichton's job.  Worth running for a
+visual overview, especially useful during initial bringup.
 
-*** Home Assistant (optional but high-leverage)
+*** Home Assistant — on CM4 (optional but high-leverage)
 
-If set up, HA bridges:
-- HOOBS / HomeKit devices
-- MQTT sensors (it subscribes to topics you configure)
-- Many other integrations
+Bridges HOOBS/HomeKit, MQTT sensors, and many other integrations into
+one REST API.  If adopted, a single Crichton HA skill gives access to
+everything HA knows about.
 
-Single REST API gives Crichton access to everything HA knows about.
-One skill, one API key, the whole home.  Highest-leverage single
-addition if you want Crichton to be home-aware.
+- Endpoint: ~GET /api/states/<entity_id>~
+- Auth: long-lived access token stored in Crichton's credential store
 
 ** What Crichton Needs (New Skills / Channels)
 
@@ -115,13 +260,11 @@ addition if you want Crichton to be home-aware.
 Not a poller.  A long-lived connection to Mosquitto that reacts when
 messages arrive on subscribed topics.
 
-Architecture fits the existing channel pattern (Discord is already a
-long-lived inbound connection).  When a message crosses a configured
-threshold or matches a pattern, Crichton evaluates whether to act
-(e.g. send a Pushover notification).
+Fits the existing channel pattern (Discord is already a long-lived
+inbound connection).  When a message crosses a threshold or matches a
+pattern, Crichton evaluates whether to act.
 
-Likely implementation: ~cl-mqtt~ library, daemon-side built-in, similar
-to how ~crichton/channels~ is structured.
+Likely implementation: ~cl-mqtt~ library, daemon-side built-in.
 
 #+begin_example
 (subscribe-mqtt-topic "sensors/greenhouse/temperature"
@@ -131,29 +274,21 @@ to how ~crichton/channels~ is structured.
                                              :priority 1))))
 #+end_example
 
-*** Prometheus Query Skill (rack health)
+*** Prometheus Query Skill (rack health on demand)
 
 Simple HTTP GET to Prometheus query API.  On-demand only — not a
-background poller.  Used when you ask Crichton "how is rack2 doing?"
-
-#+begin_src lisp
-(prometheus-query "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)")
-#+end_src
+background poller.
 
 *** Home Assistant Skill (if HA is deployed)
 
 REST API calls to HA.  Covers HOOBS/HomeKit, MQTT sensors HA has
 subscribed to, temperature readings, lock states, everything HA tracks.
 
-- Endpoint: ~GET /api/states/<entity_id>~
-- Auth: long-lived access token stored in credential store
-
 ** What NOT to Build in Crichton
 
 - Do not poll machines on a timer — Prometheus does that
 - Do not store time-series data — Prometheus/InfluxDB does that
-- Do not subscribe to every MQTT topic — only topics Crichton has been
-  told to care about
+- Do not subscribe to every MQTT topic — only topics Crichton cares about
 - Do not build dashboards — Grafana does that
 
 ** Crichton's Value Add Over Raw Monitoring
@@ -161,37 +296,19 @@ subscribed to, temperature readings, lock states, everything HA tracks.
 Raw monitoring tells you /what/.  Crichton tells you /so what/:
 
 - "The greenhouse has been below 10°C for 45 minutes — sending alert"
-- "rack1 CPU is unusually high compared to the same time last week"
+- "rack1 CPU is unusually high compared to this time last week"
 - "Front door has been unlocked since 9pm" (via HOOBS/HA)
 - "Two rack machines show elevated temperatures — possible airflow issue"
 
-The LLM layer provides context, correlation, and judgment that a
-dashboard cannot.
-
 * Recommended Order of Operations
 
-1. Choose the host Pi (CM4 or CM5) and install Crichton + systemd unit
-2. Install Mosquitto on the Pi; configure the greenhouse node to publish
-3. Add Node Exporter to each rack machine
-4. Install Prometheus on the Pi; configure scrape targets
-5. Install Grafana (optional but useful during bringup)
-6. Decide on Home Assistant — if yes, set it up as the aggregation layer
+1. Create ~homelab~ Ansible repo; write ~common~ and ~node-exporter~ roles
+2. Apply ~node-exporter~ to each rack machine
+3. Install Crichton on CM5 via Ansible role; set up systemd unit
+4. Install Mosquitto on CM5; configure the greenhouse node to publish
+5. Install Prometheus + Grafana on CM4; configure scrape targets
+6. Decide on Home Assistant — if yes, install on CM4
 7. Build the MQTT subscriber channel in Crichton
 8. Build the Prometheus query skill
 9. Build the Home Assistant skill (if applicable)
 10. Wire up Pushover alerts for conditions worth bothering you about
-
-* Pi CM4 vs CM5 Assignment (TBD)
-
-Both are sitting idle.  Possible assignments:
-
-| Pi   | Candidate role                          |
-|------+-----------------------------------------|
-| CM4  | Crichton daemon + Mosquitto + Prometheus |
-| CM5  | Home Assistant (heavier workload)        |
-
-Or consolidate everything on the CM5 (more capable) and keep the CM4 as
-a spare / secondary node.
-
-Decision deferred until greenhouse hardware arrives and the scope of HA
-integration is clearer.
