@@ -819,11 +819,12 @@ Otherwise return the OPML XML as a string."
                  (#\" (write-string "&quot;" s))
                  (otherwise (write-char ch s)))))))
     (let* ((entries
-             (bt:with-lock-held (*rss-monitors-lock*)
-               (let (acc)
-                 (maphash (lambda (name config) (push (cons name config) acc))
-                          *rss-monitors*)
-                 (sort acc #'string< :key #'car))))
+             (sort (bt:with-lock-held (*rss-monitors-lock*)
+                     (let (acc)
+                       (maphash (lambda (name config) (push (cons name config) acc))
+                                *rss-monitors*)
+                       acc))
+                   #'string< :key #'car))
            (xml
              (with-output-to-string (s)
                (format s "<?xml version=\"1.0\" encoding=\"UTF-8\"?>~%")

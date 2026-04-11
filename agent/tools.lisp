@@ -449,9 +449,9 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
    (url "string"
         "The RSS/Atom feed URL. Required for fetch, check, monitor_start.")
    (file-path "string"
-              "Absolute path to an OPML file on disk.  Required for opml_import.")
+              "Absolute path to an OPML file on disk.  Required for opml_import; optional for opml_export (omit to get XML as a string).")
    (name "string"
-         "Feed name for writing actions (publish_item, configure_feed, get_feed_xml, etc.), or monitor name for monitor_start/monitor_stop.  For monitors, conventionally 'rss:something'.")
+         "Feed name for writing actions (publish_item, configure_feed, get_feed_xml, etc.), or monitor name for monitor_start/monitor_stop, or OPML title for opml_export.  For monitors, conventionally 'rss:something'.")
    (interval-seconds "integer"
                      "Polling interval in seconds for monitor_start. Default: 3600 (1 hour)."
                      :default 3600)
@@ -503,7 +503,7 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
          (handler-case
              (crichton/skills:opml-import-monitors
               file-path
-              :interval-seconds (or interval-seconds 3600))
+              :interval-seconds interval-seconds)
            (error (c)
              (format nil "OPML import failed: ~A" c)))))
     ((string-equal action "opml_export")
