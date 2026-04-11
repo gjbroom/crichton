@@ -545,6 +545,59 @@
                           (string-equal "rss:" name :end2 4))))
                  (list-tasks)))
 
+;;; --- OPML import ---
+
+(defun opml-collect-feeds (node &optional category)
+  "Recursively collect feed entries from OPML outline NODE.
+Returns a list of plists (:name :url :category) for all outlines
+that carry an xmlUrl attribute, regardless of type."
+  (let ((children (xml-find-children "outline" node)))
+    (loop for child in children
+          for xml-url = (xml-attr "xmlUrl" child)
+          for text    = (or (xml-attr "text"  child)
+                            (xml-attr "title" child)
+                            "")
+          nconc
+          (if xml-url
+              (list (list :name text :url xml-url :category category))
+              ;; No xmlUrl — treat as a category folder; recurse
+              (opml-collect-feeds child (if (plusp (length text)) text category))))))
+
+(defun opml-import-monitors (file-path &key (interval-seconds 3600)
+                                             (name-prefix "rss:"))
+  "Parse the OPML file at FILE-PATH and register every feed as an RSS monitor.
+INTERVAL-SECONDS sets the polling interval for all feeds (default: 3600).
+NAME-PREFIX is prepended to each feed's text attribute to form the task name.
+Returns a human-readable summary string."
+  (unless (probe-file file-path)
+    (error "OPML file not found: ~A" file-path))
+  (let* ((content (uiop:read-file-string file-path))
+         (root    (xmls:parse content)))
+    (unless (string-equal (xml-tag-name root) "opml")
+      (error "Not an OPML file (root element: ~A)" (xml-tag-name root)))
+    (let* ((body   (xml-find-child "body" root))
+           (feeds  (when body (opml-collect-feeds body)))
+           (ok     0)
+           (errs   nil))
+      (dolist (feed feeds)
+        (let* ((url  (getf feed :url))
+               (text (getf feed :name))
+               (task-name (format nil "~A~A" name-prefix
+                                  (if (plusp (length text)) text url))))
+          (handler-case
+              (progn
+                (rss-monitor-start task-name url interval-seconds)
+                (incf ok))
+            (error (c)
+              (push (format nil "~A: ~A" text c) errs)))))
+      (with-output-to-string (s)
+        (format s "OPML import: ~D of ~D feed~:P registered~%"
+                ok (length feeds))
+        (when errs
+          (format s "~D error~:P:~%" (length errs))
+          (dolist (e (nreverse errs))
+            (format s "  ~A~%" e)))))))
+
 ;;; --- Feed writing/generation ---
 
 (defconstant +rss-pub-namespace+

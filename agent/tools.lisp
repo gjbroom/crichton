@@ -436,16 +436,20 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
 (define-tool rss
     (:description "Fetch, check, and monitor RSS/Atom feeds; or write/publish your own RSS feeds.
 Reading: 'fetch' reads all items from a URL, 'check' returns only new items since last check, 'monitor_start' starts periodic polling, 'monitor_stop' stops a monitor, 'list_monitors' shows active monitors.
+Bulk import: 'opml_import' parses an OPML file and registers all feeds as monitors in a single call — use this instead of looping monitor_start.
 Writing: 'publish_item' adds an item to a named feed (creating it implicitly), 'configure_feed' sets feed metadata (title/description/link/max-items), 'get_feed_xml' returns the RSS 2.0 XML for serving, 'list_feed_items' shows the current item list, 'list_feeds' shows all feeds, 'clear_feed' removes all items (keeps config), 'delete_feed' removes feed entirely.
 Monitors can filter items by keywords via the rss-filter WASM skill.  Published feeds persist across restarts via encrypted storage.")
   ((action "string"
-           "The RSS action: fetch, check, monitor_start, monitor_stop, list_monitors, publish_item, configure_feed, get_feed_xml, list_feed_items, list_feeds, clear_feed, delete_feed."
+           "The RSS action: fetch, check, monitor_start, monitor_stop, list_monitors, opml_import, publish_item, configure_feed, get_feed_xml, list_feed_items, list_feeds, clear_feed, delete_feed."
            :enum ("fetch" "check" "monitor_start" "monitor_stop" "list_monitors"
+                  "opml_import"
                   "publish_item" "configure_feed" "get_feed_xml"
                   "list_feed_items" "list_feeds" "clear_feed" "delete_feed")
            :required-p t)
    (url "string"
         "The RSS/Atom feed URL. Required for fetch, check, monitor_start.")
+   (file-path "string"
+              "Absolute path to an OPML file on disk.  Required for opml_import.")
    (name "string"
          "Feed name for writing actions (publish_item, configure_feed, get_feed_xml, etc.), or monitor name for monitor_start/monitor_stop.  For monitors, conventionally 'rss:something'.")
    (interval-seconds "integer"
@@ -493,6 +497,15 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
                                               :search-fields sf-list)
            (format nil "Monitor started: ~A (every ~Ds~@[, filtering for: ~{~A~^, ~}~])"
                    task-name interval-seconds kw-list))))
+    ((string-equal action "opml_import")
+     (if (null file-path)
+         "Error: 'file_path' is required for opml_import"
+         (handler-case
+             (crichton/skills:opml-import-monitors
+              file-path
+              :interval-seconds (or interval-seconds 3600))
+           (error (c)
+             (format nil "OPML import failed: ~A" c)))))
     ((string-equal action "monitor_stop")
      (let ((task-name (or name "?")))
        (if (crichton/skills:rss-monitor-stop task-name)
