@@ -621,10 +621,14 @@ Returns a human-readable summary string."
                 (rss-monitor-start task-name url interval
                                    :keywords keywords
                                    :match-mode match-mode
-                                   :search-fields search-fields)
+                                   :search-fields search-fields
+                                   :persist nil)
                 (incf ok))
             (error (c)
               (push (format nil "~A: ~A" text c) errs)))))
+      ;; Single persist after all monitors registered, not one per feed
+      (when (plusp ok)
+        (persist-rss-monitors))
       (with-output-to-string (s)
         (format s "OPML import: ~D of ~D feed~:P registered~%"
                 ok (length feeds))
