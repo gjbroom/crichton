@@ -1,0 +1,2 @@
+{"id":"int-b16f149a","kind":"field_change","created_at":"2026-04-11T05:38:53.30447739Z","actor":"Gordon J. Broom","issue_id":"cricht-u7n","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"TUI superseded by Emacs integration"}}
+{"id":"int-ee804fa8","kind":"field_change","created_at":"2026-04-11T05:38:53.424532745Z","actor":"Gordon J. Broom","issue_id":"cricht-6ag","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"TUI superseded by Emacs integration"}}
