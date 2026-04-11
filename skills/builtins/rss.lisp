@@ -547,10 +547,20 @@
 
 ;;; --- OPML import ---
 
+(defun split-commas (s)
+  "Split string S on commas, trimming whitespace, dropping empty parts."
+  (loop for start = 0 then (1+ end)
+        for end   = (position #\, s :start start)
+        for part  = (string-trim " " (subseq s start (or end (length s))))
+        when (plusp (length part)) collect part
+        while end))
+
 (defun opml-collect-feeds (node &optional category)
   "Recursively collect feed entries from OPML outline NODE.
-Returns a list of plists (:name :url :category) for all outlines
-that carry an xmlUrl attribute, regardless of type."
+Returns a list of plists for all outlines that carry an xmlUrl attribute.
+Keys: :name :url :category :interval :keywords :match-mode :search-fields.
+Crichton-specific attributes (pollIntervalSeconds, crichtonKeywords, etc.)
+are read back transparently to support round-trip import."
   (let ((children (xml-find-children "outline" node)))
     (loop for child in children
           for xml-url = (xml-attr "xmlUrl" child)
@@ -559,15 +569,33 @@ that carry an xmlUrl attribute, regardless of type."
                             "")
           nconc
           (if xml-url
-              (list (list :name text :url xml-url :category category))
+              (let* ((interval-str  (xml-attr "pollIntervalSeconds" child))
+                     (keywords-str  (xml-attr "crichtonKeywords"    child))
+                     (match-mode    (xml-attr "crichtonMatchMode"    child))
+                     (fields-str    (xml-attr "crichtonSearchFields" child)))
+                (list (list :name         text
+                            :url          xml-url
+                            :category     category
+                            :interval     (when interval-str
+                                            (ignore-errors (parse-integer interval-str)))
+                            :keywords     (when (and keywords-str
+                                                     (plusp (length keywords-str)))
+                                            (split-commas keywords-str))
+                            :match-mode   match-mode
+                            :search-fields (when (and fields-str
+                                                       (plusp (length fields-str)))
+                                             (split-commas fields-str)))))
               ;; No xmlUrl — treat as a category folder; recurse
               (opml-collect-feeds child (if (plusp (length text)) text category))))))
 
 (defun opml-import-monitors (file-path &key (interval-seconds 3600)
                                              (name-prefix "rss:"))
   "Parse the OPML file at FILE-PATH and register every feed as an RSS monitor.
-INTERVAL-SECONDS sets the polling interval for all feeds (default: 3600).
-NAME-PREFIX is prepended to each feed's text attribute to form the task name.
+INTERVAL-SECONDS is the fallback polling interval when not encoded in the file.
+NAME-PREFIX is prepended to each feed's text attribute when no monitor name is
+stored in the file (i.e. feeds imported from a third-party OPML).
+Crichton-exported OPML files carry pollIntervalSeconds, crichtonKeywords, etc.
+as custom attributes; these are restored transparently for full round-tripping.
 Returns a human-readable summary string."
   (unless (probe-file file-path)
     (error "OPML file not found: ~A" file-path))
@@ -580,13 +608,20 @@ Returns a human-readable summary string."
            (ok     0)
            (errs   nil))
       (dolist (feed feeds)
-        (let* ((url  (getf feed :url))
-               (text (getf feed :name))
+        (let* ((url       (getf feed :url))
+               (text      (getf feed :name))
+               (interval  (or (getf feed :interval) interval-seconds))
+               (keywords  (getf feed :keywords))
+               (match-mode   (getf feed :match-mode))
+               (search-fields (getf feed :search-fields))
                (task-name (format nil "~A~A" name-prefix
                                   (if (plusp (length text)) text url))))
           (handler-case
               (progn
-                (rss-monitor-start task-name url interval-seconds)
+                (rss-monitor-start task-name url interval
+                                   :keywords keywords
+                                   :match-mode match-mode
+                                   :search-fields search-fields)
                 (incf ok))
             (error (c)
               (push (format nil "~A: ~A" text c) errs)))))
@@ -796,15 +831,31 @@ Otherwise return the OPML XML as a string."
                (format s "  </head>~%")
                (format s "  <body>~%")
                (dolist (entry entries)
-                 (let* ((name   (car entry))
-                        (config (cdr entry))
-                        (url    (getf config :url))
-                        (text   (if (and (>= (length name) 4)
-                                         (string-equal "rss:" name :end2 4))
-                                    (subseq name 4)
-                                    name)))
-                   (format s "    <outline type=\"rss\" text=\"~A\" xmlUrl=\"~A\"/>~%"
-                           (attr-escape text) (attr-escape url))))
+                 (let* ((name     (car entry))
+                        (config   (cdr entry))
+                        (url      (getf config :url))
+                        (interval (getf config :interval-seconds))
+                        (keywords (getf config :keywords))
+                        (match-mode    (getf config :match-mode))
+                        (search-fields (getf config :search-fields))
+                        (text    (if (and (>= (length name) 4)
+                                          (string-equal "rss:" name :end2 4))
+                                     (subseq name 4)
+                                     name)))
+                   (format s "    <outline type=\"rss\" text=\"~A\" xmlUrl=\"~A\"~
+                                  ~@[ pollIntervalSeconds=\"~D\"~]~
+                                  ~@[ crichtonKeywords=\"~A\"~]~
+                                  ~@[ crichtonMatchMode=\"~A\"~]~
+                                  ~@[ crichtonSearchFields=\"~A\"~]~
+                                  />~%"
+                           (attr-escape text)
+                           (attr-escape url)
+                           interval
+                           (when keywords
+                             (attr-escape (format nil "~{~A~^,~}" keywords)))
+                           (when match-mode (attr-escape match-mode))
+                           (when search-fields
+                             (attr-escape (format nil "~{~A~^,~}" search-fields))))))
                (format s "  </body>~%")
                (format s "</opml>~%"))))
       (if file-path
