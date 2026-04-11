@@ -62,6 +62,7 @@ signing. Informed by a security audit of OpenClaw."
                                             (:file "log-inspector")
                                             (:file "amp-orchestrator")
                                             (:file "raindrop")
+                                            (:file "books")
                                             (:file "orgmode")
                                             (:file "pushover")
                                             (:file "github")

@@ -251,9 +251,13 @@
                   :tool-choice tool-choice))
            (json-body (shasht:write-json body nil))
            (url (format nil "~A/v1/messages" (anthropic-api-base provider))))
-      (log:info "Anthropic request: model=~A max_tokens=~A"
+      (log:info "Anthropic request: model=~A max_tokens=~A body=~Dchars sys=~Dchars tools=~D msgs=~D"
                 (provider-model provider)
-                (or max-tokens *anthropic-default-max-tokens*))
+                (or max-tokens *anthropic-default-max-tokens*)
+                (length json-body)
+                (length (or extracted-system ""))
+                (length (or tools #()))
+                (length final-messages))
       (with-rate-limit-retry
         (multiple-value-bind (response-body status)
             (handler-case
@@ -566,9 +570,21 @@
                   :tool-choice tool-choice
                   :stream t))
            (json-body (shasht:write-json body nil)))
-      (log:info "Anthropic streaming request: model=~A max_tokens=~A"
-                (provider-model provider)
-                (or max-tokens *anthropic-default-max-tokens*))
+      (let ((tools-json-size (if tools
+                                  (length (shasht:write-json
+                                           (coerce (mapcar #'tool-def-to-anthropic tools) 'vector)
+                                           nil))
+                                  0))
+            (msgs-json-size (length (shasht:write-json
+                                     (coerce (messages-to-anthropic final-messages) 'vector)
+                                     nil))))
+        (log:info "Anthropic streaming request: model=~A max_tokens=~A body=~Dchars sys=~Dchars tools=~Dchars(~D) msgs=~Dchars(~D)"
+                  (provider-model provider)
+                  (or max-tokens *anthropic-default-max-tokens*)
+                  (length json-body)
+                  (length (or extracted-system ""))
+                  tools-json-size (length (or tools '()))
+                  msgs-json-size (length final-messages)))
       (with-rate-limit-retry
         (let ((response-stream (anthropic-streaming-post provider json-body))
               (state (make-instance 'stream-state)))

@@ -190,7 +190,8 @@ Returns the correlation ID."
     (unless (file-exists-p crichton-socket-path)
       (user-error "Daemon socket not found at %s — is the daemon running?"
                   crichton-socket-path))
-    (setq crichton--input-buffer "")
+    (setq crichton--input-buffer ""
+          crichton--session-id nil)
     (condition-case err
         (progn
           (setq crichton--process
@@ -214,12 +215,28 @@ Returns the correlation ID."
        (user-error "Cannot connect to Crichton: %s" (error-message-string err))))))
 
 (defun crichton-disconnect ()
-  "Disconnect from the Crichton daemon."
+  "Disconnect from the Crichton daemon.  Clears the session ID so the next
+connection starts a fresh session.  Use `crichton-reconnect' if you want to
+resume the existing session after reconnecting."
   (interactive)
   (when crichton--process
     (delete-process crichton--process)
-    (setq crichton--process nil)
-    (message "Disconnected from Crichton daemon")))
+    (setq crichton--process nil))
+  (setq crichton--session-id nil)
+  (message "Disconnected from Crichton daemon"))
+
+(defun crichton-reconnect ()
+  "Reconnect to the daemon while preserving the current session ID.
+Use this after a daemon restart when you want to resume the same conversation."
+  (interactive)
+  (let ((saved-session crichton--session-id))
+    (when crichton--process
+      (delete-process crichton--process)
+      (setq crichton--process nil))
+    (crichton-connect)
+    (setq crichton--session-id saved-session)
+    (when saved-session
+      (message "Reconnected; resuming session %s" saved-session))))
 
 (defun crichton-connected-p ()
   "Return non-nil if connected to the daemon."

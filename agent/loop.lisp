@@ -20,12 +20,69 @@ When reporting tool results, summarize the key information clearly."
 (defparameter *default-max-tokens* 4096
   "Default max tokens for agent LLM calls.")
 
+(defparameter *max-tool-result-chars* 100000
+  "Maximum characters to store for a single tool result in message history.
+   Larger results are truncated before being stored, preventing them from
+   accumulating and eventually overflowing the context window on replay.")
+
+(defparameter *default-max-history-chars* 300000
+  "Default character budget for message history before truncation.
+   Older user/assistant pairs are dropped when this is exceeded.
+   300K chars leaves comfortable headroom under the 200K-token context window
+   after accounting for system prompt and tool schemas.")
+
 ;;; --- Helpers ---
+
+(defun estimate-content-chars (content)
+  "Rough character count for message content (string or block list)."
+  (cond
+    ((stringp content) (length content))
+    ((listp content)
+     (loop for block in content
+           sum (let ((type (getf block :type)))
+                 (case type
+                   (:text    (length (or (getf block :text) "")))
+                   (:tool-result (length (format nil "~A" (or (getf block :content) ""))))
+                   (:tool-use    (length (format nil "~A" (or (getf block :input) ""))))
+                   (otherwise 64)))))
+    (t 0)))
+
+(defun truncate-history (msgs &optional (max-chars *default-max-history-chars*))
+  "Drop oldest user/assistant pairs from MSGS until total chars are under MAX-CHARS.
+   Drops in pairs so the history always starts with a user message.
+   Will drop all messages if necessary — there is no guaranteed minimum."
+  (when (null msgs)
+    (return-from truncate-history msgs))
+  (let ((total (loop for m in msgs
+                     sum (estimate-content-chars (getf m :content)))))
+    (when (> total max-chars)
+      (log:info "History truncation: ~D chars across ~D messages, budget ~D"
+                total (length msgs) max-chars))
+    (loop while (and msgs (> total max-chars))
+          do (decf total (estimate-content-chars (getf (first msgs) :content)))
+             (setf msgs (rest msgs))
+             ;; Drop in pairs to keep history starting on a user message
+             (when msgs
+               (decf total (estimate-content-chars (getf (first msgs) :content)))
+               (setf msgs (rest msgs))))
+    msgs))
 
 (defun truncate-for-log (text &optional (limit 200))
   "Return at most LIMIT characters of TEXT for log output."
   (let ((s (or text "")))
     (subseq s 0 (min limit (length s)))))
+
+(defun cap-tool-result (result name)
+  "Truncate RESULT to *max-tool-result-chars* if necessary, appending a notice."
+  (if (> (length result) *max-tool-result-chars*)
+      (let ((notice (format nil "~%[Result truncated at ~D chars — ~A returned ~D total]"
+                            *max-tool-result-chars* name (length result))))
+        (log:info "Tool ~A result truncated: ~D → ~D chars"
+                  name (length result) *max-tool-result-chars*)
+        (concatenate 'string
+                     (subseq result 0 (- *max-tool-result-chars* (length notice)))
+                     notice))
+      result))
 
 (defun execute-tool-calls (content)
   "Dispatch all tool-use blocks in CONTENT, return tool-result blocks."
@@ -34,7 +91,9 @@ When reporting tool results, summarize the key information clearly."
               (mapcar (lambda (tu) (getf tu :name)) tool-uses))
     (mapcar (lambda (tu)
               (let* ((name   (getf tu :name))
-                     (result (dispatch-tool name (getf tu :input))))
+                     (result (cap-tool-result
+                              (dispatch-tool name (getf tu :input))
+                              name)))
                 (log:debug "Tool ~A result: ~A..." name
                            (truncate-for-log result))
                 (crichton/llm:make-tool-result-block (getf tu :id) result)))
@@ -129,7 +188,8 @@ MAX-ITERATIONS prevents runaway tool loops."
          (system   (resolve-system-prompt system session-type))
          (tools    (resolve-tools-for-session tools session-type))
          (safe-input (sanitize-input-for-session user-input session-type))
-         (msgs     (initialize-messages safe-input messages)))
+         (trimmed  (truncate-history messages))
+         (msgs     (initialize-messages safe-input trimmed)))
     (log:info "Agent start [~A]: ~A" session-type (truncate-for-log user-input))
     (run-agent-loop
      msgs
@@ -152,7 +212,8 @@ Returns (values response-text all-messages last-response), same as run-agent."
          (system   (resolve-system-prompt system session-type))
          (tools    (resolve-tools-for-session tools session-type))
          (safe-input (sanitize-input-for-session user-input session-type))
-         (msgs     (initialize-messages safe-input messages)))
+         (trimmed  (truncate-history messages))
+         (msgs     (initialize-messages safe-input trimmed)))
     (log:info "Agent/stream start [~A]: ~A" session-type (truncate-for-log user-input))
     (run-agent-loop
      msgs

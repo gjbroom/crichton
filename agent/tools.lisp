@@ -1055,13 +1055,15 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
 ;;; --- Org-mode tool ---
 
 (define-tool orgmode
-    (:description "Read, search, create, and manage org-mode files and org-roam notes.  LOCAL-ONLY: requires [orgmode] config.  Actions: 'read' (parse a file), 'search' (find notes by title/tag), 'list_tags' (org-roam tags), 'backlinks' (graph links), 'create_note' (new org-roam note), 'append' (add text to a file), 'list_files' (enumerate org files), 'list_todos' (query TODO items), 'set_todo' (change TODO state), 'set_filetags' (replace file-level tags), 'status' (skill config).")
+    (:description "Read, search, create, and manage org-mode files and org-roam notes.  LOCAL-ONLY: requires [orgmode] config.  Actions: 'read' (parse an org file), 'read_file' (read any file as raw text), 'search' (find notes by title/tag), 'list_tags' (org-roam tags), 'backlinks' (graph links), 'create_note' (new org-roam note), 'append' (add text to a file), 'list_files' (enumerate org files), 'list_todos' (query TODO items), 'set_todo' (change TODO state), 'set_filetags' (replace file-level tags), 'status' (skill config).")
   ((action "string"
            "The orgmode action to perform."
-           :enum ("read" "search" "list_tags" "backlinks" "create_note" "append" "list_files" "list_todos" "set_todo" "set_filetags" "status")
+           :enum ("read" "read_file" "search" "list_tags" "backlinks" "create_note" "append" "list_files" "list_todos" "set_todo" "set_filetags" "status")
            :required-p t)
    (path "string"
-         "File path or org-roam node ID (UUID).  Required for read, backlinks, append, set_todo.")
+         "File path or org-roam node ID (UUID).  Required for read, read_file, backlinks, append, set_todo.")
+   (max-chars "integer"
+              "Maximum characters to return for read_file.  Default: 50000.")
    (query "string"
           "Search query string.  Required for search.")
    (tag "string"
@@ -1101,6 +1103,10 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
          (unless path
            (return-from handler "Error: 'path' is required for read."))
          (format nil "~S" (crichton/skills:orgmode-read path :include-raw include-raw)))
+        ((string-equal action "read_file")
+         (unless path
+           (return-from handler "Error: 'path' is required for read_file."))
+         (crichton/skills:orgmode-read-file path :max-chars (or max-chars 50000)))
         ((string-equal action "search")
          (unless query
            (return-from handler "Error: 'query' is required for search."))
@@ -1157,6 +1163,68 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
         (t (format nil "Unknown orgmode action: ~A" action)))
     (error (c)
       (format nil "Orgmode error: ~A" c))))
+
+;;; --- Books tool ---
+
+(define-tool books
+    (:description "Query the LibraryThing book database.  LOCAL-ONLY: requires [books] config and a database built by scripts/lt_import.py.  Actions: 'search' (full-text over title/author), 'by_tag' (books with a tag), 'by_author' (books by author), 'by_collection' (books in a LT collection), 'by_series' (books in a named series), 'get' (full detail for one book), 'tags' (all tags with counts), 'collections' (all collections with counts), 'series' (all series with counts), 'status' (skill config).")
+  ((action "string"
+           "The books action to perform."
+           :enum ("search" "by_tag" "by_author" "by_collection" "by_series"
+                  "get" "tags" "collections" "series" "status")
+           :required-p t)
+   (query "string"
+          "Full-text search query.  Required for 'search'.")
+   (tag "string"
+        "Tag name.  Required for 'by_tag'.")
+   (author "string"
+           "Author name (partial match).  Required for 'by_author'.")
+   (collection "string"
+               "Collection name.  Required for 'by_collection'.")
+   (series "string"
+           "Series name (partial match).  Required for 'by_series'.")
+   (title "string"
+          "Book title or numeric ID.  Required for 'get'.")
+   (limit "integer"
+          "Maximum results to return."
+          :default 50))
+  (handler-case
+      (cond
+        ((string-equal action "status")
+         (format nil "~S" (crichton/skills:books-status)))
+        ((string-equal action "search")
+         (unless query
+           (return-from handler "Error: 'query' is required for search."))
+         (crichton/skills:books-search query :limit (or limit 20)))
+        ((string-equal action "by_tag")
+         (unless tag
+           (return-from handler "Error: 'tag' is required for by_tag."))
+         (crichton/skills:books-by-tag tag :limit (or limit 50)))
+        ((string-equal action "by_author")
+         (unless author
+           (return-from handler "Error: 'author' is required for by_author."))
+         (crichton/skills:books-by-author author :limit (or limit 50)))
+        ((string-equal action "by_collection")
+         (unless collection
+           (return-from handler "Error: 'collection' is required for by_collection."))
+         (crichton/skills:books-by-collection collection :limit (or limit 100)))
+        ((string-equal action "by_series")
+         (unless series
+           (return-from handler "Error: 'series' is required for by_series."))
+         (crichton/skills:books-by-series series :limit (or limit 50)))
+        ((string-equal action "get")
+         (unless title
+           (return-from handler "Error: 'title' is required for get."))
+         (crichton/skills:books-get title))
+        ((string-equal action "tags")
+         (crichton/skills:books-list-tags :limit (or limit 200)))
+        ((string-equal action "collections")
+         (crichton/skills:books-list-collections))
+        ((string-equal action "series")
+         (crichton/skills:books-list-series :limit (or limit 200)))
+        (t (format nil "Unknown books action: ~A" action)))
+    (error (c)
+      (format nil "Books error: ~A" c))))
 
 ;;; --- Pushover notification tool ---
 
@@ -1451,6 +1519,7 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
   (register-memory-write-tool)
   (register-memory-search-tool)
   (register-raindrop-tool)
+  (register-books-tool)
   (register-orgmode-tool)
   (register-pushover-tool)
   (register-github-tool)

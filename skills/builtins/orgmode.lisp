@@ -989,6 +989,16 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
         (incf count)))
     (nreverse results)))
 
+(defun orgmode-read-file (path &key (max-chars 50000))
+  "Read a non-org file as raw text, subject to the same path allowlist.
+   MAX-CHARS: return only the first MAX-CHARS characters (default: 50000).
+   Returns the file contents as a string."
+  (let* ((canonical (om-validate-path path))
+         (content (uiop:read-file-string canonical)))
+    (if (> (length content) max-chars)
+        (subseq content 0 max-chars)
+        content)))
+
 (defun orgmode-status ()
   "Return orgmode skill status as a plist."
   (list :enabled (orgmode-enabled-p)

@@ -316,10 +316,24 @@
            #:raindrop-find-report
            #:raindrop-collections-report
            #:raindrop-tags-report
+           ;; books
+           #:books-enabled-p
+           #:books-db-path
+           #:books-search
+           #:books-by-tag
+           #:books-by-author
+           #:books-by-collection
+           #:books-by-series
+           #:books-get
+           #:books-list-tags
+           #:books-list-collections
+           #:books-list-series
+           #:books-status
            ;; orgmode
            #:orgmode-enabled-p
            #:orgmode-status
            #:orgmode-read
+           #:orgmode-read-file
            #:orgmode-search
            #:orgmode-list-tags
            #:orgmode-backlinks

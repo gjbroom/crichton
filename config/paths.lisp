@@ -25,7 +25,6 @@
                     (agent-path "sessions")
                     (agent-path "skills")
                     (agent-path "trusted-keys")
-                    (agent-path "config")
                     (agent-path "state"))))
     (dolist (dir dirs)
       (ensure-directories-exist dir)
