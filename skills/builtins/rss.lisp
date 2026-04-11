@@ -762,3 +762,57 @@ Returns a human-readable summary string."
          (prefix "feed-config:"))
     (sort (mapcar (lambda (k) (subseq k (length prefix))) keys)
           #'string<)))
+
+;;; --- OPML export ---
+
+(defun opml-export-monitors (&key file-path (title "RSS Feeds"))
+  "Generate an OPML 2.0 document from all registered RSS monitors.
+If FILE-PATH is given, write to that file and return a summary string.
+Otherwise return the OPML XML as a string."
+  (flet ((attr-escape (text)
+           ;; xml-escape handles &/</>; also escape \" for attribute values
+           (with-output-to-string (s)
+             (loop for ch across (or text "") do
+               (case ch
+                 (#\& (write-string "&amp;" s))
+                 (#\< (write-string "&lt;" s))
+                 (#\> (write-string "&gt;" s))
+                 (#\" (write-string "&quot;" s))
+                 (otherwise (write-char ch s)))))))
+    (let* ((entries
+             (bt:with-lock-held (*rss-monitors-lock*)
+               (let (acc)
+                 (maphash (lambda (name config) (push (cons name config) acc))
+                          *rss-monitors*)
+                 (sort acc #'string< :key #'car))))
+           (xml
+             (with-output-to-string (s)
+               (format s "<?xml version=\"1.0\" encoding=\"UTF-8\"?>~%")
+               (format s "<opml version=\"2.0\">~%")
+               (format s "  <head>~%")
+               (format s "    <title>~A</title>~%" (xml-escape title))
+               (format s "    <dateCreated>~A</dateCreated>~%"
+                       (format-rfc822-date (get-universal-time)))
+               (format s "  </head>~%")
+               (format s "  <body>~%")
+               (dolist (entry entries)
+                 (let* ((name   (car entry))
+                        (config (cdr entry))
+                        (url    (getf config :url))
+                        (text   (if (and (>= (length name) 4)
+                                         (string-equal "rss:" name :end2 4))
+                                    (subseq name 4)
+                                    name)))
+                   (format s "    <outline type=\"rss\" text=\"~A\" xmlUrl=\"~A\"/>~%"
+                           (attr-escape text) (attr-escape url))))
+               (format s "  </body>~%")
+               (format s "</opml>~%"))))
+      (if file-path
+          (progn
+            (with-open-file (f file-path :direction :output
+                                          :if-exists :supersede
+                                          :if-does-not-exist :create)
+              (write-string xml f))
+            (format nil "OPML written to ~A (~D monitor~:P)"
+                    file-path (length entries)))
+          xml))))

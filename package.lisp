@@ -219,6 +219,7 @@
            #:rss-monitor-stop
            #:rss-list-monitors
            #:opml-import-monitors
+           #:opml-export-monitors
            #:restore-rss-monitors
            #:run-rss-filter
            #:clear-seen
