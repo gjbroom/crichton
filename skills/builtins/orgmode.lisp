@@ -592,22 +592,42 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
      (sqlite:with-open-database (,db-var db-path)
        ,@body)))
 
+(defun om-unquote-string (s)
+  "Strip the surrounding double-quotes that org-roam's emacsql layer adds to all
+   string values.  E.g. '\"programming\"' → 'programming'.  Non-strings and
+   strings that do not start and end with '\"' are returned unchanged."
+  (if (and (stringp s)
+           (>= (length s) 2)
+           (char= (char s 0) #\")
+           (char= (char s (1- (length s))) #\"))
+      (subseq s 1 (1- (length s)))
+      s))
+
+(defun om-db-string (s)
+  "Wrap S in double-quotes for exact-match binding against the org-roam database.
+   All string values are stored by emacsql with surrounding double-quotes, so
+   exact comparisons (=, IN) must match that encoding."
+  (format nil "\"~A\"" s))
+
 (defun om-filter-by-allowed-paths (rows &key (file-key "file"))
   "Filter a list of row plists, keeping only those whose FILE-KEY value
-   is under an allowed path."
+   is under an allowed path.  Values are expected to be already unquoted."
   (remove-if-not (lambda (row)
                    (let ((file (getf row (intern (string-upcase file-key) :keyword))))
                      (and file (orgmode-path-allowed-p file))))
                  rows))
 
 (defun om-sql-rows-to-plists (stmt column-names)
-  "Read all rows from a sqlite statement, returning a list of plists."
+  "Read all rows from a sqlite statement, returning a list of plists.
+   String values are unquoted via OM-UNQUOTE-STRING to strip the surrounding
+   double-quotes that org-roam's emacsql layer adds to every string."
   (let (result)
     (loop for row = (sqlite:step-statement stmt)
           while row
           do (let (plist)
                (loop for i from (1- (length column-names)) downto 0
-                     do (push (sqlite:statement-column-value stmt i) plist)
+                     do (let ((v (sqlite:statement-column-value stmt i)))
+                          (push (if (stringp v) (om-unquote-string v) v) plist))
                      do (push (intern (string-upcase
                                        (substitute #\- #\_ (nth i column-names)))
                                       :keyword)
@@ -636,7 +656,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                (sqlite:bind-parameter stmt 1 (format nil "%~A%" query))
                (if tag
                    (progn
-                     (sqlite:bind-parameter stmt 2 tag)
+                     (sqlite:bind-parameter stmt 2 (om-db-string tag))
                      (sqlite:bind-parameter stmt 3 limit))
                    (sqlite:bind-parameter stmt 2 limit))
                (om-filter-by-allowed-paths
@@ -650,12 +670,12 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
     (let* ((sql "SELECT DISTINCT n.id, n.file, n.title, n.level
                  FROM links l
                  JOIN nodes n ON n.id = l.source
-                 WHERE l.dest = ? AND l.type = 'id'
+                 WHERE l.dest = ? AND l.type = '\"id\"'
                  LIMIT ?")
            (stmt (sqlite:prepare-statement db sql)))
       (unwind-protect
            (progn
-             (sqlite:bind-parameter stmt 1 node-id)
+             (sqlite:bind-parameter stmt 1 (om-db-string node-id))
              (sqlite:bind-parameter stmt 2 limit)
              (om-filter-by-allowed-paths
               (om-sql-rows-to-plists stmt '("id" "file" "title" "level"))))
@@ -668,12 +688,12 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
     (let* ((sql "SELECT DISTINCT n.id, n.file, n.title, n.level
                  FROM links l
                  JOIN nodes n ON n.id = l.dest
-                 WHERE l.source = ? AND l.type = 'id'
+                 WHERE l.source = ? AND l.type = '\"id\"'
                  LIMIT ?")
            (stmt (sqlite:prepare-statement db sql)))
       (unwind-protect
            (progn
-             (sqlite:bind-parameter stmt 1 node-id)
+             (sqlite:bind-parameter stmt 1 (om-db-string node-id))
              (sqlite:bind-parameter stmt 2 limit)
              (om-filter-by-allowed-paths
               (om-sql-rows-to-plists stmt '("id" "file" "title" "level"))))
@@ -705,7 +725,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
            (stmt (sqlite:prepare-statement db sql)))
       (unwind-protect
            (progn
-             (sqlite:bind-parameter stmt 1 node-id)
+             (sqlite:bind-parameter stmt 1 (om-db-string node-id))
              (let ((results (om-filter-by-allowed-paths
                              (om-sql-rows-to-plists
                               stmt '("id" "file" "title" "level" "todo" "priority")))))
@@ -1038,13 +1058,13 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                 (push (format nil "n.todo NOT IN (~{?~^, ~})"
                               (make-list (length done) :initial-element nil))
                       conditions)
-                (dolist (d done) (push d params))))
+                (dolist (d done) (push (om-db-string d) params))))
             (when state
               (push (format nil "n.todo = ?") conditions)
-              (push state params))
+              (push (om-db-string state) params))
             (when priority
               (push (format nil "n.priority = ?") conditions)
-              (push priority params))
+              (push (om-db-string priority) params))
             (let* ((where (format nil "~{~A~^ AND ~}" (nreverse conditions)))
                    (sql (if tag
                             (format nil "SELECT DISTINCT n.id, n.file, n.title, n.level, n.todo, n.priority ~
@@ -1059,7 +1079,7 @@ Derived from *todo-keywords* — update that list to extend recognised keywords.
                      (loop for p in bind-params
                            do (sqlite:bind-parameter stmt (incf param-idx) p))
                      (when tag
-                       (sqlite:bind-parameter stmt (incf param-idx) tag))
+                       (sqlite:bind-parameter stmt (incf param-idx) (om-db-string tag)))
                      (sqlite:bind-parameter stmt (incf param-idx) limit)
                      (om-filter-by-allowed-paths
                       (om-sql-rows-to-plists
