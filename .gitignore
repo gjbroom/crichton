@@ -29,3 +29,8 @@ docs/*.md
 *.html
 *.pdf
 *.tex
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
