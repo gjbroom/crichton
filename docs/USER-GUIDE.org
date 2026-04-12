@@ -1217,6 +1217,61 @@ Create a new note titled "Meeting notes 2026-03-21" with tag "work".
 Append "- Follow up with Alex" under the "Action Items" heading in ~/org/work.org.
 #+end_example
 
+** Books (LibraryThing)
+
+Searches and browses your LibraryThing book library from a local SQLite
+database.  Useful for queries like "what books do I have tagged 'lisp'?" or
+"list everything in my to-read collection."
+
+This skill is *disabled by default* and requires explicit configuration.
+All queries run locally — no network access is used.
+
+*Configuration* (=~/.crichton/config.toml=):
+
+#+begin_src toml
+[books]
+enable = true
+
+# Path to the SQLite database populated by scripts/lt_import.py
+db_path = "/home/YOU/.crichton/data/books.db"
+#+end_src
+
+*Importing your library*:
+
+Export a CSV from LibraryThing and run the import script:
+
+#+begin_src bash
+python3 scripts/lt_import.py --csv /path/to/librarything_export.csv \
+                              --db  /home/YOU/.crichton/data/books.db
+#+end_src
+
+Re-run any time to refresh from a new export.  The script creates the
+database if it does not exist.
+
+*Credentials* — none required.
+
+*Supported actions*:
+
+- =search= — full-text search across title, author, and description
+- =by_tag= — list books with a given tag
+- =by_author= — list books by author name (substring match)
+- =by_collection= — list books in a named collection
+- =by_series= — list books in a named series
+- =get= — retrieve full details for one book by its LibraryThing ID
+- =tags= — list all tags in the database
+- =collections= — list all collections
+- =series= — list all series
+- =status= — report skill configuration and database statistics
+
+*Example interactions*:
+
+#+begin_example
+What books do I have tagged "machine learning"?
+List everything in my "to-read" collection.
+Find books by Peter Watts.
+What series does Iain M. Banks appear in?
+#+end_example
+
 ** Local Git
 
 Reads and modifies local git repositories and files.  This is the primary
@@ -1570,6 +1625,25 @@ ls ~/.crichton/credentials/
 
 Each file =<name>.age= corresponds to a credential named =<name>=.  Store the
 missing credential as described in the relevant Built-in Skills section.
+
+** "Session is busy" after reconnecting
+
+If you press Ctrl-C during a long-running request and then reconnect
+with =crichton-reconnect= + =crichton-chat=, the daemon may report:
+
+#+begin_example
+Session is busy — a previous request is still processing.
+#+end_example
+
+The daemon uses a per-session claim to prevent two requests from racing.
+When you Ctrl-C, the previous request may still be running in the background.
+The claim is automatically force-released after 60 seconds, so waiting a
+moment and retrying will succeed.  If the problem persists, check the logs
+for an indication of what the previous request was doing:
+
+#+begin_src bash
+journalctl --user -u crichton -n 30
+#+end_src
 
 ** Weather returns no results
 

@@ -378,6 +378,19 @@ sending the final response.  These are unsolicited messages (no =ok= field):
 Implementation: =daemon/rpc-server.lisp= =handle-streaming-chat-request=, uses
 =run-agent/stream= from =agent/loop.lisp=.
 
+*Session claim mechanism*: Each incoming chat request must acquire a
+per-session claim before entering the agent loop.  This prevents two
+concurrent requests from corrupting the same session's message history.
+If a claim is already held (i.e., a previous request is still running),
+the daemon returns an error response with =result: "session-busy"=.
+
+Claims use a token-based release: each claim is a =(token . claimed-at)=
+pair.  The handling thread releases the claim by token; a stale thread
+that wakes up after a timeout has already replaced its claim is a no-op.
+Claims are force-released after =*chat-session-claim-timeout*= seconds
+(default 60) to recover from aborted requests.  See
+=session-claim= / =session-release= in =daemon/rpc-server.lisp=.
+
 *** =subscribe=
 
 Register the current connection for push notifications.
@@ -1148,6 +1161,82 @@ Delete a session.
 (delete-session "sess_abc123")
 #+end_src
 
+** Retry and Timeout Infrastructure (~skills/retry-infrastructure.lisp~)
+
+Shared retry, backoff, and timeout utilities used across skill modules
+and the agent loop.
+
+*** =with-retry= Macro
+
+#+begin_src lisp
+(with-retry (:context :weather :max-retries 3)
+  (dex:get "https://api.weather.gc.ca/..."))
+#+end_src
+
+Wraps BODY in a retry loop with exponential backoff.  Options:
+
+| Option          | Default                    | Description                                      |
+|-----------------+----------------------------+--------------------------------------------------|
+| =:max-retries=  | =*default-max-retries*= (3) | Maximum retry attempts                           |
+| =:backoff-base= | 1 second                   | Base delay; doubles each attempt                 |
+| =:max-backoff=  | 30 seconds                 | Cap on per-attempt delay                         |
+| =:context=      | =nil=                      | Symbol for context-specific =transient-error-p= |
+| =:on-retry=     | =nil=                      | =(lambda (condition attempt delay))= hook        |
+
+Error classification via =transient-error-p= generic: default method
+retries on socket errors, 5xx/429/503 HTTP status, and connection/timeout
+error messages.  Context-specific methods (=:weather=, =:rss=, =:github=)
+refine this (e.g., weather 404 is never retried — city not found).
+
+*** =with-timeout= Macro
+
+#+begin_src lisp
+(with-timeout (30 :error-message "Weather API timed out")
+  (fetch-weather city))
+#+end_src
+
+Executes BODY with a watchdog thread.  If BODY does not complete within
+SECONDS, the watchdog fires =bt:interrupt-thread= and signals
+=operation-cancelled=.
+
+*** =operation-cancelled= Condition
+
+=operation-cancelled= is a distinct subclass of =error= signalled by
+=with-timeout=.  Callers that catch broad =(error (c) ...)= conditions —
+such as SSE event dispatchers — *must* re-raise it rather than swallowing
+it:
+
+#+begin_src lisp
+(handler-case
+    (handle-sse-event ...)
+  (crichton/skills:operation-cancelled (c) (error c))  ; re-raise
+  (error (c)
+    (log:warn "SSE event error: ~A" c)))                ; swallow
+#+end_src
+
+This distinction is critical: a timeout interrupt delivered inside a
+broad error handler would otherwise be silently discarded, leaving the
+calling thread blocked indefinitely.
+
+*** HTTP helpers
+
+=http-get-with-retry=, =http-post-with-retry=, =http-put-with-retry=,
+=http-delete-with-retry= — convenience wrappers around =dex:get= etc.
+that apply =with-retry= automatically.
+
+*** Agent Loop Timeouts
+
+Two timeouts govern the agent loop (configured in =config.toml= under
+=[llm]=):
+
+| Parameter        | Config key       | Default | Description                          |
+|------------------+------------------+---------+--------------------------------------|
+| =*llm-api-timeout*= | =api-timeout= | 300 s   | Single LLM API call (streaming or not) |
+| =*tool-execution-timeout*= | =tool-timeout= | 60 s  | All tool calls in one iteration      |
+
+Both use =with-timeout= and signal =operation-cancelled= on expiry,
+which propagates back through the agent loop as an ordinary error.
+
 ** LLM Provider Protocol (~llm/protocol.lisp~)
 
 CLOS-based provider abstraction.
@@ -1644,13 +1733,22 @@ daemon restarts.
 =publish_item=, =configure_feed=, =get_feed_xml=, =list_feed_items=,
 =list_feeds=, =clear_feed=, =delete_feed= (see =agent/tools.lisp=).
 
-** Agent Tools API (~agent/tools.lisp~)
+** Agent Tools API (~agent/tools*.lisp~)
 
-Register and manage tools available to the LLM agent.
+Register and manage tools available to the LLM agent.  The implementation
+is split across five files in =agent/=:
+
+| File                    | Contents                                             |
+|-------------------------+------------------------------------------------------|
+| =tools.lisp=            | =define-tool= macro, =register-tool=, =get-tool=, =all-tool-defs=, data structures |
+| =tools-system.lisp=     | System tools: =weather=, =system_info=, =battery=, =ephemeris=, =time=, =resource_usage= |
+| =tools-ops.lisp=        | Operational tools: =scheduler=, =rss=, =github=, =daemon_logs=, =orgmode=, =git=, =books= |
+| =tools-data.lisp=       | Data tools: =raindrop=, =hoobs=, =pushover=, =skills=, =kv_store= |
+| =tools-register.lisp=   | =register-all-tools=, =channel-safe-tool-defs=, =sanitize-user-input= |
 
 *** =define-tool= Macro
 
-All 13 built-in tools are defined with the =define-tool= macro, which
+All built-in tools are defined with the =define-tool= macro, which
 eliminates the boilerplate of =make-properties= + =register-tool= +
 =make-json-schema= + handler lambda + =hget= extraction.
 

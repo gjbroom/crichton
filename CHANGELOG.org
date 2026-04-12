@@ -43,6 +43,8 @@ For development details, see the git commit history and BEADS issue tracker.
   - =repair-corrupt-kv(skill-id)=: rename a corrupt =.age= file to =<skill-id>.corrupt.age= and evict the cache entry
   - =kv-health-check()=: print a combined report covering directory accessibility, per-file integrity, quota settings, and per-skill usage
 - *KV store test suite* (cricht-kdz): =tests/test-kv-store.lisp=, loadable from SLIME/SLY, covering CRUD, prefix list, quota enforcement, cache management, admin API, backup/restore roundtrip, integrity check, repair, and health check
+- *LibraryThing book database* (=books= skill): Crichton can now search and browse your LibraryThing library.  Enable with =[books] enable = true= and =db_path= in =config.toml=, then populate the local database using =scripts/lt_import.py= (exports from LibraryThing → local SQLite).  Supported queries: =search=, =by_tag=, =by_author=, =by_collection=, =by_series=, =get=, =tags=, =collections=, =series=, =status=.
+- *Tool execution timeout*: Agent tool calls are now bounded by a configurable timeout (default 60 seconds; override with =[llm] tool-timeout = N= in =config.toml=).  A hung tool no longer blocks the agent loop indefinitely.
 
 ** Changed
 
@@ -55,6 +57,8 @@ For development details, see the git commit history and BEADS issue tracker.
 
 - *TUI erase-and-rewrite glitch* (cricht-jd2): the chat viewport no longer erases a streaming response and rewrites a shorter version after the final "done" message arrives.  The done-message text is now used only as a fallback when no streamed text was accumulated.
 - *RSS filter integration test* (cricht-8ee): added =tests/test-rss-filter.lisp=, loadable from SLIME/SLY, verifying that =run-rss-filter= correctly matches items against keywords and returns the right =matched_keywords= field.
+- *Session busy on reconnect* (cricht-9kb): after pressing Ctrl-C and reconnecting with =crichton-reconnect= + =crichton-chat=, the daemon no longer incorrectly reports "Session is busy --- a previous request is still processing."  Session claims now carry a 60-second force-release timeout; reconnecting after an abandoned request succeeds immediately.
+- *LLM API timeout effective during streaming* (cricht-jj1): the =[llm] api-timeout= setting now reliably cancels a hung streaming response.  Previously, a timeout interrupt delivered while the SSE parser was processing an event was silently swallowed, leaving the request blocked until the LLM eventually responded or the connection dropped.
 
 ** Deprecated
 
