@@ -57,6 +57,8 @@ signing. Informed by a security audit of OpenClaw."
                                             (:file "task-store")
                                             (:file "ephemeris")
                                             (:file "rss")
+                                            (:file "rss-monitor")
+                                            (:file "rss-publish")
                                             (:file "token-usage")
                                             (:file "battery")
                                             (:file "log-inspector")
@@ -64,6 +66,8 @@ signing. Informed by a security audit of OpenClaw."
                                             (:file "raindrop")
                                             (:file "books")
                                             (:file "orgmode")
+                                            (:file "orgmode-roam")
+                                            (:file "orgmode-api")
                                             (:file "pushover")
                                             (:file "github")
                                             (:file "hoobs")
@@ -93,6 +97,10 @@ signing. Informed by a security audit of OpenClaw."
                (:module "agent"
                 :components ((:file "sanitize")
                              (:file "tools")
+                             (:file "tools-system")
+                             (:file "tools-ops")
+                             (:file "tools-data")
+                             (:file "tools-register")
                              (:file "loop")))
                (:file "daemon/rpc-server")
                (:module "channels"
