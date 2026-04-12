@@ -49,6 +49,14 @@ Returns T if the claim succeeded, NIL if already active."
   (bt:with-lock-held (*chat-session-active-lock*)
     (remhash session-id *chat-session-active*)))
 
+;;; --- Local helpers ---
+
+(defun ht (&rest pairs)
+  "Build an equal-test hash-table from alternating string-key / value PAIRS."
+  (let ((h (make-hash-table :test #'equal)))
+    (loop for (k v) on pairs by #'cddr do (setf (gethash k h) v))
+    h))
+
 ;;; --- Push helper ---
 
 (defun rpc-push (stream lock msg)
@@ -63,11 +71,7 @@ Returns T if the claim succeeded, NIL if already active."
 
 (defun push-chat-done (stream lock id error-text session-id)
   "Push a chat_done message for error cases during streaming."
-  (let ((done-msg (make-hash-table :test #'equal)))
-    (setf (gethash "op" done-msg) "chat_done"
-          (gethash "id" done-msg) id
-          (gethash "text" done-msg) error-text
-          (gethash "error" done-msg) t)
+  (let ((done-msg (ht "op" "chat_done" "id" id "text" error-text "error" t)))
     (when session-id
       (setf (gethash "session_id" done-msg) session-id))
     (rpc-push stream lock done-msg)))
@@ -187,25 +191,17 @@ remains consistent."
                   (crichton/agent:run-agent/stream
                    text
                    (lambda (delta)
-                     (let ((delta-msg (make-hash-table :test #'equal)))
-                       (setf (gethash "op" delta-msg) "chat_delta"
-                             (gethash "id" delta-msg) id
-                             (gethash "text" delta-msg) delta)
-                       (rpc-push stream lock delta-msg)))
+                     (rpc-push stream lock
+                               (ht "op" "chat_delta" "id" id "text" delta)))
                    :session-type session-type
                    :messages snapshot)
                 (session-messages-commit session-id all-messages)
                 (setf committed t)
-                (let ((done-msg (make-hash-table :test #'equal)))
-                  (setf (gethash "op" done-msg) "chat_done"
-                        (gethash "id" done-msg) id
-                        (gethash "text" done-msg) response-text
-                        (gethash "session_id" done-msg) session-id)
-                  (rpc-push stream lock done-msg))
-                (let ((result (make-hash-table :test #'equal)))
-                  (setf (gethash "text" result) response-text
-                        (gethash "session_id" result) session-id)
-                  (crichton/rpc:make-ok-response id result))))
+                (rpc-push stream lock
+                          (ht "op" "chat_done" "id" id
+                              "text" response-text "session_id" session-id))
+                (crichton/rpc:make-ok-response id
+                  (ht "text" response-text "session_id" session-id))))
           (unless committed
             (session-messages-commit session-id snapshot))
           (session-release session-id))))))
@@ -232,10 +228,8 @@ Same snapshot/commit/restore pattern as the streaming handler."
                   (crichton/agent:run-agent text :session-type session-type :messages snapshot)
                 (session-messages-commit session-id all-messages)
                 (setf committed t)
-                (let ((result (make-hash-table :test #'equal)))
-                  (setf (gethash "text" result) response-text
-                        (gethash "session_id" result) session-id)
-                  (crichton/rpc:make-ok-response id result))))
+                (crichton/rpc:make-ok-response id
+                  (ht "text" response-text "session_id" session-id))))
           (unless committed
             (session-messages-commit session-id snapshot))
           (session-release session-id))))))

@@ -106,13 +106,11 @@ Override with [llm] api-timeout = N in config.toml.")
 (defun initialize-messages (user-input messages)
   "Build the initial message list for an agent loop invocation.
    Destructively appends USER-INPUT to MESSAGES when both are provided."
-  (if messages
-      (progn
-        (when user-input
-          (nconc messages (list (list :role :user :content user-input))))
-        messages)
-      (when user-input
-        (list (list :role :user :content user-input)))))
+  (cond
+    ((and messages user-input)
+     (nconc messages (list (list :role :user :content user-input))))
+    (messages messages)
+    (user-input (list (list :role :user :content user-input)))))
 
 (defun run-agent-loop (msgs send-fn label max-iterations)
   "Core agent loop: call SEND-FN to get an LLM response, dispatch tool calls,
