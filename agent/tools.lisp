@@ -525,30 +525,30 @@ Monitors automatically back off on failure (exponential, capped at 7 days) and p
        (if configs
            (with-output-to-string (s)
              (format s "~D active RSS monitor~:P:~%" (length configs))
-             (dolist (cfg configs)
-               (let* ((name       (getf cfg :name))
-                      (url        (getf cfg :url))
-                      (interval   (getf cfg :interval-seconds))
-                      (failures   (or (getf cfg :consecutive-failures) 0))
-                      (muted-until (getf cfg :muted-until))
-                      (user-muted  (getf cfg :user-muted))
-                      (last-failure (getf cfg :last-failure))
-                      (now (get-universal-time)))
-                 (format s "  ~A~%" name)
-                 (format s "    ~A  (every ~Ds)~%" url interval)
-                 (cond
-                   (user-muted
-                    (format s "    Status: user-muted~%"))
-                   ((and muted-until (> muted-until now))
-                    (format s "    Status: backoff ~Ds remaining (~D failure~:P)~%"
-                            (- muted-until now) failures))
-                   ((plusp failures)
-                    (format s "    Status: ok (~D prior failure~:P, recovered)~%"
-                            failures))
-                   (t
-                    (format s "    Status: ok~%")))
-                 (when last-failure
-                   (format s "    Last error: ~A~%" last-failure)))))
+             (let ((now (get-universal-time)))
+               (dolist (cfg configs)
+                 (let* ((name        (getf cfg :name))
+                        (url         (getf cfg :url))
+                        (interval    (getf cfg :interval-seconds))
+                        (failures    (or (getf cfg :consecutive-failures) 0))
+                        (muted-until  (getf cfg :muted-until))
+                        (user-muted   (getf cfg :user-muted))
+                        (last-failure (getf cfg :last-failure)))
+                   (format s "  ~A~%" name)
+                   (format s "    ~A  (every ~Ds)~%" url interval)
+                   (cond
+                     (user-muted
+                      (format s "    Status: user-muted~%"))
+                     ((and muted-until (> muted-until now))
+                      (format s "    Status: backoff ~Ds remaining (~D failure~:P)~%"
+                              (- muted-until now) failures))
+                     ((plusp failures)
+                      (format s "    Status: ok (~D prior failure~:P, recovered)~%"
+                              failures))
+                     (t
+                      (format s "    Status: ok~%")))
+                   (when last-failure
+                     (format s "    Last error: ~A~%" last-failure))))))
            "No active RSS monitors.")))
     ((string-equal action "mute_monitor")
      (let ((task-name (or name "?")))

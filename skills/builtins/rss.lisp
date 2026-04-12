@@ -548,29 +548,33 @@ WASM skill before reporting."
                        (if keywords "matching " "") name)
                name)))))
     (error (c)
-      ;; On failure: exponential backoff, dead-feed alert at threshold
-      (bt:with-lock-held (*rss-monitors-lock*)
-        (let* ((config (gethash name *rss-monitors*))
-               (interval (or (and config (getf config :interval-seconds)) 3600))
-               (failures (1+ (or (and config (getf config :consecutive-failures)) 0)))
-               (backoff (min *rss-max-backoff-seconds*
-                             (* interval (expt 2 (min failures 20)))))
-               (muted-until (+ (get-universal-time) backoff)))
-          (when config
-            (setf (getf config :consecutive-failures) failures
-                  (getf config :muted-until) muted-until
-                  (getf config :last-failure) (format nil "~A" c))
-            (setf (gethash name *rss-monitors*) config))
-          (log:warn "RSS monitor ~A failed (~D): ~A — backoff ~Ds"
-                    name failures c backoff)
-          (when (= failures *rss-dead-feed-threshold*)
-            (log:warn "RSS monitor ~A: ~D consecutive failures — feed may be dead"
-                      name failures)
-            (crichton/daemon:notification-post
-             "rss"
-             (format nil "Feed ~A may be dead (~D consecutive failures); paused ~Ads"
-                     name failures backoff)
-             name)))))))
+      ;; On failure: exponential backoff, dead-feed alert at threshold.
+      ;; notification-post is called OUTSIDE the lock to avoid lock ordering issues.
+      (let (dead-feed-backoff)
+        (bt:with-lock-held (*rss-monitors-lock*)
+          (let* ((config (gethash name *rss-monitors*))
+                 (interval (or (and config (getf config :interval-seconds)) 3600))
+                 (failures (1+ (or (and config (getf config :consecutive-failures)) 0)))
+                 (backoff (min *rss-max-backoff-seconds*
+                               (* interval (expt 2 (min failures 20)))))
+                 (muted-until (+ (get-universal-time) backoff)))
+            (when config
+              (setf (getf config :consecutive-failures) failures
+                    (getf config :muted-until) muted-until
+                    (getf config :last-failure) (format nil "~A" c))
+              (setf (gethash name *rss-monitors*) config))
+            (log:warn "RSS monitor ~A failed (~D): ~A — backoff ~Ds"
+                      name failures c backoff)
+            (when (= failures *rss-dead-feed-threshold*)
+              (log:warn "RSS monitor ~A: ~D consecutive failures — feed may be dead"
+                        name failures)
+              (setf dead-feed-backoff backoff))))
+        (when dead-feed-backoff
+          (crichton/daemon:notification-post
+           "rss"
+           (format nil "Feed ~A may be dead (~D consecutive failures); paused ~Ads"
+                   name *rss-dead-feed-threshold* dead-feed-backoff)
+           name))))))
 
 (defun rss-monitor-start (name url interval-seconds
                           &key (replace t) (persist t)
