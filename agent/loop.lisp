@@ -35,6 +35,10 @@ When reporting tool results, summarize the key information clearly."
   "Default timeout in seconds for a single LLM API call.
 Override with [llm] api-timeout = N in config.toml.")
 
+(defparameter *tool-execution-timeout* 60
+  "Default timeout in seconds for executing a single tool call batch.
+Override with [llm] tool-timeout = N in config.toml.")
+
 ;;; --- Helpers ---
 
 (defun estimate-content-chars (content)
@@ -138,8 +142,13 @@ Override with [llm] api-timeout = N in config.toml.")
         (let ((text (crichton/llm:response-text response)))
           (log:info "~A done: ~A" label (truncate-for-log text))
           (return (values text msgs response))))
-      (setf msgs (nconc msgs (list (list :role :user
-                                         :content (execute-tool-calls content))))))))
+      (let ((tool-timeout (or (crichton/config:config-section-get :llm :tool-timeout)
+                               *tool-execution-timeout*)))
+        (setf msgs (nconc msgs (list (list :role :user
+                                           :content (crichton/skills:with-timeout
+                                                        (tool-timeout
+                                                         :error-message "Tool execution timed out")
+                                                      (execute-tool-calls content))))))))))
 
 ;;; --- Agent loop ---
 

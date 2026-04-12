@@ -385,6 +385,7 @@
            #:git-create-branch
            #:git-checkout
            ;; retry infrastructure
+           #:operation-cancelled
            #:with-retry
            #:with-timeout
            #:http-get-with-retry

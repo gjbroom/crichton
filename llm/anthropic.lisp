@@ -533,10 +533,13 @@
 
 (defun dispatch-sse-event (state on-event event-type data)
   "Parse DATA as JSON and dispatch to the appropriate HANDLE-SSE-EVENT method.
-   Logs and swallows errors so a single bad event does not abort the stream."
+   Logs and swallows errors from malformed individual events so one bad event
+   does not abort the stream.  OPERATION-CANCELLED is re-raised so timeouts
+   propagate correctly past this error-swallowing boundary."
   (handler-case
       (let ((json (shasht:read-json data)))
         (handle-sse-event state (sse-event-keyword event-type) json on-event))
+    (crichton/skills:operation-cancelled (c) (error c))
     (error (c)
       (log:warn "Error processing SSE event ~A: ~A" event-type c))))
 

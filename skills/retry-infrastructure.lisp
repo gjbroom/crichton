@@ -239,8 +239,21 @@
 
 ;;; --- Timeout protection ---
 
+(define-condition operation-cancelled (error)
+  ((message :initarg :message :reader operation-cancelled-message))
+  (:report (lambda (c s) (write-string (operation-cancelled-message c) s)))
+  (:documentation
+   "Signalled by WITH-TIMEOUT when the operation exceeds its time budget.
+    Deliberately a distinct subclass of ERROR so callers can distinguish a
+    cancellation from ordinary errors — and so broad (error (c) ...) catchers
+    that should NOT swallow cancellations can specifically re-raise this type."))
+
 (defmacro with-timeout ((seconds &key (error-message "Operation timed out")) &body body)
-  "Execute BODY with a timeout. Signals an error if execution exceeds SECONDS."
+  "Execute BODY with a timeout of SECONDS.
+Signals OPERATION-CANCELLED if the budget is exceeded.
+Uses BT:INTERRUPT-THREAD to deliver the cancellation.  Callers that catch
+broad ERROR conditions (e.g. SSE event dispatch) must re-raise
+OPERATION-CANCELLED rather than swallowing it."
   (let ((thread (gensym "THREAD"))
         (result (gensym "RESULT"))
         (condition (gensym "CONDITION"))
@@ -253,16 +266,17 @@
                (lambda ()
                  (sleep ,seconds)
                  (when (bt:thread-alive-p ,thread)
-                   (bt:interrupt-thread ,thread 
-                                        (lambda () 
-                                          (error "~A" ,error-message)))))
+                   (bt:interrupt-thread
+                    ,thread
+                    (lambda ()
+                      (error 'operation-cancelled :message ,error-message)))))
                :name "timeout-watchdog")))
          (unwind-protect
               (handler-case
                   (setf ,result (progn ,@body))
                 (error (c) (setf ,condition c)))
            (when (bt:thread-alive-p ,timeout-thread)
-             (bt:destroy-thread ,timeout-thread)))
+             (ignore-errors (bt:destroy-thread ,timeout-thread))))
          (if ,condition
              (error ,condition)
              ,result)))))

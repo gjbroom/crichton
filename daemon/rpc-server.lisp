@@ -16,10 +16,17 @@
 (defvar *chat-session-locks* (make-hash-table :test #'equal)
   "Per-session locks keyed by session-id.")
 (defvar *chat-session-active* (make-hash-table :test #'equal)
-  "Sessions currently being processed: session-id → T.
+  "Sessions currently being processed: session-id → (token . claimed-universal-time).
    Prevents a second client from blocking on the same session while an
-   LLM call is in flight.  Guarded by *chat-session-active-lock*.")
+   LLM call is in flight.  Guarded by *chat-session-active-lock*.
+   Claims older than *chat-session-claim-timeout* are force-released on the
+   next claim attempt so a reconnecting client is never permanently locked out.")
 (defvar *chat-session-active-lock* (bt:make-lock "chat-session-active"))
+
+(defparameter *chat-session-claim-timeout* 60
+  "Seconds before a stale session claim is force-released when a new claim arrives.
+   Covers the case where the client disconnected (C-c) before the LLM finished,
+   so rpc-push write errors never triggered the unwind-protect release.")
 
 (defun daemon-socket-path ()
   "Return the path to the daemon RPC socket."
@@ -38,16 +45,31 @@
 
 (defun session-claim (session-id)
   "Atomically claim SESSION-ID for processing.
-Returns T if the claim succeeded, NIL if already active."
+Returns a claim token (non-NIL) on success, NIL if the session is actively busy.
+Force-releases claims older than *chat-session-claim-timeout* seconds so a
+reconnecting client is never permanently locked out by a stale in-flight request."
   (bt:with-lock-held (*chat-session-active-lock*)
-    (unless (gethash session-id *chat-session-active*)
-      (setf (gethash session-id *chat-session-active*) t)
-      t)))
+    (let ((entry (gethash session-id *chat-session-active*)))
+      (when (and entry
+                 (> (- (get-universal-time) (cdr entry))
+                    *chat-session-claim-timeout*))
+        (log:warn "Session ~A claim timed out after ~Ds; force-releasing"
+                  session-id *chat-session-claim-timeout*)
+        (setf entry nil))
+      (unless entry
+        (let ((token (gensym "CLAIM")))
+          (setf (gethash session-id *chat-session-active*)
+                (cons token (get-universal-time)))
+          token)))))
 
-(defun session-release (session-id)
-  "Release the active claim on SESSION-ID."
+(defun session-release (session-id token)
+  "Release the active claim on SESSION-ID, but only if TOKEN matches.
+If the claim was force-released and re-claimed by another thread, the
+token won't match and this is a deliberate no-op."
   (bt:with-lock-held (*chat-session-active-lock*)
-    (remhash session-id *chat-session-active*)))
+    (let ((entry (gethash session-id *chat-session-active*)))
+      (when (and entry (eq (car entry) token))
+        (remhash session-id *chat-session-active*)))))
 
 ;;; --- Local helpers ---
 
@@ -178,33 +200,41 @@ remains consistent."
       (return-from handle-streaming-chat-request
         (crichton/rpc:make-error-response id "bad_request" "Missing required field: text")))
     (let ((session-id (or session-id (getf (crichton/sessions:create-session) :id))))
-      (unless (session-claim session-id)
-        (let ((err "Session is busy — a previous request is still processing."))
-          (push-chat-done stream lock id err session-id)
-          (return-from handle-streaming-chat-request
-            (crichton/rpc:make-error-response id "session_busy" err))))
-      (let ((snapshot (session-messages-snapshot session-id))
-            (committed nil))
-        (unwind-protect
-            (with-llm-error-handling (id :stream stream :lock lock :session-id session-id)
-              (multiple-value-bind (response-text all-messages)
-                  (crichton/agent:run-agent/stream
-                   text
-                   (lambda (delta)
-                     (rpc-push stream lock
-                               (ht "op" "chat_delta" "id" id "text" delta)))
-                   :session-type session-type
-                   :messages snapshot)
-                (session-messages-commit session-id all-messages)
-                (setf committed t)
-                (rpc-push stream lock
-                          (ht "op" "chat_done" "id" id
-                              "text" response-text "session_id" session-id))
-                (crichton/rpc:make-ok-response id
-                  (ht "text" response-text "session_id" session-id))))
-          (unless committed
-            (session-messages-commit session-id snapshot))
-          (session-release session-id))))))
+      (let ((token (session-claim session-id)))
+        (unless token
+          (let ((err "Session is busy — a previous request is still processing."))
+            (push-chat-done stream lock id err session-id)
+            (return-from handle-streaming-chat-request
+              (crichton/rpc:make-error-response id "session_busy" err))))
+        (let ((snapshot (session-messages-snapshot session-id))
+              (committed nil))
+          (unwind-protect
+              (with-llm-error-handling (id :stream stream :lock lock :session-id session-id)
+                (multiple-value-bind (response-text all-messages)
+                    (crichton/agent:run-agent/stream
+                     text
+                     ;; Write directly (not via rpc-push) so that a closed-socket
+                     ;; error propagates out of run-agent/stream and triggers the
+                     ;; unwind-protect below, releasing the session immediately on
+                     ;; client disconnect rather than waiting for the LLM to finish.
+                     (lambda (delta)
+                       (bt:with-lock-held (lock)
+                         (crichton/rpc:write-message stream
+                                                     (ht "op" "chat_delta"
+                                                         "id" id
+                                                         "text" delta))))
+                     :session-type session-type
+                     :messages snapshot)
+                  (session-messages-commit session-id all-messages)
+                  (setf committed t)
+                  (rpc-push stream lock
+                            (ht "op" "chat_done" "id" id
+                                "text" response-text "session_id" session-id))
+                  (crichton/rpc:make-ok-response id
+                    (ht "text" response-text "session_id" session-id))))
+            (unless committed
+              (session-messages-commit session-id snapshot))
+            (session-release session-id token)))))))
 
 (defun handle-blocking-chat-request (id msg)
   "Handle a non-streaming 'chat' request.
@@ -216,23 +246,24 @@ Same snapshot/commit/restore pattern as the streaming handler."
       (return-from handle-blocking-chat-request
         (crichton/rpc:make-error-response id "bad_request" "Missing required field: text")))
     (let ((session-id (or session-id (getf (crichton/sessions:create-session) :id))))
-      (unless (session-claim session-id)
-        (return-from handle-blocking-chat-request
-          (crichton/rpc:make-error-response id "session_busy"
-                                            "Session is busy — a previous request is still processing.")))
-      (let ((snapshot (session-messages-snapshot session-id))
-            (committed nil))
-        (unwind-protect
-            (with-llm-error-handling (id)
-              (multiple-value-bind (response-text all-messages)
-                  (crichton/agent:run-agent text :session-type session-type :messages snapshot)
-                (session-messages-commit session-id all-messages)
-                (setf committed t)
-                (crichton/rpc:make-ok-response id
-                  (ht "text" response-text "session_id" session-id))))
-          (unless committed
-            (session-messages-commit session-id snapshot))
-          (session-release session-id))))))
+      (let ((token (session-claim session-id)))
+        (unless token
+          (return-from handle-blocking-chat-request
+            (crichton/rpc:make-error-response id "session_busy"
+                                              "Session is busy — a previous request is still processing.")))
+        (let ((snapshot (session-messages-snapshot session-id))
+              (committed nil))
+          (unwind-protect
+              (with-llm-error-handling (id)
+                (multiple-value-bind (response-text all-messages)
+                    (crichton/agent:run-agent text :session-type session-type :messages snapshot)
+                  (session-messages-commit session-id all-messages)
+                  (setf committed t)
+                  (crichton/rpc:make-ok-response id
+                    (ht "text" response-text "session_id" session-id))))
+            (unless committed
+              (session-messages-commit session-id snapshot))
+            (session-release session-id token)))))))
 
 (defun handle-chat-request (id msg)
   "Handle a 'chat' request: dispatch to streaming or blocking handler."
