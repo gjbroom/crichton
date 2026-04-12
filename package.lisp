@@ -217,6 +217,9 @@
            #:rss-check-report
            #:rss-monitor-start
            #:rss-monitor-stop
+           #:rss-monitor-mute
+           #:rss-monitor-unmute
+           #:rss-monitor-configs
            #:rss-list-monitors
            #:opml-import-monitors
            #:opml-export-monitors

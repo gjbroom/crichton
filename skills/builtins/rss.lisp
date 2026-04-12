@@ -383,7 +383,15 @@
 
 (defvar *rss-monitors-lock* (bt:make-lock "rss-monitors"))
 (defvar *rss-monitors* (make-hash-table :test #'equal)
-  "Registry of active RSS monitors: name → plist (:url :interval-seconds :keywords :match-mode :search-fields).")
+  "Registry of active RSS monitors: name → plist
+(:url :interval-seconds :keywords :match-mode :search-fields
+ :consecutive-failures :muted-until :user-muted :last-failure).")
+
+(defparameter *rss-dead-feed-threshold* 10
+  "Consecutive failures before a feed is treated as dead and a notification is posted.")
+
+(defparameter *rss-max-backoff-seconds* (* 7 24 3600)
+  "Maximum per-failure backoff duration for a failing RSS feed (7 days).")
 
 (defun persist-rss-monitors ()
   "Save the monitor registry to storage so monitors survive restarts."
@@ -399,6 +407,14 @@
                      (setf (gethash "match_mode" entry) (getf config :match-mode)))
                    (when (getf config :search-fields)
                      (setf (gethash "search_fields" entry) (coerce (getf config :search-fields) 'vector)))
+                   (let ((failures (getf config :consecutive-failures)))
+                     (when (and failures (plusp failures))
+                       (setf (gethash "consecutive_failures" entry) failures)))
+                   (let ((muted-until (getf config :muted-until)))
+                     (when muted-until
+                       (setf (gethash "muted_until" entry) muted-until)))
+                   (when (getf config :user-muted)
+                     (setf (gethash "user_muted" entry) t))
                    (setf (gethash name ht) entry)))
                *rss-monitors*)
       (crichton/storage:store-set "rss" "monitors" ht)
@@ -417,11 +433,17 @@
                              (interval (gethash "interval_seconds" entry))
                              (keywords (gethash "keywords" entry))
                              (match-mode (gethash "match_mode" entry))
-                             (search-fields (gethash "search_fields" entry)))
+                             (search-fields (gethash "search_fields" entry))
+                             (failures (gethash "consecutive_failures" entry))
+                             (muted-until (gethash "muted_until" entry))
+                             (user-muted (gethash "user_muted" entry)))
                          (rss-monitor-start name url interval
                                             :keywords (when keywords (coerce keywords 'list))
                                             :match-mode match-mode
                                             :search-fields (when search-fields (coerce search-fields 'list))
+                                            :consecutive-failures (or failures 0)
+                                            :muted-until muted-until
+                                            :user-muted user-muted
                                             :persist nil)
                          (incf restored))
                      (error (c)
@@ -463,12 +485,39 @@
 
 (defun rss-monitor-poll (name url &key keywords match-mode search-fields)
   "Poll a single RSS feed, log new items, and post notifications.
-   When KEYWORDS is non-nil, runs new items through the rss-filter WASM
-   skill and only reports/notifies on matching items.
-   Called by the scheduler callback registered via RSS-MONITOR-START.
-   Transient network failures are retried automatically by fetch-feed."
+Implements adaptive backoff: consecutive failures trigger exponential
+back-off up to *rss-max-backoff-seconds*.  After *rss-dead-feed-threshold*
+consecutive failures a dead-feed notification is posted.  Polls are
+silently skipped while a backoff or user-mute is active.
+When KEYWORDS is non-nil, new items are filtered through the rss-filter
+WASM skill before reporting."
+  ;; Check mute state before doing any network I/O
+  (let ((snapshot (bt:with-lock-held (*rss-monitors-lock*)
+                    (copy-list (gethash name *rss-monitors*)))))
+    (when snapshot
+      (when (getf snapshot :user-muted)
+        (log:debug "RSS monitor ~A: skipped (user-muted)" name)
+        (return-from rss-monitor-poll nil))
+      (let ((muted-until (getf snapshot :muted-until)))
+        (when (and muted-until (> muted-until (get-universal-time)))
+          (log:debug "RSS monitor ~A: backoff active (~Ds remaining)"
+                     name (- muted-until (get-universal-time)))
+          (return-from rss-monitor-poll nil)))))
+  ;; Perform the poll
   (handler-case
       (let ((result (rss-check url)))
+        ;; On success: reset failure counter (logged if recovering)
+        (bt:with-lock-held (*rss-monitors-lock*)
+          (let ((config (gethash name *rss-monitors*)))
+            (when config
+              (let ((prev (or (getf config :consecutive-failures) 0)))
+                (when (plusp prev)
+                  (log:info "RSS monitor ~A: recovered after ~D failure~:P" name prev)))
+              (setf (getf config :consecutive-failures) 0
+                    (getf config :muted-until) nil
+                    (getf config :last-failure) nil)
+              (setf (gethash name *rss-monitors*) config))))
+        ;; Report new items
         (when (plusp (getf result :new-count))
           (let ((report-items (getf result :new-items))
                 (report-count (getf result :new-count)))
@@ -499,17 +548,42 @@
                        (if keywords "matching " "") name)
                name)))))
     (error (c)
-      (log:warn "RSS monitor ~A failed: ~A" name c))))
+      ;; On failure: exponential backoff, dead-feed alert at threshold
+      (bt:with-lock-held (*rss-monitors-lock*)
+        (let* ((config (gethash name *rss-monitors*))
+               (interval (or (and config (getf config :interval-seconds)) 3600))
+               (failures (1+ (or (and config (getf config :consecutive-failures)) 0)))
+               (backoff (min *rss-max-backoff-seconds*
+                             (* interval (expt 2 (min failures 20)))))
+               (muted-until (+ (get-universal-time) backoff)))
+          (when config
+            (setf (getf config :consecutive-failures) failures
+                  (getf config :muted-until) muted-until
+                  (getf config :last-failure) (format nil "~A" c))
+            (setf (gethash name *rss-monitors*) config))
+          (log:warn "RSS monitor ~A failed (~D): ~A — backoff ~Ds"
+                    name failures c backoff)
+          (when (= failures *rss-dead-feed-threshold*)
+            (log:warn "RSS monitor ~A: ~D consecutive failures — feed may be dead"
+                      name failures)
+            (crichton/daemon:notification-post
+             "rss"
+             (format nil "Feed ~A may be dead (~D consecutive failures); paused ~Ads"
+                     name failures backoff)
+             name)))))))
 
-(defun rss-monitor-start (name url interval-seconds &key (replace t) (persist t)
-                                                          keywords match-mode search-fields)
+(defun rss-monitor-start (name url interval-seconds
+                          &key (replace t) (persist t)
+                               keywords match-mode search-fields
+                               (consecutive-failures 0) muted-until user-muted)
   "Start monitoring a feed by scheduling periodic checks.
    NAME is the task name. Results logged via log4cl.
    When KEYWORDS is non-nil, new items are filtered through the rss-filter
    WASM skill before reporting.  MATCH-MODE (\"any\"/\"all\") and SEARCH-FIELDS
    (list of field names) control filter behaviour.
-   When PERSIST is T (default), saves the monitor config (including filter
-   settings) to storage so it survives daemon restarts."
+   CONSECUTIVE-FAILURES, MUTED-UNTIL, USER-MUTED restore persisted backoff
+   state after a daemon restart (passed internally by RESTORE-RSS-MONITORS).
+   When PERSIST is T (default), saves the monitor config to storage."
   (schedule-every name interval-seconds
                   (lambda () (rss-monitor-poll name url
                                                :keywords keywords
@@ -520,7 +594,10 @@
     (setf (gethash name *rss-monitors*)
           (list :url url :interval-seconds interval-seconds
                 :keywords keywords :match-mode match-mode
-                :search-fields search-fields)))
+                :search-fields search-fields
+                :consecutive-failures consecutive-failures
+                :muted-until muted-until
+                :user-muted user-muted)))
   (when persist
     (persist-rss-monitors))
   (log:info "RSS monitor started: ~A → ~A (every ~Ds~@[, keywords: ~{~A~^,~}~])"
@@ -544,6 +621,50 @@
                           (>= (length name) 4)
                           (string-equal "rss:" name :end2 4))))
                  (list-tasks)))
+
+(defun rss-monitor-configs ()
+  "Return a list of all monitor config plists with :name added, sorted by name.
+Includes backoff state (:consecutive-failures, :muted-until, :user-muted)."
+  (sort
+   (bt:with-lock-held (*rss-monitors-lock*)
+     (let (acc)
+       (maphash (lambda (name config)
+                  (push (list* :name name config) acc))
+                *rss-monitors*)
+       acc))
+   #'string< :key (lambda (e) (getf e :name))))
+
+(defun rss-monitor-mute (name)
+  "Silence monitor NAME indefinitely — polls are skipped until explicitly unmuted.
+The scheduler task remains registered; use RSS-MONITOR-UNMUTE to resume.
+Returns a status string."
+  (bt:with-lock-held (*rss-monitors-lock*)
+    (let ((config (gethash name *rss-monitors*)))
+      (unless config
+        (error "RSS monitor not found: ~A" name))
+      (setf (getf config :user-muted) t)
+      (setf (gethash name *rss-monitors*) config)))
+  (persist-rss-monitors)
+  (log:info "RSS monitor muted: ~A" name)
+  (format nil "Monitor ~A muted." name))
+
+(defun rss-monitor-unmute (name)
+  "Resume a muted or backed-off monitor.
+Clears user-mute, active backoff, and the consecutive failure counter so
+the next scheduled poll fires normally.
+Returns a status string."
+  (bt:with-lock-held (*rss-monitors-lock*)
+    (let ((config (gethash name *rss-monitors*)))
+      (unless config
+        (error "RSS monitor not found: ~A" name))
+      (setf (getf config :user-muted) nil
+            (getf config :muted-until) nil
+            (getf config :consecutive-failures) 0
+            (getf config :last-failure) nil)
+      (setf (gethash name *rss-monitors*) config)))
+  (persist-rss-monitors)
+  (log:info "RSS monitor unmuted: ~A" name)
+  (format nil "Monitor ~A unmuted; failure count reset." name))
 
 ;;; --- OPML import ---
 

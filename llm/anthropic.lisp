@@ -263,7 +263,9 @@
             (handler-case
                 (dex:post url
                   :headers (anthropic-headers (anthropic-api-key provider))
-                  :content json-body)
+                  :content json-body
+                  :connect-timeout 10
+                  :read-timeout 300)
               (error (c)
                 (error 'llm-error :provider provider
                                   :message (format nil "HTTP request failed: ~A" c))))

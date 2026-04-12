@@ -31,6 +31,10 @@ When reporting tool results, summarize the key information clearly."
    300K chars leaves comfortable headroom under the 200K-token context window
    after accounting for system prompt and tool schemas.")
 
+(defparameter *llm-api-timeout* 300
+  "Default timeout in seconds for a single LLM API call.
+Override with [llm] api-timeout = N in config.toml.")
+
 ;;; --- Helpers ---
 
 (defun estimate-content-chars (content)
@@ -123,7 +127,11 @@ When reporting tool results, summarize the key information clearly."
                               max-iterations)
                       msgs nil)))
     (log:info "~A iteration ~D/~D" label (1+ i) max-iterations)
-    (let* ((response    (funcall send-fn msgs))
+    (let* ((api-timeout (or (crichton/config:config-section-get :llm :api-timeout)
+                            *llm-api-timeout*))
+           (response    (crichton/skills:with-timeout
+                            (api-timeout :error-message "LLM API call timed out")
+                          (funcall send-fn msgs)))
            (content     (getf response :content))
            (stop-reason (getf response :stop-reason)))
       (setf msgs (nconc msgs (list (list :role :assistant :content content))))

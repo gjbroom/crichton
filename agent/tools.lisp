@@ -435,13 +435,15 @@ Leading DECLARE forms in BODY are placed before the BLOCK."
 
 (define-tool rss
     (:description "Fetch, check, and monitor RSS/Atom feeds; or write/publish your own RSS feeds.
-Reading: 'fetch' reads all items from a URL, 'check' returns only new items since last check, 'monitor_start' starts periodic polling, 'monitor_stop' stops a monitor, 'list_monitors' shows active monitors.
+Reading: 'fetch' reads all items from a URL, 'check' returns only new items since last check, 'monitor_start' starts periodic polling, 'monitor_stop' stops a monitor, 'list_monitors' shows active monitors with backoff status.
+Muting: 'mute_monitor' silences a feed indefinitely (skips polls, keeps registration); 'unmute_monitor' resumes it and resets the failure counter.
 Bulk import/export: 'opml_import' parses an OPML file and registers all feeds as monitors in a single call — use this instead of looping monitor_start.  'opml_export' generates an OPML 2.0 file from all registered monitors.
 Writing: 'publish_item' adds an item to a named feed (creating it implicitly), 'configure_feed' sets feed metadata (title/description/link/max-items), 'get_feed_xml' returns the RSS 2.0 XML for serving, 'list_feed_items' shows the current item list, 'list_feeds' shows all feeds, 'clear_feed' removes all items (keeps config), 'delete_feed' removes feed entirely.
-Monitors can filter items by keywords via the rss-filter WASM skill.  Published feeds persist across restarts via encrypted storage.")
+Monitors automatically back off on failure (exponential, capped at 7 days) and post a notification after 10 consecutive failures.  Monitors can filter items by keywords via the rss-filter WASM skill.  Published feeds persist across restarts via encrypted storage.")
   ((action "string"
-           "The RSS action: fetch, check, monitor_start, monitor_stop, list_monitors, opml_import, opml_export, publish_item, configure_feed, get_feed_xml, list_feed_items, list_feeds, clear_feed, delete_feed."
+           "The RSS action: fetch, check, monitor_start, monitor_stop, list_monitors, mute_monitor, unmute_monitor, opml_import, opml_export, publish_item, configure_feed, get_feed_xml, list_feed_items, list_feeds, clear_feed, delete_feed."
            :enum ("fetch" "check" "monitor_start" "monitor_stop" "list_monitors"
+                  "mute_monitor" "unmute_monitor"
                   "opml_import" "opml_export"
                   "publish_item" "configure_feed" "get_feed_xml"
                   "list_feed_items" "list_feeds" "clear_feed" "delete_feed")
@@ -519,10 +521,45 @@ Monitors can filter items by keywords via the rss-filter WASM skill.  Published 
            (format nil "Monitor stopped: ~A" task-name)
            (format nil "Monitor not found: ~A" task-name))))
     ((string-equal action "list_monitors")
-     (let ((monitors (crichton/skills:rss-list-monitors)))
-       (if monitors
-           (format nil "~{~S~^~%~}" monitors)
+     (let ((configs (crichton/skills:rss-monitor-configs)))
+       (if configs
+           (with-output-to-string (s)
+             (format s "~D active RSS monitor~:P:~%" (length configs))
+             (dolist (cfg configs)
+               (let* ((name       (getf cfg :name))
+                      (url        (getf cfg :url))
+                      (interval   (getf cfg :interval-seconds))
+                      (failures   (or (getf cfg :consecutive-failures) 0))
+                      (muted-until (getf cfg :muted-until))
+                      (user-muted  (getf cfg :user-muted))
+                      (last-failure (getf cfg :last-failure))
+                      (now (get-universal-time)))
+                 (format s "  ~A~%" name)
+                 (format s "    ~A  (every ~Ds)~%" url interval)
+                 (cond
+                   (user-muted
+                    (format s "    Status: user-muted~%"))
+                   ((and muted-until (> muted-until now))
+                    (format s "    Status: backoff ~Ds remaining (~D failure~:P)~%"
+                            (- muted-until now) failures))
+                   ((plusp failures)
+                    (format s "    Status: ok (~D prior failure~:P, recovered)~%"
+                            failures))
+                   (t
+                    (format s "    Status: ok~%")))
+                 (when last-failure
+                   (format s "    Last error: ~A~%" last-failure)))))
            "No active RSS monitors.")))
+    ((string-equal action "mute_monitor")
+     (let ((task-name (or name "?")))
+       (handler-case
+           (crichton/skills:rss-monitor-mute task-name)
+         (error (c) (format nil "Error: ~A" c)))))
+    ((string-equal action "unmute_monitor")
+     (let ((task-name (or name "?")))
+       (handler-case
+           (crichton/skills:rss-monitor-unmute task-name)
+         (error (c) (format nil "Error: ~A" c)))))
     ;; --- Feed writing actions ---
     ((string-equal action "publish_item")
      (if (null name)
