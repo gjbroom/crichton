@@ -3897,11 +3897,15 @@ This matches Design Principle 1: /Skills must be isolated/.
 
 ** Skill Bundle Structure
 
-#+begin_src ditaa :file skills.png
-~/.crichton/skills/my-skill/
-+-- skill.toml    : Manifest (required)
-+-- skill.wasm    : Compiled WASM binary (required)
-+-- skill.wat     : WAT source (optional, human-readable)
+#+begin_src plantuml :file skills.png :exports results
+@startsalt
+{T
+  + ~/.crichton/skills/my-skill/
+  ++ skill.toml      (Manifest — required)
+  ++ skill.wasm      (Compiled WASM binary — required)
+  ++ skill.wat       (WAT source — optional, human-readable)
+}
+@endsalt
 #+end_src
 
 The =skill.toml= manifest must be present.  =skill.wasm= is the runnable
@@ -4120,12 +4124,16 @@ Generate a signing keypair via the SLIME/SLY REPL:
 
 ** Trusted Keys Directory
 
-#+begin_src ditaa :file keys.png
-~/.crichton/
-+-- signing-key.priv           : Ed25519 private key (secret)
-+-- trusted-keys/
-|   +-- abc123.pub             : Your own public key (auto-installed)
-|   +-- vendor-xyz.pub         : Third-party key you chose to trust
+#+begin_src plantuml :file keys.png :exports results
+@startsalt
+{T
+  + ~/.crichton/
+  ++ signing-key.priv           (Ed25519 private key — secret)
+  ++ trusted-keys/
+  +++ abc123.pub                (Your own public key — auto-installed)
+  +++ vendor-xyz.pub            (Third-party key you chose to trust)
+}
+@endsalt
 #+end_src
 
 At startup the daemon loads all =*.pub= files in =trusted-keys/=.  A skill
@@ -4192,14 +4200,18 @@ journal that is searchable on-demand.
 
 ** File Layout
 
-#+begin_src ditaa :file state.png
-~/.crichton/state/
-+-- SOUL.org       : Persona, values, behavioural tone
-+-- USER.org       : User identity and preferences
-+-- MEMORY.org     : Curated long-term facts (main sessions only)
-+-- journal/
-|   +-- 2026-03-02.org    : Today's raw daily log (append-only)
-|   +-- 2026-03-01.org    : Yesterday's daily log
+#+begin_src plantuml :file state.png :exports results
+@startsalt
+{T
+  + ~/.crichton/state/
+  ++ SOUL.org          (Persona, values, behavioural tone)
+  ++ USER.org          (User identity and preferences)
+  ++ MEMORY.org        (Curated long-term facts — main sessions only)
+  ++ journal/
+  +++ 2026-03-02.org   (Today's raw daily log — append-only)
+  +++ 2026-03-01.org   (Yesterday's daily log)
+}
+@endsalt
 #+end_src
 
 Directory permissions: =0700=.  File permissions: =0600=.
@@ -4248,30 +4260,20 @@ file per day: =journal/YYYY-MM-DD.org=.
 
 ** Bootstrap Loading Flow
 
-#+begin_src ditaa :file flow.png
-+-------------------+     +---------------------+
-| Agent turn starts  |---->| load-bootstrap-files|
-+-------------------+     +----------+----------+
-                                      |
-                              +-------v-------+
-                              | Session type? |
-                              +---+-------+---+
-                                  |       |
-                           main   |       | channel / subagent
-                                  |       |
-                    +-------------v-+   +-v-----------+
-                    | Full set      |   | Minimal set |
-                    | SOUL          |   | SOUL        |
-                    | USER          |   | USER        |
-                    | MEMORY        |   +-------------+
-                    +-------+-------+
-                            |
-                   +--------v---------+
-                   | bootstrap-system |
-                   | -prompt          |
-                   | (char budget     |
-                   |  enforced)       |
-                   +------------------+
+#+begin_src plantuml :file flow.png :exports results
+@startuml
+skinparam activityShape roundBox
+start
+:Agent turn starts;
+:load-bootstrap-files;
+if (Session type?) then (main)
+  :Full set\nSOUL · USER · MEMORY;
+else (channel / subagent)
+  :Minimal set\nSOUL · USER;
+endif
+:bootstrap-system-prompt\n(char budget enforced);
+stop
+@enduml
 #+end_src
 
 The composite system prompt is =*default-system-prompt*= concatenated with
@@ -4313,20 +4315,22 @@ the [[*Architecture Overview][Architecture Overview]] section.
 The TUI is built on =cl-tuition=, a Common Lisp port of Go's Bubble Tea
 framework.  It implements the TEA pattern:
 
-#+begin_src ditaa :file tea-pattern.png
-+--------+     +----------------+     +--------+
-| Event  |---->| update-message |---->| Model  |
-+--------+     | (CLOS method)  |     | (CLOS) |
-               +-------+--------+     +---+----+
-                       |                  |
-               +-------v--------+     +---v----+
-               | Command        |     | view   |
-               | (zero-arg      |     | (fn)   |
-               | lambda, run on |     +---+----+
-               | thread pool)   |         |
-               +----------------+     +---v-----------+
-                                       | Terminal I/O |
-                                       +--------------+
+#+begin_src plantuml :file tea-pattern.png :exports results
+@startuml
+left to right direction
+rectangle "Event" as E
+rectangle "update-message\n(CLOS method)" as U
+rectangle "Model\n(CLOS)" as M
+rectangle "Command\n(zero-arg lambda;\nruns on thread pool)" as C
+rectangle "view\n(fn)" as V
+rectangle "Terminal I/O" as T
+
+E --> U
+U --> M : new state
+U --> C : side effect
+M --> V
+V --> T
+@enduml
 #+end_src
 
 - *Model*: A =tui-model= CLOS instance holding all application state (chat
@@ -4376,27 +4380,13 @@ updated on each delta.
 
 ** Threading Model
 
-#+begin_src ditaa :file threading.png
-+-----------------------------------+
-|  Main Thread (cl-tuition loop)    |
-|                                   |
-|  - Terminal I/O and rendering     |
-|  - Input decoding                 |
-|  - update-message dispatch        |
-|  - view -> terminal output        |
-+---+-------------------------------+
-    |
-    | tui:send (thread-safe)
-    |
-+---v-------------------------------+
-|  Daemon I/O Thread (bt:make-thread)|
-|                                   |
-|  - Persistent connection to       |
-|    ~/.crichton/daemon.sock        |
-|  - Reads NDJSON lines in a loop   |
-|  - Injects daemon-response-msg    |
-|    and daemon-notification-msg    |
-+-----------------------------------+
+#+begin_src plantuml :file threading.png :exports results
+@startuml
+rectangle "**Main Thread** (cl-tuition loop)\n\n  · Terminal I/O and rendering\n  · Input decoding\n  · update-message dispatch\n  · view → terminal output" as Main
+rectangle "**Daemon I/O Thread** (bt:make-thread)\n\n  · Persistent connection to\n    ~/.crichton/daemon.sock\n  · Reads NDJSON lines in a loop\n  · Injects daemon-response-msg\n    and daemon-notification-msg" as IO
+
+Main -down-> IO : tui:send (thread-safe)
+@enduml
 #+end_src
 
 *Invariant*: The daemon I/O thread never touches terminal state directly.
@@ -4408,21 +4398,23 @@ The =view= function in =tui/render.lisp= computes the full terminal frame
 on every call.  Layout is derived from =model-width= / =model-height=
 (updated on =tui:window-size-msg= / =SIGWINCH=):
 
-#+begin_src ditaa :file render.png
-+------------------------------------------------------+
-| Title bar (1 line, full width)                       |
-+------------------------------------------------------+
-|                                                      |
-|  Chat history (remaining height, scrollable)         |
-|  - word-wrapped to (width - 4)                       |
-|  - Markdown-to-ANSI rendered                         |
-|  - Notification toasts as overlays                   |
-|                                                      |
-+------------------------------------------------------+
-| Status bar (1 line)                                  |
-+------------------------------------------------------+
-| Input area (1-3 lines, grows with wrapped text)      |
-+------------------------------------------------------+
+#+begin_src plantuml :file render.png :exports results
+@startsalt
+{+
+  Title bar (1 line, full width)
+  ==
+  {+
+    Chat history (remaining height, scrollable)
+    . · word-wrapped to (width − 4)
+    . · Markdown-to-ANSI rendered
+    . · Notification toasts as overlays
+  }
+  ==
+  Status bar (1 line)
+  ==
+  Input area (1-3 lines, grows with wrapped text)
+}
+@endsalt
 #+end_src
 
 LLM responses are rendered with lightweight Markdown-to-ANSI conversion:
@@ -4505,16 +4497,17 @@ need changelog entries — =git log= is sufficient.
 
 ** Diagrams
 
-Use =#+begin_src ditaa= for structural diagrams (boxes and arrows).
-Use =#+begin_src plantuml= for sequence diagrams (message flows with
-lifelines).  Do not use Unicode box-drawing characters or
-=#+begin_example= blocks for either — they do not export cleanly to
-LaTeX/PDF.
+Use =#+begin_src plantuml= for all diagrams.  Do not use Unicode
+box-drawing characters or =#+begin_example= blocks — they do not export
+cleanly to LaTeX/PDF.
 
-- *ditaa*: plain ASCII (=+-|= for boxes, =-->= for arrows); org-babel renders to PNG.
-- *plantuml*: PlantUML =@startuml ... @enduml= syntax; org-babel renders to PNG.
-  Requires =plantuml.jar=: install it, then set =org-plantuml-jar-path= in your
-  Emacs config and add =(plantuml . t)= to =org-babel-load-languages=.
+PlantUML diagram types used in this document:
+
+- =@startuml= / =@enduml= — sequence diagrams and flowcharts (activity diagrams)
+- =@startsalt= / =@endsalt= — UI wireframes and directory trees
+
+Requires =plantuml.jar=: install it, then set =org-plantuml-jar-path= in your
+Emacs config and add =(plantuml . t)= to =org-babel-load-languages=.
 
 ** Hot-Loading vs Restart
 
