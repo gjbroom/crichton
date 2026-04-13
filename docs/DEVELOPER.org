@@ -300,7 +300,7 @@ tool-use iteration.  Key points: tool iterations use non-streaming
 sent /before/ the closing =ok= response; the Emacs =❯= prompt does not
 appear until =chat_done= arrives.
 
-#+begin_src plantuml :file streaming-happy-path.png :exports results
+#+begin_src plantuml
 @startuml
 skinparam sequenceMessageAlign left
 skinparam maxMessageSize 220
@@ -366,7 +366,7 @@ idle watchdog (=*sse-stream-timeout*= = 120 s) force-closes the socket fd
 rather than using =bt:interrupt-thread=, because OpenSSL ignores thread
 interrupts.  The session snapshot prevents torn history.
 
-#+begin_src plantuml :file streaming-timeout.png :exports results
+#+begin_src plantuml
 @startuml
 skinparam sequenceMessageAlign left
 skinparam maxMessageSize 220
@@ -423,7 +423,7 @@ cannot corrupt the same session's message history.  A second request
 arriving while the first is still running gets an immediate =session-busy=
 error rather than racing.
 
-#+begin_src plantuml :file session-claim.png :exports results
+#+begin_src plantuml
 @startuml
 skinparam sequenceMessageAlign left
 skinparam maxMessageSize 220
@@ -4512,8 +4512,11 @@ lifelines).  Do not use Unicode box-drawing characters or
 LaTeX/PDF.
 
 - *ditaa*: plain ASCII (=+-|= for boxes, =-->= for arrows); org-babel renders to PNG.
-- *plantuml*: PlantUML =@startuml ... @enduml= syntax; requires =plantuml.jar= or
-  the =PLANTUML_JAR= environment variable set; org-babel renders to PNG.
+- *plantuml*: PlantUML =@startuml ... @enduml= syntax.  The source blocks in this
+  file intentionally omit =:file X.png :exports results= headers until a plantuml
+  exporter is configured.  To enable rendering, install =plantuml.jar=, set
+  =org-plantuml-jar-path= in your Emacs config, and add =:file X.png :exports results=
+  to each =#+begin_src plantuml= line.  Until then the source is readable as-is.
 
 ** Hot-Loading vs Restart
 
