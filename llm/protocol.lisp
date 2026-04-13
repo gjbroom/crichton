@@ -104,7 +104,7 @@
             (let ((role (getf msg :role))
                   (content (getf msg :content)))
               (unless role (error "Message missing :role"))
-              (unless content (error "Message missing :content"))
+              (unless content (error "Message missing :content (role=~A, msg=~S)" role msg))
               (list :role (if (keywordp role) role
                               (intern (string-upcase (string role)) :keyword))
                     :content content)))

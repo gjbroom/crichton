@@ -466,7 +466,10 @@
 ;;; --- Stream result assembly ---
 
 (defun stream-state-result (state)
-  "Build the final response plist from accumulated stream state."
+  "Build the final response plist from accumulated stream state.
+   Signals LLM-ERROR if no content blocks were received — this indicates the
+   HTTP connection was dropped before any SSE events arrived (e.g. a stale
+   pooled connection returning immediate EOF), not a legitimate empty reply."
   (let ((full-text (get-output-stream-string (sstate-text-accum state))))
     (when (plusp (length full-text))
       (push (list :type :text :text full-text)
@@ -479,6 +482,9 @@
                                     :output-tokens (sstate-output-tokens state))
                        :id (sstate-msg-id state)
                        :model (sstate-msg-model state))))
+    (when (null blocks)
+      (error 'llm-error
+             :message "Streaming response contained no content blocks — connection may have been dropped"))
     (log:info "Anthropic streaming response: tokens=~A+~A stop=~A"
               (sstate-input-tokens state) (sstate-output-tokens state) stop)
     result))
