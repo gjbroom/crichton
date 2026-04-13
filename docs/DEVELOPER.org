@@ -165,6 +165,38 @@ is standard CL practice.
 - *Capabilities*: Declared in =skill.toml=, enforced by runner
 - *Host functions*: =log=, =kv_get=, =kv_set=, =http_fetch=, etc.
 
+** Source Tree
+
+A quick map of the repository for orientation.  Most work on the daemon
+lives in the first four groups.
+
+| Directory            | Contents                                                           |
+|----------------------+--------------------------------------------------------------------|
+| =agent/=             | Agent loop, tool dispatch, input sanitization                      |
+| =daemon/=            | RPC server, lifecycle, notifications, Swank setup                  |
+| =llm/=               | Provider protocol, Anthropic implementation, usage metering hooks  |
+| =sessions/=          | Session history load/save, retention policy                        |
+| =storage/=           | Encrypted persistent key-value store (age backend)                 |
+| =skills/=            | Built-in skills (RSS, token usage, scheduler, etc.); registry;     |
+|                      | pipeline executor; retry/timeout infrastructure; WASM signing      |
+| =rpc/=               | NDJSON wire protocol (read/write, message constructors)            |
+| =credentials/=       | Credential mediator and age-file backend                           |
+| =crypto/=            | =age= encrypt/decrypt primitives                                   |
+| =config/=            | Config loader (=config.toml=), path constants, shared utilities    |
+| =state/=             | Bootstrap system-prompt assembly; event journal                    |
+| =channels/=          | Discord and other channel integrations                             |
+| =runner/=            | WASM skill runner server                                           |
+| =wasm/=              | wasmtime CFFI bindings and engine macros                           |
+| =client/=            | =crichton-client= CLI binary                                       |
+| =tui/=               | =crichton-tui= terminal UI (TEA architecture)                      |
+| =logging/=           | log4cl configuration                                               |
+| =tests/=             | Test suite                                                         |
+| =emacs/=             | =crichton.el= Emacs client                                         |
+| =docs/=              | This file, =USER-GUIDE.org=, =AGENT_SPEC.md=                       |
+
+*Start here* when tracing a chat request: =daemon/rpc-server.lisp= →
+=agent/loop.lisp= → =llm/anthropic.lisp=.
+
 ** Trust Boundaries
 
 #+begin_example
@@ -252,6 +284,186 @@ the LLM response incrementally:
   snapshot if the call errors or the client disconnects mid-stream.  This prevents torn
   session state (e.g., a =tool_use= block appended to history without a matching
   =tool_result=).  =run-agent-loop= =copy-list=s its input on entry for the same reason.
+
+** Sequence Diagrams
+
+The numbered data-flow lists above describe the happy path.  These diagrams
+show the concurrency and timing detail that matters for understanding past
+bugs and preventing new ones.  Each diagram covers a scenario where timing
+and thread interaction are the interesting part.
+
+*** Streaming Chat — Happy Path
+
+Shows the full message flow for a streaming chat request that includes one
+tool-use iteration.  Key points: tool iterations use non-streaming
+=send-message=; only the final text response streams deltas; =chat_done= is
+sent /before/ the closing =ok= response; the Emacs =❯= prompt does not
+appear until =chat_done= arrives.
+
+#+begin_src plantuml :file streaming-happy-path.png :exports results
+@startuml
+skinparam sequenceMessageAlign left
+skinparam maxMessageSize 220
+skinparam responseMessageBelowArrow true
+title Streaming Chat — Happy Path
+
+participant "Client\n(Emacs / TUI)" as C
+participant "Daemon\n(conn. thread)" as D
+participant "Agent Loop\n(run-agent/stream)" as A
+participant "Anthropic\n(Messages API)" as L
+participant "Tool\nExecutor" as T
+
+C -> D : {op:"chat", text:"...", stream:true, id:2}
+activate D
+D -> D : acquire session claim\ntake snapshot
+
+D -> A : run-agent/stream(msgs, on-delta)
+activate A
+
+group Iteration 1 — tool use (non-streaming)
+  A -> L : send-message(msgs)
+  activate L
+  note right of L : tool_use response;\nnot streamed
+  L --> A : {:stop-reason :tool-use\n :content [tool_use blocks]}
+  deactivate L
+  note over A : spawn usage-persist thread\n(background — avoids storage lock)
+  A -> T : execute tools
+  activate T
+  T --> A : tool results
+  deactivate T
+end
+
+group Iteration 2 — final text (streaming)
+  A -> L : stream-message(msgs + results, on-delta)
+  activate L
+  note right of L : SSE stream;\nidle watchdog active (120 s)
+  L --> A : SSE text_delta: "The weather"
+  A -> D : on-delta("The weather")
+  D -> C : {op:"chat_delta", id:2, text:"The weather"}
+  L --> A : SSE text_delta: " is sunny."
+  A -> D : on-delta(" is sunny.")
+  D -> C : {op:"chat_delta", id:2, text:" is sunny."}
+  L --> A : SSE message_stop
+  deactivate L
+  note over A : spawn usage-persist thread (background)
+end
+
+A --> D : (text, messages, response)
+deactivate A
+
+D -> C : {op:"chat_done", id:2, text:"The weather is sunny.", session_id:"s1"}
+note right of C : prompt ❯ appears here;\ndepends on chat_done arriving
+D -> D : save session history\nrelease claim
+D -> C : {id:2, ok:true, result:{text:"...", session_id:"s1"}}
+deactivate D
+@enduml
+#+end_src
+
+*** Streaming Chat — SSE Idle Timeout and Session Rollback
+
+Shows what happens when the Anthropic API goes silent mid-stream.  The SSE
+idle watchdog (=*sse-stream-timeout*= = 120 s) force-closes the socket fd
+rather than using =bt:interrupt-thread=, because OpenSSL ignores thread
+interrupts.  The session snapshot prevents torn history.
+
+#+begin_src plantuml :file streaming-timeout.png :exports results
+@startuml
+skinparam sequenceMessageAlign left
+skinparam maxMessageSize 220
+skinparam responseMessageBelowArrow true
+title Streaming Chat — SSE Idle Timeout and Session Rollback
+
+participant "Client" as C
+participant "Daemon\n(conn. thread)" as D
+participant "Agent Loop" as A
+participant "Anthropic\n(SSE stream)" as L
+participant "SSE Watchdog\n(thread)" as W
+
+C -> D : {op:"chat", stream:true, id:2}
+activate D
+D -> D : acquire claim\ntake snapshot
+
+D -> A : run-agent/stream(msgs, on-delta)
+activate A
+
+A -> L : stream-message(msgs)
+activate L
+activate W
+note over W : watchdog starts;\nresets on each chunk received
+
+L --> A : SSE: first tokens
+A -> D : on-delta(tokens)
+D -> C : {op:"chat_delta"...}
+
+note over L,W #ffcccc : 120 s of silence from API
+
+W ->x L : close(stream, :abort t)
+note right of W : fd-close forces\nSSL_read to unblock;\nbt:interrupt-thread\nwould be ignored
+deactivate W
+L --> A : I/O error on read
+note over L : watchdog-fired = T\n→ signal operation-cancelled
+deactivate L
+
+note over A #ffcccc : operation-cancelled propagates\nthrough dispatch-sse-event\n(re-raised, not swallowed)
+
+A --> D : operation-cancelled unwinds
+deactivate A
+
+D -> D : unwind-protect fires:\n  restore snapshot\n  release claim
+
+D -> C : {id:2, ok:false,\n error:{code:"agent_error",\n  message:"SSE stream timed out after 120s"}}
+deactivate D
+@enduml
+#+end_src
+
+*** Concurrent Session Claim Contention
+
+Sessions are protected by a claim token so that two concurrent requests
+cannot corrupt the same session's message history.  A second request
+arriving while the first is still running gets an immediate =session-busy=
+error rather than racing.
+
+#+begin_src plantuml :file session-claim.png :exports results
+@startuml
+skinparam sequenceMessageAlign left
+skinparam maxMessageSize 220
+skinparam responseMessageBelowArrow true
+title Concurrent Chat Requests — Session Claim Contention
+
+participant "Client A" as CA
+participant "Client B" as CB
+participant "Daemon\n(thread A)" as DA
+participant "Daemon\n(thread B)" as DB
+participant "Agent Loop" as A
+participant "Session\nState" as S
+
+CA -> DA : {op:"chat", session_id:"s1", id:10}
+activate DA
+DA -> S : session-claim("s1")
+S --> DA : token = 42
+
+CB -> DB : {op:"chat", session_id:"s1", id:11}
+activate DB
+DB -> S : session-claim("s1")
+S --> DB : :session-busy\n(claim already held)
+
+DB -> CB : {id:11, ok:false, result:"session-busy"}
+deactivate DB
+
+DA -> A : run-agent(msgs)
+activate A
+note over A : LLM call in progress...
+A --> DA : (response text, updated msgs)
+deactivate A
+
+DA -> S : session-release("s1", token=42)
+DA -> S : save session history
+DA -> CA : {id:10, ok:true, result:{text:"...", session_id:"s1"}}
+deactivate DA
+
+note over S : claim free;\nnext request for "s1" can proceed
+@enduml
+#+end_src
 
 * Wire Formats & Protocols
 
@@ -4293,12 +4505,15 @@ need changelog entries — =git log= is sufficient.
 
 ** Diagrams
 
-Use =#+begin_src ditaa= blocks for all diagrams.  Do not use Unicode
-box-drawing characters or =#+begin_example= blocks for diagrams.
+Use =#+begin_src ditaa= for structural diagrams (boxes and arrows).
+Use =#+begin_src plantuml= for sequence diagrams (message flows with
+lifelines).  Do not use Unicode box-drawing characters or
+=#+begin_example= blocks for either — they do not export cleanly to
+LaTeX/PDF.
 
-Reason: box-drawing characters are not rendered correctly when org-mode
-is exported to LaTeX/PDF.  ditaa uses plain ASCII (=+-|= for boxes,
-=-->= for arrows) and org-babel converts them to proper images on export.
+- *ditaa*: plain ASCII (=+-|= for boxes, =-->= for arrows); org-babel renders to PNG.
+- *plantuml*: PlantUML =@startuml ... @enduml= syntax; requires =plantuml.jar= or
+  the =PLANTUML_JAR= environment variable set; org-babel renders to PNG.
 
 ** Hot-Loading vs Restart
 
