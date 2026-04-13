@@ -175,32 +175,38 @@
 ;;; Records every send-message call into the general-purpose meter system.
 ;;; Works for any provider — the :around method fires regardless of backend.
 
+(defun %spawn-usage-persist (label model input-tokens output-tokens)
+  "Fire-and-forget thread: persist usage metrics without blocking the caller.
+   Runs record-usage in a background thread so storage lock contention from
+   flush-all-storage (scheduled every 60s) cannot block the LLM call path."
+  (bt:make-thread
+   (lambda ()
+     (handler-case
+         (crichton/skills:record-usage "llm" model input-tokens output-tokens)
+       (error (c)
+         (log:warn "Failed to record ~A usage: ~A" label c))))
+   :name "llm-usage-persist"))
+
 (defmethod send-message :around ((provider llm-provider) messages &key &allow-other-keys)
   (let ((result (call-next-method)))
-    (handler-case
-        (let* ((usage (getf result :usage))
-               (model (or (getf result :model)
-                          (provider-model provider)
-                          "unknown"))
-               (input-tokens (or (getf usage :input-tokens) 0))
-               (output-tokens (or (getf usage :output-tokens) 0)))
-          (crichton/skills:record-usage "llm" model input-tokens output-tokens))
-      (error (c)
-        (log:warn "Failed to record LLM usage: ~A" c)))
+    (let* ((usage (getf result :usage))
+           (model (or (getf result :model)
+                      (provider-model provider)
+                      "unknown"))
+           (input-tokens (or (getf usage :input-tokens) 0))
+           (output-tokens (or (getf usage :output-tokens) 0)))
+      (%spawn-usage-persist "LLM" model input-tokens output-tokens))
     result))
 
 (defmethod stream-message :around ((provider llm-provider) messages on-event
                                    &key &allow-other-keys)
   (declare (ignore messages on-event))
   (let ((result (call-next-method)))
-    (handler-case
-        (let* ((usage (getf result :usage))
-               (model (or (getf result :model)
-                          (provider-model provider)
-                          "unknown"))
-               (input-tokens (or (getf usage :input-tokens) 0))
-               (output-tokens (or (getf usage :output-tokens) 0)))
-          (crichton/skills:record-usage "llm" model input-tokens output-tokens))
-      (error (c)
-        (log:warn "Failed to record LLM streaming usage: ~A" c)))
+    (let* ((usage (getf result :usage))
+           (model (or (getf result :model)
+                      (provider-model provider)
+                      "unknown"))
+           (input-tokens (or (getf usage :input-tokens) 0))
+           (output-tokens (or (getf usage :output-tokens) 0)))
+      (%spawn-usage-persist "LLM streaming" model input-tokens output-tokens))
     result))
