@@ -300,7 +300,7 @@ tool-use iteration.  Key points: tool iterations use non-streaming
 sent /before/ the closing =ok= response; the Emacs =❯= prompt does not
 appear until =chat_done= arrives.
 
-#+begin_src plantuml
+#+begin_src plantuml :file streaming-happy-path.png :exports results
 @startuml
 skinparam sequenceMessageAlign left
 skinparam maxMessageSize 220
@@ -366,7 +366,7 @@ idle watchdog (=*sse-stream-timeout*= = 120 s) force-closes the socket fd
 rather than using =bt:interrupt-thread=, because OpenSSL ignores thread
 interrupts.  The session snapshot prevents torn history.
 
-#+begin_src plantuml
+#+begin_src plantuml :file streaming-timeout.png :exports results
 @startuml
 skinparam sequenceMessageAlign left
 skinparam maxMessageSize 220
@@ -423,7 +423,7 @@ cannot corrupt the same session's message history.  A second request
 arriving while the first is still running gets an immediate =session-busy=
 error rather than racing.
 
-#+begin_src plantuml
+#+begin_src plantuml :file session-claim.png :exports results
 @startuml
 skinparam sequenceMessageAlign left
 skinparam maxMessageSize 220
@@ -3897,7 +3897,7 @@ This matches Design Principle 1: /Skills must be isolated/.
 
 ** Skill Bundle Structure
 
-#+begin_src ditaa
+#+begin_src ditaa :file skills.png
 ~/.crichton/skills/my-skill/
 +-- skill.toml    : Manifest (required)
 +-- skill.wasm    : Compiled WASM binary (required)
@@ -4120,7 +4120,7 @@ Generate a signing keypair via the SLIME/SLY REPL:
 
 ** Trusted Keys Directory
 
-#+begin_src ditaa
+#+begin_src ditaa :file keys.png
 ~/.crichton/
 +-- signing-key.priv           : Ed25519 private key (secret)
 +-- trusted-keys/
@@ -4192,7 +4192,7 @@ journal that is searchable on-demand.
 
 ** File Layout
 
-#+begin_src ditaa
+#+begin_src ditaa :file state.png
 ~/.crichton/state/
 +-- SOUL.org       : Persona, values, behavioural tone
 +-- USER.org       : User identity and preferences
@@ -4248,7 +4248,7 @@ file per day: =journal/YYYY-MM-DD.org=.
 
 ** Bootstrap Loading Flow
 
-#+begin_src ditaa
+#+begin_src ditaa :file flow.png
 +-------------------+     +---------------------+
 | Agent turn starts  |---->| load-bootstrap-files|
 +-------------------+     +----------+----------+
@@ -4313,7 +4313,7 @@ the [[*Architecture Overview][Architecture Overview]] section.
 The TUI is built on =cl-tuition=, a Common Lisp port of Go's Bubble Tea
 framework.  It implements the TEA pattern:
 
-#+begin_src ditaa
+#+begin_src ditaa :file tea-pattern.png
 +--------+     +----------------+     +--------+
 | Event  |---->| update-message |---->| Model  |
 +--------+     | (CLOS method)  |     | (CLOS) |
@@ -4376,7 +4376,7 @@ updated on each delta.
 
 ** Threading Model
 
-#+begin_src ditaa
+#+begin_src ditaa :file threading.png
 +-----------------------------------+
 |  Main Thread (cl-tuition loop)    |
 |                                   |
@@ -4408,7 +4408,7 @@ The =view= function in =tui/render.lisp= computes the full terminal frame
 on every call.  Layout is derived from =model-width= / =model-height=
 (updated on =tui:window-size-msg= / =SIGWINCH=):
 
-#+begin_src ditaa
+#+begin_src ditaa :file render.png
 +------------------------------------------------------+
 | Title bar (1 line, full width)                       |
 +------------------------------------------------------+
@@ -4512,11 +4512,9 @@ lifelines).  Do not use Unicode box-drawing characters or
 LaTeX/PDF.
 
 - *ditaa*: plain ASCII (=+-|= for boxes, =-->= for arrows); org-babel renders to PNG.
-- *plantuml*: PlantUML =@startuml ... @enduml= syntax.  The source blocks in this
-  file intentionally omit =:file X.png :exports results= headers until a plantuml
-  exporter is configured.  To enable rendering, install =plantuml.jar=, set
-  =org-plantuml-jar-path= in your Emacs config, and add =:file X.png :exports results=
-  to each =#+begin_src plantuml= line.  Until then the source is readable as-is.
+- *plantuml*: PlantUML =@startuml ... @enduml= syntax; org-babel renders to PNG.
+  Requires =plantuml.jar=: install it, then set =org-plantuml-jar-path= in your
+  Emacs config and add =(plantuml . t)= to =org-babel-load-languages=.
 
 ** Hot-Loading vs Restart
 
