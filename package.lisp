@@ -225,6 +225,25 @@
            #:opml-export-monitors
            #:restore-rss-monitors
            #:run-rss-filter
+           ;; rss article inbox
+           #:inbox-insert-articles
+           #:inbox-get-unscored
+           #:inbox-get-unsaved
+           #:inbox-by-feed
+           #:inbox-saved-since
+           #:inbox-save-scores
+           #:inbox-mark-saved
+           #:inbox-mark-reviewed
+           #:inbox-stats
+           ;; rss curation (scorer, briefing, query)
+           #:get-interests-profile
+           #:set-interests-profile
+           #:run-interest-scorer
+           #:rss-morning-briefing
+           #:rss-inbox-query
+           #:format-inbox-query-result
+           #:start-rss-curator
+           #:restore-rss-curator
            #:clear-seen
            #:persist-rss-state
            #:load-rss-state

@@ -59,6 +59,8 @@ signing. Informed by a security audit of OpenClaw."
                                             (:file "rss")
                                             (:file "rss-monitor")
                                             (:file "rss-publish")
+                                            (:file "rss-inbox")
+                                            (:file "rss-curator")
                                             (:file "token-usage")
                                             (:file "battery")
                                             (:file "log-inspector")

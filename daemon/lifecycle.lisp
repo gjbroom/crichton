@@ -66,6 +66,8 @@
     (crichton/skills:restore-user-tasks))
   (guarded "RSS monitor restoration at startup failed"
     (crichton/skills:restore-rss-monitors))
+  (guarded "RSS curator startup failed"
+    (crichton/skills:restore-rss-curator))
   (guarded "Saved pipeline restoration at startup failed"
     (crichton/skills:restore-saved-pipelines))
   (guarded "Skill discovery at startup failed"

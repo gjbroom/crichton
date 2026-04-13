@@ -144,36 +144,26 @@ WASM skill before reporting."
                     (getf config :muted-until) nil
                     (getf config :last-failure) nil)
               (setf (gethash name *rss-monitors*) config))))
-        ;; Report new items
+        ;; Store new items in the article inbox for background curation.
+        ;; Items are stored regardless of keyword filter — the curator's
+        ;; interest-scoring step handles relevance independently of keywords.
         (when (plusp (getf result :new-count))
-          (let ((report-items (getf result :new-items))
-                (report-count (getf result :new-count)))
-            ;; Apply WASM filter if keywords configured
+          (let ((new-items (getf result :new-items)))
+            (handler-case
+                (inbox-insert-articles new-items)
+              (error (c)
+                (log:warn "RSS monitor ~A: inbox insert failed: ~A" name c)))
+            ;; Log a heartbeat; no user notification per-poll.
+            (log:info "RSS ~A: ~D new item~:P" name (getf result :new-count))
+            ;; If keywords configured, log matching count for visibility.
             (when keywords
-              (let ((filter-result (run-rss-filter report-items keywords
+              (let ((filter-result (run-rss-filter new-items keywords
                                                    :match-mode (or match-mode "any")
                                                    :search-fields (or search-fields '("title" "description")))))
                 (when filter-result
-                  (let ((matches (gethash "matches" filter-result)))
-                    (setf report-count (length matches))
-                    ;; Convert matched hash-tables back to plists for logging
-                    (setf report-items
-                          (mapcar (lambda (m)
-                                    (list :id (gethash "id" m)
-                                          :title (gethash "title" m)
-                                          :link (gethash "link" m)
-                                          :matched-keywords (gethash "matched_keywords" m)))
-                                  (coerce matches 'list)))))))
-            (when (plusp report-count)
-              (log:info "RSS ~A: ~D ~Aitem~:P" name report-count
-                        (if keywords "matching " ""))
-              (dolist (item report-items)
-                (log:info "  ~A: ~A" name (getf item :title)))
-              (crichton/daemon:notification-post
-               "rss"
-               (format nil "~D ~Aitem~:P in ~A" report-count
-                       (if keywords "matching " "") name)
-               name)))))
+                  (let ((n (length (gethash "matches" filter-result #()))))
+                    (when (plusp n)
+                      (log:info "RSS ~A: ~D keyword-matching item~:P" name n)))))))))
     (error (c)
       ;; On failure: exponential backoff, dead-feed alert at threshold.
       ;; notification-post is called OUTSIDE the lock to avoid lock ordering issues.

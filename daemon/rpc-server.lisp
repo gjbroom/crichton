@@ -314,6 +314,40 @@ Same snapshot/commit/restore pattern as the streaming handler."
                            :name "rpc-stop-daemon")
            (crichton/rpc:make-ok-response id t))
 
+          ("rss-interests-get"
+           (crichton/rpc:make-ok-response
+            id (or (crichton/skills:get-interests-profile) "")))
+
+          ("rss-interests-set"
+           (let ((text (crichton/rpc:msg-get msg "text")))
+             (unless (and text (plusp (length text)))
+               (return-from rpc-dispatch
+                 (crichton/rpc:make-error-response
+                  id "bad_request" "Missing required field: text")))
+             (crichton/skills:set-interests-profile text)
+             (crichton/rpc:make-ok-response id t)))
+
+          ("rss-inbox-query"
+           (let* ((feed   (crichton/rpc:msg-get msg "feed_name"))
+                  (items  (crichton/skills:rss-inbox-query :feed-name feed))
+                  (result (make-hash-table :test #'equal)))
+             (setf (gethash "count" result) (length items)
+                   (gethash "items" result)
+                   (coerce
+                    (mapcar (lambda (a)
+                              (let ((ht (make-hash-table :test #'equal)))
+                                (setf (gethash "guid"           ht) (getf a :guid "")
+                                      (gethash "feed_name"      ht) (getf a :feed-name "")
+                                      (gethash "title"          ht) (getf a :title "")
+                                      (gethash "link"           ht) (getf a :link "")
+                                      (gethash "pub_date"       ht) (getf a :pub-date "")
+                                      (gethash "interest_score" ht) (or (getf a :interest-score) 0.0)
+                                      (gethash "reason"         ht) (or (getf a :reason) ""))
+                                ht))
+                            items)
+                    'vector))
+             (crichton/rpc:make-ok-response id result)))
+
           (otherwise
            (crichton/rpc:make-error-response
             id "unknown_op"
