@@ -163,6 +163,21 @@
 
 ;;; --- HTTP fetching ---
 
+(defun ensure-xml-string (body)
+  "Coerce BODY to a string suitable for xmls:parse.
+   When dexador's charset detection fails — e.g., a feed that claims UTF-8
+   but contains invalid byte sequences — decode-body silently returns the raw
+   byte vector instead of a decoded string.  xmls:parse has an etypecase that
+   only accepts string or stream, so we must decode the octets here.
+   Tries UTF-8 first; falls back to ISO-8859-1, which maps all 256 byte
+   values and therefore never signals a decoding error."
+  (if (stringp body)
+      body
+      (handler-case
+          (babel:octets-to-string body :encoding :utf-8)
+        (babel:character-decoding-error ()
+          (babel:octets-to-string body :encoding :iso-8859-1)))))
+
 (defun fetch-feed (url)
   "Fetch and parse an RSS/Atom feed from URL.
    Returns (values items feed-title feed-format).
@@ -181,7 +196,7 @@
         (error "Feed fetch returned HTTP ~D for ~A" status url))
       (with-retry (:context :rss :max-retries 2 :backoff-base 0.1)
         (handler-case
-            (parse-feed-xml body)
+            (parse-feed-xml (ensure-xml-string body))
           (error (c)
             (error "RSS XML parsing failed for ~A: ~A" url c)))))))
 
