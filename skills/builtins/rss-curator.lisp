@@ -214,6 +214,10 @@ Scoring guide:
                                   (getf a :feed-name))))))
           (log:info "RSS morning briefing: ~D article~:P" count)
           (crichton/daemon:notification-post "rss-briefing" text "rss-curator")
+          (handler-case
+              (pushover-send text :title "Morning Briefing")
+            (error (c)
+              (log:warn "RSS morning briefing: Pushover delivery failed: ~A" c)))
           count))))
 
 ;;; --- On-demand query ---
