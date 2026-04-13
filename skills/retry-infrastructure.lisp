@@ -253,28 +253,36 @@
 Signals OPERATION-CANCELLED if the budget is exceeded.
 Uses BT:INTERRUPT-THREAD to deliver the cancellation.  Callers that catch
 broad ERROR conditions (e.g. SSE event dispatch) must re-raise
-OPERATION-CANCELLED rather than swallowing it."
+OPERATION-CANCELLED rather than swallowing it.
+
+The watchdog checks a cancellation flag before firing so that a failed
+BT:DESTROY-THREAD (which is silently swallowed) cannot cause a stale
+watchdog to interrupt a later, unrelated operation on the same thread."
   (let ((thread (gensym "THREAD"))
         (result (gensym "RESULT"))
         (condition (gensym "CONDITION"))
+        (cancelled (gensym "CANCELLED"))
         (timeout-thread (gensym "TIMEOUT-THREAD")))
     `(let ((,result nil)
            (,condition nil)
+           (,cancelled (list nil))
            (,thread (bt:current-thread)))
        (let ((,timeout-thread
               (bt:make-thread
                (lambda ()
                  (sleep ,seconds)
-                 (when (bt:thread-alive-p ,thread)
-                   (bt:interrupt-thread
-                    ,thread
-                    (lambda ()
-                      (error 'operation-cancelled :message ,error-message)))))
+                 (unless (car ,cancelled)
+                   (when (bt:thread-alive-p ,thread)
+                     (bt:interrupt-thread
+                      ,thread
+                      (lambda ()
+                        (error 'operation-cancelled :message ,error-message))))))
                :name "timeout-watchdog")))
          (unwind-protect
               (handler-case
                   (setf ,result (progn ,@body))
                 (error (c) (setf ,condition c)))
+           (setf (car ,cancelled) t)
            (when (bt:thread-alive-p ,timeout-thread)
              (ignore-errors (bt:destroy-thread ,timeout-thread))))
          (if ,condition

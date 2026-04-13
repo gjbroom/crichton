@@ -109,10 +109,12 @@ Override with [llm] tool-timeout = N in config.toml.")
 
 (defun initialize-messages (user-input messages)
   "Build the initial message list for an agent loop invocation.
-   Destructively appends USER-INPUT to MESSAGES when both are provided."
+   Uses APPEND (not NCONC) so the caller's MESSAGES list is never mutated.
+   This is essential: callers hold a snapshot for error-recovery rollback,
+   and mutating it with NCONC would corrupt the rollback point."
   (cond
     ((and messages user-input)
-     (nconc messages (list (list :role :user :content user-input))))
+     (append messages (list (list :role :user :content user-input))))
     (messages messages)
     (user-input (list (list :role :user :content user-input)))))
 

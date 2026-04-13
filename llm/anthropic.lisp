@@ -517,6 +517,7 @@
               :content json-body
               :want-stream t
               :force-binary t
+              :use-connection-pool nil
               :read-timeout 120)
           (dex:http-request-failed (c)
             (classify-anthropic-error

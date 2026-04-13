@@ -122,5 +122,7 @@
   (gethash "error" msg))
 
 (defun msg-get (msg key)
-  "Get an arbitrary field from a parsed message."
-  (gethash key msg))
+  "Get an arbitrary field from a parsed message.
+   JSON null (shasht deserializes as :NULL) is treated as absent, returning NIL."
+  (let ((val (gethash key msg)))
+    (if (eq val :null) nil val)))
