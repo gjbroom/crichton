@@ -123,6 +123,8 @@
 
 (defun msg-get (msg key)
   "Get an arbitrary field from a parsed message.
-   JSON null (shasht deserializes as :NULL) is treated as absent, returning NIL."
+   JSON null (shasht deserializes as :NULL) is treated as absent, returning NIL.
+   Note: JSON true/:TRUE and false/:FALSE pass through as keywords — callers
+   that need boolean semantics must handle those explicitly."
   (let ((val (gethash key msg)))
     (if (eq val :null) nil val)))

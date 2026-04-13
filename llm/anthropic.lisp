@@ -531,7 +531,8 @@ inside OpenSSL.  Override with [llm] sse-stream-timeout = N in config.toml.")
               :content json-body
               :want-stream t
               :force-binary t
-              :use-connection-pool nil
+              :use-connection-pool nil  ; don't pool streaming conns — interrupted streams
+                                        ; leave the socket in an indeterminate state
               :read-timeout 120)
           (dex:http-request-failed (c)
             (classify-anthropic-error
@@ -571,7 +572,12 @@ SO_RCVTIMEO (which resets on every partial read, allowing indefinite stalls).
 
 On timeout the error is re-raised as OPERATION-CANCELLED so callers that
 catch broad ERROR conditions (e.g. dispatch-sse-event) re-raise it rather
-than swallowing it."
+than swallowing it.
+
+Timeout layering: this watchdog (120s idle) is the primary mechanism for
+SSE streams. The outer with-timeout in run-agent-loop (300s elapsed) is a
+safety net covering non-streaming send-message calls and the case where
+this watchdog itself fails to fire."
   (let ((stream-done (list nil))      ; set t by unwind-protect; prevents late watchdog fire
         (watchdog-fired (list nil)))  ; set t by watchdog; used to classify the stream error
     (let ((watchdog

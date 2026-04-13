@@ -108,10 +108,7 @@ Override with [llm] tool-timeout = N in config.toml.")
             tool-uses)))
 
 (defun initialize-messages (user-input messages)
-  "Build the initial message list for an agent loop invocation.
-   Uses APPEND (not NCONC) so the caller's MESSAGES list is never mutated.
-   This is essential: callers hold a snapshot for error-recovery rollback,
-   and mutating it with NCONC would corrupt the rollback point."
+  "Build the initial message list for an agent loop invocation."
   (cond
     ((and messages user-input)
      (append messages (list (list :role :user :content user-input))))
@@ -123,7 +120,12 @@ Override with [llm] tool-timeout = N in config.toml.")
    and iterate until the LLM returns text or MAX-ITERATIONS is reached.
    SEND-FN is (lambda (msgs) → response-plist).
    LABEL is a string for log messages (e.g. \"Agent\" or \"Agent/stream\").
-   Returns (values response-text all-messages last-response)."
+   Returns (values response-text all-messages last-response).
+
+   MSGS is copied on entry so callers retain an unmodified reference. This
+   matters for handle-streaming-chat-request's snapshot/rollback: the snapshot
+   it holds for error recovery is never mutated by this function."
+  (let ((msgs (copy-list msgs)))
   (dotimes (i max-iterations
             (progn
               (log:warn "~A hit max iterations (~D)" label max-iterations)
@@ -150,7 +152,7 @@ Override with [llm] tool-timeout = N in config.toml.")
                                            :content (crichton/skills:with-timeout
                                                         (tool-timeout
                                                          :error-message "Tool execution timed out")
-                                                      (execute-tool-calls content))))))))))
+                                                      (execute-tool-calls content)))))))))))
 
 ;;; --- Agent loop ---
 

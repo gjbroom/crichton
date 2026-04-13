@@ -173,9 +173,12 @@ when a :RETRY restart is available (established by the LLM provider)."
 
 (defun session-messages-snapshot (session-id)
   "Return a shallow copy of the current message list for SESSION-ID.
-A copy is essential: run-agent-loop mutates its list via nconc, so without
-snapshotting a killed or erroring thread would leave *chat-sessions* in a
-torn state (e.g. tool_use appended but no tool_result yet)."
+The copy is the rollback point: if the LLM call errors or is interrupted,
+the unwind-protect in handle-streaming-chat-request restores this snapshot,
+preventing torn session state (e.g. tool_use appended but no tool_result).
+Safety relies on run-agent-loop copying its input on entry (so nconc never
+reaches back to this list) and initialize-messages using append (so the
+user turn is also decoupled)."
   (let ((session-lock (get-session-lock session-id)))
     (bt:with-lock-held (session-lock)
       (copy-list (gethash session-id *chat-sessions*)))))
