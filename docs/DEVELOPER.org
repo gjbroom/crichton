@@ -243,8 +243,15 @@ the LLM response incrementally:
 
 *Key properties*:
 - Streaming uses the same per-connection =(stream . lock)= pattern as push notifications
-- Tool-use iterations are invisible to the client --- only the final text response streams
+- Tool-use iterations are invisible to the client --- only the final text response streams.
+  During tool loops, =run-agent/stream= calls the non-streaming =send-message= and executes
+  tools; only when the LLM produces a final text response does streaming resume.
 - Graceful fallback: if the provider does not support streaming, =run-agent/stream= falls back to =send-message= automatically
+- Session snapshot/rollback: =handle-streaming-chat-request= takes a shallow copy of
+  session messages before calling =run-agent/stream=.  An =unwind-protect= restores the
+  snapshot if the call errors or the client disconnects mid-stream.  This prevents torn
+  session state (e.g., a =tool_use= block appended to history without a matching
+  =tool_result=).  =run-agent-loop= =copy-list=s its input on entry for the same reason.
 
 * Wire Formats & Protocols
 
@@ -801,8 +808,8 @@ Persistent key-value store with namespace isolation and age encryption.
 Get a value from storage.
 
 #+begin_src lisp
-(store-get "meters" "anthropic:input-units" 0)
-;; => 12345
+(store-get "rss" "last-briefed-at" 0)
+;; => 3924071234
 #+end_src
 
 **** =store-set (namespace key value)=
@@ -810,8 +817,8 @@ Get a value from storage.
 Set a value in storage. Marks namespace as dirty.
 
 #+begin_src lisp
-(store-set "meters" "anthropic:input-units" 12345)
-;; => 12345
+(store-set "rss" "last-briefed-at" (get-universal-time))
+;; => 3924071234
 #+end_src
 
 **** =store-delete (namespace key)=
@@ -828,7 +835,7 @@ Delete a key from storage.
 Check if a key exists.
 
 #+begin_src lisp
-(store-exists-p "meters" "anthropic:input-units")
+(store-exists-p "rss" "interests-profile")
 ;; => T or NIL
 #+end_src
 
@@ -837,8 +844,8 @@ Check if a key exists.
 List all keys in namespace, optionally filtered by prefix.
 
 #+begin_src lisp
-(store-list-keys "meters" "anthropic:")
-;; => ("anthropic:input-units" "anthropic:output-units")
+(store-list-keys "rss")
+;; => ("interests-profile" "last-briefed-at")
 #+end_src
 
 **** =store-get-all (namespace)=
@@ -846,8 +853,8 @@ List all keys in namespace, optionally filtered by prefix.
 Get all key-value pairs as an alist.
 
 #+begin_src lisp
-(store-get-all "meters")
-;; => (("anthropic:input-units" . 12345) ("anthropic:output-units" . 6789))
+(store-get-all "rss")
+;; => (("interests-profile" . "...") ("last-briefed-at" . 3924071234))
 #+end_src
 
 **** =store-set-all (namespace alist)=
@@ -1196,15 +1203,39 @@ refine this (e.g., weather 404 is never retried — city not found).
 #+end_src
 
 Executes BODY with a watchdog thread.  If BODY does not complete within
-SECONDS, the watchdog fires =bt:interrupt-thread= and signals
-=operation-cancelled=.
+SECONDS, the watchdog fires =bt:interrupt-thread= into the calling thread
+and signals =operation-cancelled=.
+
+Used for tool execution and non-streaming LLM API calls.  *Not* used for
+SSE streams — see the SSE Idle Watchdog section below.
+
+*** SSE Idle Watchdog
+
+Streaming LLM responses use a separate, fd-close based watchdog rather
+than =with-timeout=.  The reason: =bt:interrupt-thread= is unreliable for
+threads blocked inside OpenSSL's =SSL_read=, which ignores POSIX signals.
+Closing the underlying socket fd unconditionally unblocks any pending read.
+
+The watchdog is implemented in =process-sse-stream= (=llm/anthropic.lisp=):
+
+1. A watchdog thread starts alongside the SSE reader.
+2. If no bytes arrive for =*sse-stream-timeout*= seconds (default 120,
+   configurable via =[llm] sse-stream-timeout= in =config.toml=), the
+   watchdog calls =(close response-stream :abort t)=.
+3. The fd close unblocks the SSL read; the resulting error is caught by
+   the SSE reader, which checks a =watchdog-fired= flag and re-signals
+   it as =operation-cancelled=.
+4. A =stream-done= flag prevents the watchdog from firing after normal
+   stream completion.
+
+This is an /idle/ timeout — it resets on every chunk received.  The outer
+=*llm-api-timeout*= (300 s) is the /elapsed/ ceiling for the entire call.
 
 *** =operation-cancelled= Condition
 
 =operation-cancelled= is a distinct subclass of =error= signalled by
-=with-timeout=.  Callers that catch broad =(error (c) ...)= conditions —
-such as SSE event dispatchers — *must* re-raise it rather than swallowing
-it:
+=with-timeout= and by the SSE idle watchdog.  Callers that catch broad
+=(error (c) ...)= conditions *must* re-raise it rather than swallowing it:
 
 #+begin_src lisp
 (handler-case
@@ -1214,9 +1245,9 @@ it:
     (log:warn "SSE event error: ~A" c)))                ; swallow
 #+end_src
 
-This distinction is critical: a timeout interrupt delivered inside a
-broad error handler would otherwise be silently discarded, leaving the
-calling thread blocked indefinitely.
+This pattern appears in =dispatch-sse-event= so that a timeout interrupt
+delivered during JSON parsing of an SSE event propagates correctly rather
+than being silently discarded.
 
 *** HTTP helpers
 
@@ -1226,16 +1257,18 @@ that apply =with-retry= automatically.
 
 *** Agent Loop Timeouts
 
-Two timeouts govern the agent loop (configured in =config.toml= under
-=[llm]=):
+Three timeouts govern streaming LLM calls (configured in =config.toml=
+under =[llm]=):
 
-| Parameter        | Config key       | Default | Description                          |
-|------------------+------------------+---------+--------------------------------------|
-| =*llm-api-timeout*= | =api-timeout= | 300 s   | Single LLM API call (streaming or not) |
-| =*tool-execution-timeout*= | =tool-timeout= | 60 s  | All tool calls in one iteration      |
+| Parameter / Config key           | Default | Mechanism          | Description                               |
+|----------------------------------+---------+--------------------+-------------------------------------------|
+| =*llm-api-timeout*= / =api-timeout= | 300 s   | =with-timeout= (thread interrupt) | Elapsed ceiling for entire LLM call |
+| =*tool-execution-timeout*= / =tool-timeout= | 60 s | =with-timeout= (thread interrupt) | All tool calls in one iteration |
+| =*sse-stream-timeout*= / =sse-stream-timeout= | 120 s | fd-close watchdog | Idle silence on an SSE stream |
 
-Both use =with-timeout= and signal =operation-cancelled= on expiry,
-which propagates back through the agent loop as an ordinary error.
+The SSE idle timeout fires first on a stalled stream; the api-timeout is
+the fallback if the stream hangs in a way the idle watchdog cannot detect.
+All three signal =operation-cancelled= on expiry.
 
 ** LLM Provider Protocol (~llm/protocol.lisp~)
 
@@ -1248,37 +1281,48 @@ CLOS-based provider abstraction.
 Base class for LLM providers.
 
 Slots:
-- =provider-id=: String identifier (e.g., "anthropic")
-- =api-key=: API key for authentication
-- =default-model=: Default model to use
+- =provider-id=: Keyword identifier (e.g., =:anthropic=)
+- =model=: Model name string (e.g., ="claude-sonnet-4-20250514"=)
 
-Methods to implement:
-- =send-message (provider messages &key model max-tokens)=
-- =supports-tool-use-p (provider)= \rightarrow boolean
+Generics to implement:
+- =send-message (provider messages &key system max-tokens temperature tools)=
+- =stream-message (provider messages on-event &key system max-tokens temperature tools)=
 
-*** Example: Anthropic Provider
+=stream-message= has a default method that signals =llm-feature-not-supported=.
+=run-agent/stream= catches that condition and falls back to =send-message=
+automatically — providers do not need to implement streaming to be usable.
+
+*** Usage Metering Hooks
+
+=llm/protocol.lisp= defines =:around= methods on both =send-message= and
+=stream-message= that record token usage after every call via
+=crichton/skills:record-usage=.
+
+To avoid blocking the LLM call path, the storage write is performed in a
+background thread via =%spawn-usage-persist=:
 
 #+begin_src lisp
-(defclass anthropic-provider (llm-provider)
-  ())
-
-(defmethod send-message ((provider anthropic-provider) messages
-                        &key (model "claude-sonnet-4-20250514")
-                             (max-tokens 4096))
-  ;; Send request to Anthropic API
-  ;; Return (values response-text tool-calls)
-  ...)
-
-(defmethod supports-tool-use-p ((provider anthropic-provider))
-  t)
+(bt:make-thread
+  (lambda ()
+    (handler-case
+        (crichton/skills:record-usage "llm" model input-tokens output-tokens)
+      (error (c) (log:warn "Failed to record LLM usage: ~A" c))))
+  :name "llm-usage-persist")
 #+end_src
+
+The reason for the background thread: =record-usage= calls =persist-meter=
+which acquires =*storage-lock*=.  The daemon's storage-sync task (scheduled
+every 60 seconds) calls =flush-all-storage=, which holds =*storage-lock*=
+for the duration of each =age-encrypt= subprocess call.  Running the persist
+inline would have stalled the LLM response path on that lock contention.
 
 *** Condition Types
 
 - =llm-error=: Base error class
 - =llm-api-error=: HTTP API errors (includes status code)
 - =llm-auth-error=: Authentication failures
-- =llm-rate-limit-error=: Rate limiting
+- =llm-rate-limit-error=: Rate limiting (includes =retry-after= slot)
+- =llm-feature-not-supported=: Provider does not implement the requested feature
 
 ** Skill Registry API (~skills/registry.lisp~)
 
@@ -3541,7 +3585,15 @@ Separate ASDF system and binary for the interactive TUI:
 
 #+begin_src lisp
 ;; Via Swank REPL
-(crichton/skills:token-usage-report)
+(crichton/skills:usage-report)
+
+;; Single meter
+(crichton/skills:meter-report "llm")
+
+;; Programmatic snapshot
+(crichton/skills:meter-snapshot "llm")
+;; => (:name "llm" :call-count 42 :total-input 128000 :total-output 16000
+;;     :total-cost 0.624 :units-per-minute 1200.0 ...)
 
 ;; Or via client
 #+end_src
@@ -3550,6 +3602,56 @@ Separate ASDF system and binary for the interactive TUI:
 crichton-client
 > Show me token usage statistics
 #+end_src
+
+*** Token Usage Metering API (~skills/builtins/token-usage.lisp~)
+
+The metering module tracks resource consumption for any named service.
+LLM calls are metered automatically via the =:around= methods in
+=llm/protocol.lisp=.
+
+**** Core functions
+
+- =record-usage (meter-name tier input-units output-units)= — Record a usage
+  event.  =tier= is typically the model name (e.g. ="claude-sonnet-4-20250514"=).
+  Updates the in-memory meter immediately; persistence is fire-and-forget.
+
+- =ensure-meter (name)= — Get or create a named meter.
+
+- =meter-snapshot (name)= — Return a plist with totals, burn rate, and cost.
+
+- =aggregate-snapshot ()= — Combined snapshot across all meters.
+
+- =meter-recent (name &optional n)= — Last N usage records as plists.
+
+**** Persistence
+
+Meters are persisted under the ="meters"= storage namespace, keyed as
+="all-meters"=, whose value is a hash-table mapping meter name to a plist:
+
+#+begin_src lisp
+(crichton/storage:store-get "meters" "all-meters")
+;; => #<hash-table "llm" => (:name "llm" :total-input 128000 :total-output 16000
+;;                           :total-cost 0.624d0 :call-count 42 ...) >
+#+end_src
+
+- =persist-meter (name)= — Write one meter to storage immediately.
+- =save-meters ()= — Snapshot all meters to storage.
+- =load-meters ()= — Restore meters from storage (called on daemon startup).
+- =*auto-persist-meters*= — When true (default), =record-usage= triggers
+  =persist-meter= automatically (in a background thread).
+
+**** Pricing tables
+
+Model pricing is registered at load time:
+
+#+begin_src lisp
+(register-pricing "llm"
+  '(("claude-sonnet-4-20250514"  :input 3.00d0 :output 15.00d0)
+    ("claude-opus-4-20250514"    :input 15.00d0 :output 75.00d0)
+    ...))
+#+end_src
+
+Cost estimates are computed per call and accumulated in =meter-total-cost=.
 
 ** Manually Flush Storage
 
