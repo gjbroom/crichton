@@ -14,6 +14,14 @@
 (defparameter *anthropic-default-max-tokens* 4096
   "Default max_tokens for Anthropic requests.")
 
+(defparameter *sse-stream-timeout* 120
+  "Seconds of silence on an SSE stream before the connection is force-closed.
+This is a wall-clock idle timeout: if no bytes arrive for this many seconds
+the watchdog closes the underlying socket fd, which unblocks any SSL_read
+unconditionally.  SO_RCVTIMEO alone is insufficient because it resets on
+every partial read, and bt:interrupt-thread is unreliable for threads blocked
+inside OpenSSL.  Override with [llm] sse-stream-timeout = N in config.toml.")
+
 ;;; --- Provider class ---
 
 (defclass anthropic-provider (llm-provider)
@@ -550,17 +558,48 @@
     (error (c)
       (log:warn "Error processing SSE event ~A: ~A" event-type c))))
 
-(defun process-sse-stream (response-stream state on-event)
+(defun process-sse-stream (response-stream state on-event
+                           &key (timeout *sse-stream-timeout*))
   "Read SSE events from RESPONSE-STREAM, dispatching to STATE methods.
-   Ensures RESPONSE-STREAM is closed on exit."
-  (unwind-protect
-       (let ((char-stream (flexi-streams:make-flexi-stream
-                            response-stream :external-format :utf-8)))
-         (parse-sse-events
-          char-stream
-          (lambda (event-type data)
-            (dispatch-sse-event state on-event event-type data))))
-    (close response-stream)))
+Ensures RESPONSE-STREAM is closed on exit.
+
+A stream-closing watchdog fires after TIMEOUT seconds of silence: it closes
+RESPONSE-STREAM directly, which unblocks any in-progress SSL_read
+unconditionally.  This is more reliable than bt:interrupt-thread (which
+depends on signal delivery through the SSL layer) and more precise than
+SO_RCVTIMEO (which resets on every partial read, allowing indefinite stalls).
+
+On timeout the error is re-raised as OPERATION-CANCELLED so callers that
+catch broad ERROR conditions (e.g. dispatch-sse-event) re-raise it rather
+than swallowing it."
+  (let ((stream-done (list nil))      ; set t by unwind-protect; prevents late watchdog fire
+        (watchdog-fired (list nil)))  ; set t by watchdog; used to classify the stream error
+    (let ((watchdog
+           (bt:make-thread
+            (lambda ()
+              (sleep timeout)
+              (unless (car stream-done)
+                (setf (car watchdog-fired) t)
+                (log:warn "SSE stream idle for ~As — force-closing connection" timeout)
+                (ignore-errors (close response-stream :abort t))))
+            :name "sse-stream-watchdog")))
+      (unwind-protect
+           (let ((char-stream (flexi-streams:make-flexi-stream
+                                response-stream :external-format :utf-8)))
+             (handler-case
+                 (parse-sse-events
+                  char-stream
+                  (lambda (event-type data)
+                    (dispatch-sse-event state on-event event-type data)))
+               (error (c)
+                 (if (car watchdog-fired)
+                     (error 'operation-cancelled
+                            :message (format nil "SSE stream timed out after ~As of silence" timeout))
+                     (error c)))))
+        (setf (car stream-done) t)
+        (when (bt:thread-alive-p watchdog)
+          (ignore-errors (bt:destroy-thread watchdog)))
+        (ignore-errors (close response-stream))))))
 
 ;;; --- stream-message method ---
 
