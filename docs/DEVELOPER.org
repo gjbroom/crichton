@@ -1460,11 +1460,14 @@ that apply =with-retry= automatically.
 Three timeouts govern streaming LLM calls (configured in =config.toml=
 under =[llm]=):
 
-| Parameter / Config key           | Default | Mechanism          | Description                               |
-|----------------------------------+---------+--------------------+-------------------------------------------|
-| =*llm-api-timeout*= / =api-timeout= | 300 s   | =with-timeout= (thread interrupt) | Elapsed ceiling for entire LLM call |
-| =*tool-execution-timeout*= / =tool-timeout= | 60 s | =with-timeout= (thread interrupt) | All tool calls in one iteration |
-| =*sse-stream-timeout*= / =sse-stream-timeout= | 120 s | fd-close watchdog | Idle silence on an SSE stream |
+| Config key (=[llm]=)     | Default | Description                                                              |
+|--------------------------+---------+--------------------------------------------------------------------------|
+| =api-timeout=            | 300 s   | Elapsed ceiling for the entire LLM API call. Thread-interrupt watchdog.  |
+|                          |         | Lisp: =*llm-api-timeout*=                                                |
+| =tool-timeout=           | 60 s    | All tool calls in one agent iteration. Thread-interrupt watchdog.        |
+|                          |         | Lisp: =*tool-execution-timeout*=                                         |
+| =sse-stream-timeout=     | 120 s   | Idle silence on an SSE stream before fd-close. See SSE Idle Watchdog.   |
+|                          |         | Lisp: =*sse-stream-timeout*=                                             |
 
 The SSE idle timeout fires first on a stalled stream; the api-timeout is
 the fallback if the stream hangs in a way the idle watchdog cannot detect.
