@@ -1,8 +1,6 @@
 #+TITLE: Crichton Developer Documentation
 #+AUTHOR: Gordon J. Broom
 #+DATE: 2026-02-17
-#+HEADER: :headers '("\\usepackage{tikz}")
-#+HEADER: :headers '("\\usetikzlibrary{positioning, arrows.meta, calc}")
 #+STARTUP: overview
 #+TOC: headlines 2
 #+OPTIONS: ':t
@@ -35,47 +33,33 @@ Derived from OpenClaw audit findings:
 
 ** System Architecture
 
-Crichton uses a microkernel architecture with strong process isolation: \\
-#+NAME: architecture-diagram
-#+BEGIN_SRC latex :exports results :results output file: architecture.png
-\begin{tikzpicture}[
-    box/.style={rectangle, draw, thick, text width=2.8cm, minimum height=1.2cm, align=center},
-    arrow/.style={-Stealth, very thick},
-    doublearrow/.style={Stealth-Stealth, very thick}
-]
+Crichton uses a microkernel architecture with strong process isolation:
 
-% Outer border
-\draw[very thick] (0,0) rectangle (14,11);
-\draw[very thick] (0,10.5) -- (14,10.5);
-\node at (7,10.75) {\textbf{User Space}};
+#+begin_src plantuml :file architecture.png :exports results
+@startuml
+skinparam componentStyle rectangle
 
-% Client
-\node[box] (client) at (2.5,9) {Client\\(crichton-\\client)};
+rectangle "User Space" {
+  together {
+    [crichton-client\n(CLI)] as CLI
+    [crichton-tui\n(Terminal UI)] as TUI
+    [Emacs\n(crichton.el)] as Emacs
+  }
 
-% TUI
-\node[box] (tui) at (2.5,6) {TUI Client\\(crichton-tui)};
+  [Daemon\n(crichton)] as D
 
-% Daemon
-\node[box] (daemon) at (9,7.5) {Daemon\\(crichton)};
+  [Runner Process\n(isolated)] as R
 
-% Bidirectional arrow between client and daemon
-\draw[doublearrow] (client.east) -- node[above, font=\footnotesize] {NDJSON/socket} (client.east -| daemon.west) -- (daemon.west |- client.east);
-\draw[doublearrow] (tui.east) -- node[below, font=\footnotesize] {NDJSON/socket + push} (tui.east -| daemon.west) -- (daemon.west |- tui.east);
+  [WASM Skills\n(sandboxed)] as W
+}
 
-% Arrow from daemon to runner
-\node[box] (runner) at (9,4) {Runner\\Process\\(separate)};
-\draw[arrow] (daemon.south) -- node[right, font=\footnotesize] {NDJSON/socket} (runner.north);
-
-% Arrow from runner to wasm
-\node[box] (wasm) at (9,1.2) {WASM Skills\\(sandboxed)};
-\draw[arrow] (runner.south) -- node[right, font=\footnotesize] {wasmtime} (wasm.north);
-
-\end{tikzpicture}
-#+END_SRC
-#+RESULTS: architecture-diagram
-#+BEGIN_LATEX
-[[file: architecture.png]]
-#+END_LATEX
+CLI   <--> D : NDJSON/socket
+TUI   <--> D : NDJSON/socket + push
+Emacs <--> D : NDJSON/socket + push
+D -down-> R : NDJSON/socket
+R -down-> W : wasmtime
+@enduml
+#+end_src
 ** Language/Runtime
 The daemon, skill runner, and client interface are all written in Common Lisp
 (specifically SBCL).
