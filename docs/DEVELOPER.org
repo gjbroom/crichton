@@ -1836,13 +1836,15 @@ filter and keyword parameters:
 }
 #+end_src
 
-| Field            | Type          | Required | Default                    | Description                    |
-|------------------+---------------+----------+----------------------------+--------------------------------|
-| =items=          | array         | yes      | —                          | RSS items (canonical schema)   |
-| =keywords=       | array         | yes      | —                          | Strings to match against items |
-| =match_mode=     | string        | no       | ="any"=                    | ="any"= (OR) or ="all"= (AND) |
-| =search_fields=  | array         | no       | =["title","description"]=  | Fields to search               |
-| =case_sensitive= | boolean       | no       | =false=                    | Case-sensitive matching        |
+* = required.
+
+| Field              | Default                    | Description                                  |
+|--------------------+----------------------------+----------------------------------------------|
+| =items= *          | —                          | Array of RSS items (canonical schema)        |
+| =keywords= *       | —                          | Array of strings to match against items      |
+| =match_mode=       | ="any"=                    | ="any"= (OR) or ="all"= (AND)               |
+| =search_fields=    | =["title","description"]=  | Array of item fields to search               |
+| =case_sensitive=   | =false=                    | Boolean; case-sensitive matching             |
 
 *** =rss-filter= / =filter_items= Output (WASM)
 
