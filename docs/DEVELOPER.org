@@ -1281,10 +1281,15 @@ Print a combined health report: directory accessibility, integrity results, quot
 
 *** Security Properties
 
-- *Isolation*: Each skill's KV data is stored in a separate =.age= file and the WASM host functions enforce that a skill can only access its own store via the per-invocation =skill-context-id=.
-- *Encryption*: All files are age-encrypted at rest (same key as credentials and sessions).
-- *Permissions*: Files are written with 0600 permissions via =crichton/crypto:encrypt-to-file=.
-- *Atomic writes*: Encryption writes via temp file + rename to prevent partial writes.
+- *Isolation*: Each skill's KV data is stored in a separate =.age= file and the WASM
+  host functions enforce that a skill can only access its own store via the
+  per-invocation =skill-context-id=.
+- *Encryption*: All files are age-encrypted at rest (same key as credentials and
+  sessions).
+- *Permissions*: Files are written with 0600 permissions
+  via =crichton/crypto:encrypt-to-file=.
+- *Atomic writes*: Encryption writes via temp file + rename to prevent partial
+  writes.
 
 ** Credential API (~credentials/mediator.lisp~)
 
@@ -1451,7 +1456,7 @@ than being silently discarded.
 
 *** HTTP helpers
 
-=http-get-with-retry=, =http-post-with-retry=, =http-put-with-retry=,
+=http-get-with-retry=, =http-post-with-retry=, =http-put-with-retry=, \\
 =http-delete-with-retry= — convenience wrappers around =dex:get= etc.
 that apply =with-retry= automatically.
 
@@ -1836,7 +1841,7 @@ filter and keyword parameters:
 }
 #+end_src
 
-* = required.
+Note: * = required.
 
 | Field            | Default                   | Description                             |
 |------------------+---------------------------+-----------------------------------------|
@@ -2100,12 +2105,12 @@ Called automatically by =run-agent= / =run-agent/stream= for all sessions.
 
 The =skills= tool exposes WASM skill management to the LLM agent.
 
-* = required.
+Note: * = required.
 
 | Parameter *     | Description                                              |
 |-----------------+----------------------------------------------------------|
 | =action= *      | One of ="list"=, ="info"=, ="invoke"=, ="refresh"=      |
-| =name=          | String. Skill name from the registry (required for =invoke=/=info=) |
+| =name=          | String. Skill name from the registry (required for =invoke= / =info=) |
 | =entry_point=   | String. Override the manifest's default entry point      |
 | =params=        | Object. JSON parameters to pass; selects JSON ABI automatically |
 
@@ -2131,7 +2136,7 @@ the JSON-through-memory ABI.  This is required for pure-function skills such as
 The =orgmode= tool provides org-mode file and org-roam integration.
 Gated by =[orgmode] enable = true= in =config.toml=.
 
-* = required.
+Note: * = required.
 
 | Parameter *     | Description                                                |
 |-----------------+------------------------------------------------------------|
@@ -2187,7 +2192,7 @@ allow_write = true
 - =allow_write= defaults to false; must be set explicitly to permit mutations
 - No credentials required — accesses the local filesystem directly
 
-* = required.
+Note: * = required.
 
 | Parameter *     | Description                                              |
 |-----------------+----------------------------------------------------------|
@@ -2260,7 +2265,8 @@ allowed_repo_roots = ["/home/user/devel/myproject"]
 - Structured audit logging for every invocation (repo, sanitized argv, exit code, elapsed time, changed files)
 - Credential mediation: API key never visible to the LLM
 - Output caps: stdout and stderr truncated to prevent context overflow
-- Named restarts for interactive debugging (=use-different-repo=, =retry-with-longer-timeout=, =return-partial-result=)
+- Named restarts for interactive debugging (=use-different-repo=, \\
+  =retry-with-longer-timeout=, =return-partial-result=)
 
 ** Channel Protocol API (~channels/protocol.lisp~)
 
@@ -2873,7 +2879,7 @@ Target: **Zero STYLE-WARNING conditions**.
 
 **Rationale:**
 - SBCL rejects incompatible struct redefinitions during hot-reload
-- CLOS classes update existing instances automatically
+- CLOS classes update existing instances automatically \\
   via =update-instance-for-redefined-class=
 - Enables iterative development without daemon restart
 - No performance penalty in practice
@@ -3917,12 +3923,15 @@ This matches Design Principle 1: /Skills must be isolated/.
 @startsalt
 {T
   + ~/.crichton/skills/my-skill/
-  ++ skill.toml      (Manifest — required)
-  ++ skill.wasm      (Compiled WASM binary — required)
-  ++ skill.wat       (WAT source — optional, human-readable)
+  ++ skill.toml      (Manifest - required)
+  ++ skill.wasm      (Compiled WASM binary - required)
+  ++ skill.wat       (WAT source - optional, human-readable)
 }
 @endsalt
 #+end_src
+
+#+RESULTS:
+[[file:skills.png]]
 
 The =skill.toml= manifest must be present.  =skill.wasm= is the runnable
 binary.  =skill.wat= is optional source; commit it for version control but
@@ -4144,9 +4153,9 @@ Generate a signing keypair via the SLIME/SLY REPL:
 @startsalt
 {T
   + ~/.crichton/
-  ++ signing-key.priv           (Ed25519 private key — secret)
+  ++ signing-key.priv           (Ed25519 private key - secret)
   ++ trusted-keys/
-  +++ abc123.pub                (Your own public key — auto-installed)
+  +++ abc123.pub                (Your own public key - auto-installed)
   +++ vendor-xyz.pub            (Third-party key you chose to trust)
 }
 @endsalt
@@ -4222,9 +4231,9 @@ journal that is searchable on-demand.
   + ~/.crichton/state/
   ++ SOUL.org          (Persona, values, behavioural tone)
   ++ USER.org          (User identity and preferences)
-  ++ MEMORY.org        (Curated long-term facts — main sessions only)
+  ++ MEMORY.org        (Curated long-term facts - main sessions only)
   ++ journal/
-  +++ 2026-03-02.org   (Today's raw daily log — append-only)
+  +++ 2026-03-02.org   (Today's raw daily log - append-only)
   +++ 2026-03-01.org   (Yesterday's daily log)
 }
 @endsalt
@@ -4421,9 +4430,9 @@ on every call.  Layout is derived from =model-width= / =model-height=
   ==
   {+
     Chat history (remaining height, scrollable)
-    . · word-wrapped to (width − 4)
-    . · Markdown-to-ANSI rendered
-    . · Notification toasts as overlays
+    . - word-wrapped to (width - 4)
+    . - Markdown-to-ANSI rendered
+    . - Notification toasts as overlays
   }
   ==
   Status bar (1 line)
