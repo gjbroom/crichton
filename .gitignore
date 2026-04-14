@@ -26,6 +26,7 @@ docs/*.html
 docs/*.pdf
 docs/*.tex
 docs/*.md
+docs/*.png
 *.html
 *.pdf
 *.tex

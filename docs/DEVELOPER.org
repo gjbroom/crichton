@@ -1382,13 +1382,13 @@ and the agent loop.
 
 Wraps BODY in a retry loop with exponential backoff.  Options:
 
-| Option          | Default                    | Description                                      |
-|-----------------+----------------------------+--------------------------------------------------|
-| =:max-retries=  | =*default-max-retries*= (3) | Maximum retry attempts                           |
-| =:backoff-base= | 1 second                   | Base delay; doubles each attempt                 |
-| =:max-backoff=  | 30 seconds                 | Cap on per-attempt delay                         |
-| =:context=      | =nil=                      | Symbol for context-specific =transient-error-p= |
-| =:on-retry=     | =nil=                      | =(lambda (condition attempt delay))= hook        |
+| Option          | Default    | Description                                      |
+|-----------------+------------+--------------------------------------------------|
+| =:max-retries=  | 3          | Maximum retry attempts (=*default-max-retries*=) |
+| =:backoff-base= | 1 second   | Base delay; doubles each attempt                 |
+| =:max-backoff=  | 30 seconds | Cap on per-attempt delay                         |
+| =:context=      | =nil=      | Symbol for context-specific =transient-error-p= |
+| =:on-retry=     | =nil=      | Hook =lambda (condition attempt delay)=          |
 
 Error classification via =transient-error-p= generic: default method
 retries on socket errors, 5xx/429/503 HTTP status, and connection/timeout
@@ -1838,13 +1838,13 @@ filter and keyword parameters:
 
 * = required.
 
-| Field              | Default                    | Description                                  |
-|--------------------+----------------------------+----------------------------------------------|
-| =items= *          | —                          | Array of RSS items (canonical schema)        |
-| =keywords= *       | —                          | Array of strings to match against items      |
-| =match_mode=       | ="any"=                    | ="any"= (OR) or ="all"= (AND)               |
-| =search_fields=    | =["title","description"]=  | Array of item fields to search               |
-| =case_sensitive=   | =false=                    | Boolean; case-sensitive matching             |
+| Field            | Default                   | Description                             |
+|------------------+---------------------------+-----------------------------------------|
+| =items= *        | —                         | Array of RSS items (canonical schema)   |
+| =keywords= *     | —                         | Array of strings to match               |
+| =match_mode=     | ="any"=                   | ="any"= (OR) or ="all"= (AND)          |
+| =search_fields=  | =["title","description"]= | Array of item fields to search          |
+| =case_sensitive= | =false=                   | Boolean; case-sensitive matching        |
 
 *** =rss-filter= / =filter_items= Output (WASM)
 
@@ -1963,15 +1963,17 @@ daemon restarts.
 
 *Function reference*:
 
-| Function               | Arguments                                          | Returns          |
-|------------------------+----------------------------------------------------+------------------|
-| =rss-feed-configure=   | name &key title description link max-items         | feed name        |
-| =rss-feed-publish=     | name &key title description link guid pub-date     | GUID string      |
-| =rss-feed-items=       | name                                               | list of plists   |
-| =rss-feed-xml=         | name                                               | XML string       |
-| =rss-feed-list=        | —                                                  | list of names    |
-| =rss-feed-clear=       | name                                               | T                |
-| =rss-feed-delete=      | name                                               | T                |
+| Function               | Arguments                               | Returns        |
+|------------------------+-----------------------------------------+----------------|
+| =rss-feed-configure=   | name &key title description             | feed name      |
+|                        | link max-items                          |                |
+| =rss-feed-publish=     | name &key title description             | GUID string    |
+|                        | link guid pub-date                      |                |
+| =rss-feed-items=       | name                                    | list of plists |
+| =rss-feed-xml=         | name                                    | XML string     |
+| =rss-feed-list=        | —                                       | list of names  |
+| =rss-feed-clear=       | name                                    | T              |
+| =rss-feed-delete=      | name                                    | T              |
 
 *Storage details*:
 
@@ -1995,11 +1997,16 @@ is split across five files in =agent/=:
 
 | File                    | Contents                                             |
 |-------------------------+------------------------------------------------------|
-| =tools.lisp=            | =define-tool= macro, =register-tool=, =get-tool=, =all-tool-defs=, data structures |
-| =tools-system.lisp=     | System tools: =weather=, =system_info=, =battery=, =ephemeris=, =time=, =resource_usage= |
-| =tools-ops.lisp=        | Operational tools: =scheduler=, =rss=, =github=, =daemon_logs=, =orgmode=, =git=, =books= |
-| =tools-data.lisp=       | Data tools: =raindrop=, =hoobs=, =pushover=, =skills=, =kv_store= |
-| =tools-register.lisp=   | =register-all-tools=, =channel-safe-tool-defs=, =sanitize-user-input= |
+| =tools.lisp=            | =define-tool= macro, =register-tool=, =get-tool=,   |
+|                         | =all-tool-defs=, data structures                     |
+| =tools-system.lisp=     | System tools: =weather=, =system_info=, =battery=,  |
+|                         | =ephemeris=, =time=, =resource_usage=                |
+| =tools-ops.lisp=        | Operational tools: =scheduler=, =rss=, =github=,    |
+|                         | =daemon_logs=, =orgmode=, =git=, =books=             |
+| =tools-data.lisp=       | Data tools: =raindrop=, =hoobs=, =pushover=,        |
+|                         | =skills=, =kv_store=                                |
+| =tools-register.lisp=   | =register-all-tools=, =channel-safe-tool-defs=,     |
+|                         | =sanitize-user-input=                               |
 
 *** =define-tool= Macro
 
@@ -2093,12 +2100,14 @@ Called automatically by =run-agent= / =run-agent/stream= for all sessions.
 
 The =skills= tool exposes WASM skill management to the LLM agent.
 
-| Parameter      | Type   | Required | Description                                                  |
-|----------------+--------+----------+--------------------------------------------------------------|
-| =action=       | string | yes      | One of ="list"=, ="info"=, ="invoke"=, ="refresh"=          |
-| =name=         | string | for invoke/info | Skill name from the registry                          |
-| =entry_point=  | string | no       | Override the manifest's default entry point                  |
-| =params=       | object | no       | JSON parameters to pass.  Selects JSON ABI automatically.   |
+* = required.
+
+| Parameter *     | Description                                              |
+|-----------------+----------------------------------------------------------|
+| =action= *      | One of ="list"=, ="info"=, ="invoke"=, ="refresh"=      |
+| =name=          | String. Skill name from the registry (required for =invoke=/=info=) |
+| =entry_point=   | String. Override the manifest's default entry point      |
+| =params=        | Object. JSON parameters to pass; selects JSON ABI automatically |
 
 When =params= is supplied for the ="invoke"= action, the skill is called via
 the JSON-through-memory ABI.  This is required for pure-function skills such as
@@ -2122,24 +2131,26 @@ the JSON-through-memory ABI.  This is required for pure-function skills such as
 The =orgmode= tool provides org-mode file and org-roam integration.
 Gated by =[orgmode] enable = true= in =config.toml=.
 
-| Parameter      | Type    | Required         | Description                                                   |
-|----------------+---------+------------------+---------------------------------------------------------------|
-| =action=       | string  | yes              | Action to perform (see enum below)                            |
-| =path=         | string  | for most actions | File path or org-roam node ID (UUID)                          |
-| =query=        | string  | for search       | Search query string                                           |
-| =tag=          | string  | no               | Filter by org-roam tag (search, list_todos)                   |
-| =title=        | string  | for create_note  | Note title                                                    |
-| =body=         | string  | no               | Note body content (create_note)                               |
-| =filetags=     | array   | no               | File-level tags (create_note, set_filetags)                   |
-| =root=         | string  | no               | Root directory (must be in =allowed_paths=)                   |
-| =text=         | string  | for append       | Text to append                                                |
-| =headline=     | string  | no               | Headline title (append, set_todo)                             |
-| =direction=    | string  | no               | Backlink direction: =backlinks=, =forward=, =both=           |
-| =include-raw=  | boolean | no               | Include raw file text in read results                         |
-| =state=        | string  | no               | TODO state filter (list_todos) or new state (set_todo)        |
-| =priority=     | string  | no               | Priority filter: =A=, =B=, =C= (list_todos)                 |
-| =include-done= | boolean | no               | Include DONE/CANCELLED in list_todos                          |
-| =limit=        | integer | no               | Maximum results (default 50)                                  |
+* = required.
+
+| Parameter *     | Description                                                |
+|-----------------+------------------------------------------------------------|
+| =action= *      | Action to perform (see enum below)                         |
+| =path=          | File path or org-roam node ID (UUID); required for most actions |
+| =query=         | Search query string (required for =search=)                |
+| =tag=           | Filter by org-roam tag (=search=, =list_todos=)            |
+| =title=         | Note title (required for =create_note=)                    |
+| =body=          | Note body content (=create_note=)                          |
+| =filetags=      | Array. File-level tags (=create_note=, =set_filetags=)     |
+| =root=          | Root directory (must be in =allowed_paths=)                |
+| =text=          | Text to append (required for =append=)                     |
+| =headline=      | Headline title (=append=, =set_todo=)                      |
+| =direction=     | Backlink direction: =backlinks=, =forward=, =both=         |
+| =include-raw=   | Boolean. Include raw file text in read results             |
+| =state=         | TODO state filter (=list_todos=) or new state (=set_todo=) |
+| =priority=      | Priority filter: =A=, =B=, =C= (=list_todos=)             |
+| =include-done=  | Boolean. Include DONE/CANCELLED in =list_todos=            |
+| =limit=         | Integer. Maximum results (default 50)                      |
 
 *Actions:*
 - =read= — parse an org file into structured data (headlines, tags, properties)
@@ -2176,19 +2187,21 @@ allow_write = true
 - =allow_write= defaults to false; must be set explicitly to permit mutations
 - No credentials required — accesses the local filesystem directly
 
-| Parameter      | Type    | Required             | Description                                              |
-|----------------+---------+----------------------+----------------------------------------------------------|
-| =action=       | string  | yes                  | Action to perform (see below)                            |
-| =repo_path=    | string  | for most actions     | Absolute path to git repository (must be in =allowed_repos=) |
-| =file_path=    | string  | for file actions     | File path relative to repo or absolute                   |
-| =content=      | string  | for =write_file=     | Content to write                                         |
-| =paths=        | string  | for =stage=/=unstage= | Comma-separated paths                                    |
-| =message=      | string  | for =commit=         | Commit message                                           |
-| =branch_name=  | string  | for =create_branch=/=checkout= | Branch name                                  |
-| =ref=          | string  | no                   | Git ref (=HEAD=, =main=, =HEAD~3=) for =diff=/=show=    |
-| =count=        | integer | no                   | Number of log entries (default 20)                       |
-| =all_branches= | boolean | no                   | Include remote tracking branches (=branches= action)     |
-| =staged=       | boolean | no                   | Show staged-only changes (=diff= action)                 |
+* = required.
+
+| Parameter *     | Description                                              |
+|-----------------+----------------------------------------------------------|
+| =action= *      | Action to perform (see below)                            |
+| =repo_path=     | Absolute path to git repo in =allowed_repos= (required for most actions) |
+| =file_path=     | File path relative to repo or absolute (file actions)    |
+| =content=       | Content to write (required for =write_file=)             |
+| =paths=         | Comma-separated paths (=stage=, =unstage=)               |
+| =message=       | Commit message (required for =commit=)                   |
+| =branch_name=   | Branch name (required for =create_branch=, =checkout=)   |
+| =ref=           | Git ref (=HEAD=, =main=, =HEAD~3=) for =diff=/=show=    |
+| =count=         | Integer. Number of log entries (default 20)              |
+| =all_branches=  | Boolean. Include remote tracking branches (=branches=)   |
+| =staged=        | Boolean. Show staged-only changes (=diff=)               |
 
 *Read-only actions* (require =enable = true=, =allowed_repos=):
 - =status= — =git status --short --branch=
@@ -2860,12 +2873,13 @@ Target: **Zero STYLE-WARNING conditions**.
 
 **Rationale:**
 - SBCL rejects incompatible struct redefinitions during hot-reload
-- CLOS classes update existing instances automatically via =update-instance-for-redefined-class=
+- CLOS classes update existing instances automatically
+  via =update-instance-for-redefined-class=
 - Enables iterative development without daemon restart
 - No performance penalty in practice
 
-**When to use =defstruct=:**
-Only for truly fixed-layout, performance-critical types that will never change. In practice: almost never.
+**When to use =defstruct=:** Only for truly fixed-layout, performance-critical types
+that will never change. In practice: almost never.
 
 **Example:**
 
@@ -3116,16 +3130,17 @@ Crichton uses the =age= tool for encryption. On first use, an age identity is ge
 
 ** Overview
 
-Crichton has multiple storage layers:
+Crichton has multiple storage layers.  All stores are age-encrypted except
+Logs (plaintext JSONL, with secrets redacted before writing).
 
-| System              | Location                        | Encryption | Purpose                        |
-|---------------------+---------------------------------+------------+--------------------------------|
-| Credential Store    | =~/.crichton/credentials/*.age= | age        | API keys, tokens               |
-| Session Store       | =~/.crichton/sessions/*.age=    | age        | Conversation history           |
-| Persistent Storage  | =~/.crichton/data/*.age=        | age        | Daemon state (meters, RSS)     |
-| Skill KV Store      | =~/.crichton/skills-kv/*.age=   | age        | Per-skill persistent data      |
-| Scheduler Tasks     | =~/.crichton/tasks/*.age=       | age        | Scheduled task definitions     |
-| Logs                | =~/.crichton/logs/daemon.jsonl= | none       | Structured JSON logs (secrets redacted) |
+| System             | Location                         | Purpose                      |
+|--------------------+----------------------------------+------------------------------|
+| Credential Store   | =~/.crichton/credentials/*.age=  | API keys, tokens             |
+| Session Store      | =~/.crichton/sessions/*.age=     | Conversation history         |
+| Persistent Storage | =~/.crichton/data/*.age=         | Daemon state (meters, RSS)   |
+| Skill KV Store     | =~/.crichton/skills-kv/*.age=    | Per-skill persistent data    |
+| Scheduler Tasks    | =~/.crichton/tasks/*.age=        | Scheduled task definitions   |
+| Logs               | =~/.crichton/logs/daemon.jsonl=  | Structured JSON logs         |
 
 ** Persistent Storage (storage/store.lisp)
 
@@ -3255,7 +3270,8 @@ Note: =next_ut= is a Common Lisp universal-time integer (seconds since
 |--------------+--------------------------------------------------|
 | Startup      | =restore-user-tasks= after scheduler starts     |
 | Shutdown     | =persist-user-tasks= in =persist-all-storage=   |
-| Agent tool   | Automatic: every =schedule-every/daily/at= call via the scheduler tool triggers a =persist-user-tasks= |
+| Agent tool   | Automatic: every =schedule-every/daily/at= call  |
+|              | via the scheduler tool triggers =persist-user-tasks= |
 
 The startup integration is in =daemon/lifecycle.lisp=.
 
@@ -3567,9 +3583,10 @@ operations:
 |-----------------------------------+----------------------------------------------------------|
 | =agent.input.injection_markers=   | Injection patterns detected in user input                |
 | =agent.tool.call=                 | Every tool invoked by the agent loop                     |
-| =amp.invoke=                      | Amp CLI invoked (includes policy, exit code, changed files) |
-| =amp.invoke.denied=               | Amp invocation blocked by policy                         |
-| =amp.prompt.injection_markers=    | Injection patterns in Amp prompt inputs                  |
+| =amp.invoke=                      | Amp CLI invoked (includes policy, exit code,             |
+|                                   | changed files)                                           |
+| =amp.invoke.denied=               | Amp invocation blocked by policy                     |
+| =amp.prompt.injection_markers=    | Injection patterns in Amp prompt inputs              |
 
 Log format (JSON Lines):
 #+begin_src json
