@@ -280,7 +280,7 @@ show the concurrency and timing detail that matters for understanding past
 bugs and preventing new ones.  Each diagram covers a scenario where timing
 and thread interaction are the interesting part.
 
-*** Streaming Chat — Happy Path
+*** Streaming Chat --- Happy Path
 
 Shows the full message flow for a streaming chat request that includes one
 tool-use iteration.  Key points: tool iterations use non-streaming
@@ -347,7 +347,7 @@ deactivate D
 @enduml
 #+end_src
 
-*** Streaming Chat — SSE Idle Timeout and Session Rollback
+*** Streaming Chat --- SSE Idle Timeout and Session Rollback
 
 Shows what happens when the Anthropic API goes silent mid-stream.  The SSE
 idle watchdog (=*sse-stream-timeout*= = 120 s) force-closes the socket fd
@@ -359,7 +359,7 @@ interrupts.  The session snapshot prevents torn history.
 skinparam sequenceMessageAlign left
 skinparam maxMessageSize 220
 skinparam responseMessageBelowArrow true
-title Streaming Chat — SSE Idle Timeout and Session Rollback
+title Streaming Chat --- SSE Idle Timeout and Session Rollback
 
 participant "Client" as C
 participant "Daemon\n(conn. thread)" as D
@@ -781,7 +781,7 @@ Check whether a key exists in the skill-scoped persistent KV store.
 - =key_ptr=, =key_len=: Key string in WASM linear memory
 - Returns: 0=found, -1=not found, -2=error
 
-/Note: the current implementation returns a status code only — the value is
+/Note: the current implementation returns a status code only --- the value is
 not written back to WASM memory.  Use =kv_get= to confirm a key exists before
 acting; retrieve values by having the daemon (Lisp side) call =kv-get= directly./
 
@@ -944,7 +944,7 @@ Loaded early in the ASDF system so every module can depend on them.
 
 *** =iso8601-now ()=
 
-Returns current UTC time as an ISO 8601 string.  Canonical version — replaces
+Returns current UTC time as an ISO 8601 string.  Canonical version --- replaces
 4 prior duplicates in logging, sessions, storage, and kv-store.
 
 *** =safe-intern-keyword (key)=
@@ -1124,7 +1124,7 @@ Per-skill age-encrypted persistent key-value store for WASM skills.
 
 *** Overview
 
-- *Location*: =~/.crichton/kv/<skill-id>.age= — one file per skill
+- *Location*: =~/.crichton/kv/<skill-id>.age= --- one file per skill
 - *Format*: Age-encrypted JSON envelope (=version=, =skill_id=, =updated_at=, =data=)
 - *Isolation*: Each skill can only access its own KV store (enforced at host function level)
 - *Thread safety*: All operations protected by =*kv-lock*= (bordeaux-threads)
@@ -1398,7 +1398,7 @@ Wraps BODY in a retry loop with exponential backoff.  Options:
 Error classification via =transient-error-p= generic: default method
 retries on socket errors, 5xx/429/503 HTTP status, and connection/timeout
 error messages.  Context-specific methods (=:weather=, =:rss=, =:github=)
-refine this (e.g., weather 404 is never retried — city not found).
+refine this (e.g., weather 404 is never retried --- city not found).
 
 *** =with-timeout= Macro
 
@@ -1412,7 +1412,7 @@ SECONDS, the watchdog fires =bt:interrupt-thread= into the calling thread
 and signals =operation-cancelled=.
 
 Used for tool execution and non-streaming LLM API calls.  *Not* used for
-SSE streams — see the SSE Idle Watchdog section below.
+SSE streams --- see the SSE Idle Watchdog section below.
 
 *** SSE Idle Watchdog
 
@@ -1433,7 +1433,7 @@ The watchdog is implemented in =process-sse-stream= (=llm/anthropic.lisp=):
 4. A =stream-done= flag prevents the watchdog from firing after normal
    stream completion.
 
-This is an /idle/ timeout — it resets on every chunk received.  The outer
+This is an /idle/ timeout --- it resets on every chunk received.  The outer
 =*llm-api-timeout*= (300 s) is the /elapsed/ ceiling for the entire call.
 
 *** =operation-cancelled= Condition
@@ -1457,7 +1457,7 @@ than being silently discarded.
 *** HTTP helpers
 
 =http-get-with-retry=, =http-post-with-retry=, =http-put-with-retry=, \\
-=http-delete-with-retry= — convenience wrappers around =dex:get= etc.
+=http-delete-with-retry= --- convenience wrappers around =dex:get= etc.
 that apply =with-retry= automatically.
 
 *** Agent Loop Timeouts
@@ -1501,7 +1501,7 @@ Generics to implement:
 
 =stream-message= has a default method that signals =llm-feature-not-supported=.
 =run-agent/stream= catches that condition and falls back to =send-message=
-automatically — providers do not need to implement streaming to be usable.
+automatically --- providers do not need to implement streaming to be usable.
 
 *** Usage Metering Hooks
 
@@ -1658,7 +1658,7 @@ Returns a hash-table of step-id → result.
         "params" #.(alexandria:plist-hash-table
                      '("url" "https://example.com/rss") :test 'equal))
       :test 'equal)
-    ;; Step 2: filter items (WASM) — references step 1 output
+    ;; Step 2: filter items (WASM) --- references step 1 output
     (alexandria:plist-hash-table
       '("id" "filter" "skill" "rss-filter"
         "entry_point" "filter_items"
@@ -1759,7 +1759,7 @@ with hyphens replaced by underscores (e.g. =:feed-name= → =feed_name=).
 | Identifier  | =:id=          | yes  | From RSS =<guid>= or =<link>=                       |
 | Title       | =:title=       | yes  |                                                     |
 | Description | =:description= | no   | RSS =<description>= / Atom =<summary>=              |
-| Content     | —              | no   | Reserved for full-text (future). JSON: =content=    |
+| Content     | ---              | no   | Reserved for full-text (future). JSON: =content=    |
 | Link        | =:link=        | no   | URL to the full article                             |
 | Published   | =:published=   | no   | Date string; format varies by feed                  |
 | Feed name   | =:feed-name=   | no   | Title of source feed. JSON: =feed_name=             |
@@ -1845,8 +1845,8 @@ Note: * = required.
 
 | Field            | Default                   | Description                             |
 |------------------+---------------------------+-----------------------------------------|
-| =items= *        | —                         | Array of RSS items (canonical schema)   |
-| =keywords= *     | —                         | Array of strings to match               |
+| =items= *        | ---                         | Array of RSS items (canonical schema)   |
+| =keywords= *     | ---                         | Array of strings to match               |
 | =match_mode=     | ="any"=                   | ="any"= (OR) or ="all"= (AND)          |
 | =search_fields=  | =["title","description"]= | Array of item fields to search          |
 | =case_sensitive= | =false=                   | Boolean; case-sensitive matching        |
@@ -1935,7 +1935,7 @@ daemon restarts.
 *Feed lifecycle*:
 
 #+begin_src lisp
-;; 1. Configure (optional — auto-created with defaults on first publish)
+;; 1. Configure (optional --- auto-created with defaults on first publish)
 (rss-feed-configure "my-feed"
   :title "My Feed"
   :description "Updates from Crichton"
@@ -1976,7 +1976,7 @@ daemon restarts.
 |                        | link guid pub-date                      |                |
 | =rss-feed-items=       | name                                    | list of plists |
 | =rss-feed-xml=         | name                                    | XML string     |
-| =rss-feed-list=        | —                                       | list of names  |
+| =rss-feed-list=        | ---                                       | list of names  |
 | =rss-feed-clear=       | name                                    | T              |
 | =rss-feed-delete=      | name                                    | T              |
 
@@ -2158,17 +2158,17 @@ Note: * = required.
 | =limit=         | Integer. Maximum results (default 50)                      |
 
 *Actions:*
-- =read= — parse an org file into structured data (headlines, tags, properties)
-- =search= — find notes by title/tag via org-roam database
-- =list_tags= — list all tags in the org-roam database
-- =backlinks= — query org-roam link graph (backlinks, forward, or both)
-- =create_note= — create a new org-roam note with UUID, timestamp filename, filetags
-- =append= — add text to an org file (at end or under a specific headline)
-- =list_files= — enumerate org files under an allowed root
-- =list_todos= — query TODO items with state/priority/tag filtering
-- =set_todo= — change a headline's TODO state (adds CLOSED timestamp for done states)
-- =set_filetags= — replace file-level =#+FILETAGS:= (handles insert, replace, and removal; case-insensitive matching)
-- =status= — report skill configuration and allowed paths
+- =read= --- parse an org file into structured data (headlines, tags, properties)
+- =search= --- find notes by title/tag via org-roam database
+- =list_tags= --- list all tags in the org-roam database
+- =backlinks= --- query org-roam link graph (backlinks, forward, or both)
+- =create_note= --- create a new org-roam note with UUID, timestamp filename, filetags
+- =append= --- add text to an org file (at end or under a specific headline)
+- =list_files= --- enumerate org files under an allowed root
+- =list_todos= --- query TODO items with state/priority/tag filtering
+- =set_todo= --- change a headline's TODO state (adds CLOSED timestamp for done states)
+- =set_filetags= --- replace file-level =#+FILETAGS:= (handles insert, replace, and removal; case-insensitive matching)
+- =status= --- report skill configuration and allowed paths
 
 *** =git= Tool (~skills/builtins/git.lisp~)
 
@@ -2177,8 +2177,8 @@ the ability to read and write files and make commits.  This is the
 primary mechanism for Crichton to modify its own source code.
 
 Gated by two independent config flags:
-- =[git] enable = true= — enables read-only operations
-- =[git] allow_write = true= — additionally enables write operations
+- =[git] enable = true= --- enables read-only operations
+- =[git] allow_write = true= --- additionally enables write operations
 
 *Configuration:*
 #+begin_src toml
@@ -2190,7 +2190,7 @@ allow_write = true
 
 - =allowed_repos= is an explicit allowlist (empty = deny all, no default)
 - =allow_write= defaults to false; must be set explicitly to permit mutations
-- No credentials required — accesses the local filesystem directly
+- No credentials required --- accesses the local filesystem directly
 
 Note: * = required.
 
@@ -2209,26 +2209,26 @@ Note: * = required.
 | =staged=        | Boolean. Show staged-only changes (=diff=)               |
 
 *Read-only actions* (require =enable = true=, =allowed_repos=):
-- =status= — =git status --short --branch=
-- =log= — recent commits (=--oneline=), filterable by path/branch
-- =diff= — working tree or staged changes, optionally against a ref
-- =branches= — list branches (optionally including remotes)
-- =worktrees= — =git worktree list=
-- =read_file= — read a file's current on-disk contents
-- =show= — read a file at a specific commit (=git show ref:path=)
-- =config_status= — report enabled state and configuration
+- =status= --- =git status --short --branch=
+- =log= --- recent commits (=--oneline=), filterable by path/branch
+- =diff= --- working tree or staged changes, optionally against a ref
+- =branches= --- list branches (optionally including remotes)
+- =worktrees= --- =git worktree list=
+- =read_file= --- read a file's current on-disk contents
+- =show= --- read a file at a specific commit (=git show ref:path=)
+- =config_status= --- report enabled state and configuration
 
 *Write actions* (also require =allow_write = true=):
-- =write_file= — write content to a file (creates or overwrites; parent dirs created)
-- =stage= — =git add -- paths=
-- =unstage= — =git restore --staged -- paths=
-- =commit= — =git commit -m message=
-- =create_branch= — =git checkout -b name [from-ref]=
-- =checkout= — =git checkout branch=
+- =write_file= --- write content to a file (creates or overwrites; parent dirs created)
+- =stage= --- =git add -- paths=
+- =unstage= --- =git restore --staged -- paths=
+- =commit= --- =git commit -m message=
+- =create_branch= --- =git checkout -b name [from-ref]=
+- =checkout= --- =git checkout branch=
 
 *Security properties:*
 - =allowed_repos= allowlist with canonical path comparison (resolves symlinks, rejects =..= traversal)
-- Write gate is independent of read gate — set them separately
+- Write gate is independent of read gate --- set them separately
 - All git commands run via =sb-ext:run-program= with explicit argv (no shell)
 - Branch names validated against shell metacharacters before use
 - =git= tool excluded from the default channel tool allowlist
@@ -3064,7 +3064,7 @@ sends push notifications when thresholds are first crossed.
 - =temp_alert_celsius= (float): Alert when any thermal zone reaches this temperature (°C).  Default: =85.0=.
 - =interval= (integer): Polling interval in seconds.  Default: =300= (5 minutes).
 
-Each alert fires once per condition onset — it will not repeat until the
+Each alert fires once per condition onset --- it will not repeat until the
 metric recovers and crosses the threshold again.  Alert state is reset when
 monitoring is stopped.  Monitoring state persists across daemon restarts via
 encrypted storage (=~/.crichton/data/=).
@@ -3243,7 +3243,7 @@ at startup and do not use this store.
 
 *** Location
 
-=~/.crichton/tasks/user-tasks.age= — age-encrypted JSON.
+=~/.crichton/tasks/user-tasks.age= --- age-encrypted JSON.
 
 *** File Format
 
@@ -3531,7 +3531,7 @@ Applied to all user input before it enters the agent loop:
 - *Injection marker detection*: heuristic regex scan for patterns such as
   "ignore previous instructions", =[INST]=, =<|system|>=, etc.  Matches write
   an =agent.input.injection_markers= audit event and a WARN-level log entry.
-  Input is still processed — the operator is informed, not the attacker.
+  Input is still processed --- the operator is informed, not the attacker.
 
 #+begin_src lisp
 ;; Applied automatically in run-agent / run-agent/stream
@@ -3845,17 +3845,17 @@ LLM calls are metered automatically via the =:around= methods in
 
 **** Core functions
 
-- =record-usage (meter-name tier input-units output-units)= — Record a usage
+- =record-usage (meter-name tier input-units output-units)= --- Record a usage
   event.  =tier= is typically the model name (e.g. ="claude-sonnet-4-20250514"=).
   Updates the in-memory meter immediately; persistence is fire-and-forget.
 
-- =ensure-meter (name)= — Get or create a named meter.
+- =ensure-meter (name)= --- Get or create a named meter.
 
-- =meter-snapshot (name)= — Return a plist with totals, burn rate, and cost.
+- =meter-snapshot (name)= --- Return a plist with totals, burn rate, and cost.
 
-- =aggregate-snapshot ()= — Combined snapshot across all meters.
+- =aggregate-snapshot ()= --- Combined snapshot across all meters.
 
-- =meter-recent (name &optional n)= — Last N usage records as plists.
+- =meter-recent (name &optional n)= --- Last N usage records as plists.
 
 **** Persistence
 
@@ -3868,10 +3868,10 @@ Meters are persisted under the ="meters"= storage namespace, keyed as
 ;;                           :total-cost 0.624d0 :call-count 42 ...) >
 #+end_src
 
-- =persist-meter (name)= — Write one meter to storage immediately.
-- =save-meters ()= — Snapshot all meters to storage.
-- =load-meters ()= — Restore meters from storage (called on daemon startup).
-- =*auto-persist-meters*= — When true (default), =record-usage= triggers
+- =persist-meter (name)= --- Write one meter to storage immediately.
+- =save-meters ()= --- Snapshot all meters to storage.
+- =load-meters ()= --- Restore meters from storage (called on daemon startup).
+- =*auto-persist-meters*= --- When true (default), =record-usage= triggers
   =persist-meter= automatically (in a background thread).
 
 **** Pricing tables
@@ -3913,7 +3913,7 @@ reference.
 | Portable      | Write once in any WASM-capable language (Rust, C, AssemblyScript, WAT)   |
 | Signed        | Ed25519 signatures verify code integrity before execution                 |
 | Capability-based | Explicit =skill.toml= manifest declares what the skill is allowed to do |
-| Isolated      | Runs in a separate runner process — cannot crash or compromise the daemon |
+| Isolated      | Runs in a separate runner process --- cannot crash or compromise the daemon |
 
 This matches Design Principle 1: /Skills must be isolated/.
 
@@ -4118,7 +4118,7 @@ execution:
   the daemon validates this before injecting the credential.
 
 Skills that violate their declared capabilities receive error return codes
-from host functions — they are not killed.  This is intentional: a skill
+from host functions --- they are not killed.  This is intentional: a skill
 returning an error code is safer than an abrupt WASM trap.
 
 * Skill Signing
@@ -4208,7 +4208,7 @@ journal that is searchable on-demand.
 ** Why Plain Text?
 
 - Org-mode is the project's documentation standard.
-- The LLM reads prose, not data structures — no schema drift.
+- The LLM reads prose, not data structures --- no schema drift.
 - Human-editable in Emacs without tooling.
 - Can be age-encrypted at rest (the infrastructure already exists).
 
@@ -4228,26 +4228,26 @@ Directory permissions: =0700=.  File permissions: =0600=.
 
 ** File Definitions
 
-*** SOUL.org — Persona and Values
+*** SOUL.org --- Persona and Values
 
 Who is Crichton?  How should it behave?  Loaded on every turn.  The
 user writes this file; the agent may suggest edits but must ask first.
 A minimal template is created on first boot if the file does not exist.
 
-*** MEMORY.org — Curated Long-Term Memory
+*** MEMORY.org --- Curated Long-Term Memory
 
 What does Crichton need to remember across sessions?  Auto-injected in
 main sessions.  *Not* injected in channel (Discord) sessions or subagent
-contexts — personal facts must not leak to those contexts.
+contexts --- personal facts must not leak to those contexts.
 
 The agent writes to this file when it learns durable facts (preferences,
 ongoing projects, lessons learned).  It is curated prose, not a raw log.
 
-*** USER.org — User Context
+*** USER.org --- User Context
 
 Who is the human?  Loaded alongside SOUL.org on every turn.
 
-*** journal/ — Daily Logs
+*** journal/ --- Daily Logs
 
 Raw, append-only daily notes.  Never auto-injected (would blow the context
 window).  Searchable on-demand via the =memory_search= agent tool.  One
@@ -4312,7 +4312,7 @@ Two tools registered in =agent/tools.lisp= give the LLM controlled access:
 
 MEMORY.org is never accessible to WASM skills (no host function, no RPC
 op exposes the state directory).  Channel sessions receive only SOUL.org
-and USER.org — MEMORY.org is stripped by =filter-bootstrap-for-session=.
+and USER.org --- MEMORY.org is stripped by =filter-bootstrap-for-session=.
 
 * TUI Architecture
 
@@ -4494,7 +4494,7 @@ boy-scout rule: leave the campsite cleaner than you found it).
 
 ** Commit Style
 
-- Commit format: =type(bead-id): short description=
+- Commit format: =type(bead-id): short description= \\
   Example: =feat(cricht-z1o): consolidate developer docs=
 - Commit as you go.  Every meaningful change gets its own commit.
 - *Do NOT add Co-Authored-By lines* to commit messages.
@@ -4506,18 +4506,18 @@ boy-scout rule: leave the campsite cleaner than you found it).
 Add an entry to the =Unreleased= section of =CHANGELOG.org= for any
 user-visible feature or bug fix.  Focus on what changed from the user's
 perspective, not implementation details.  Internal refactorings do not
-need changelog entries — =git log= is sufficient.
+need changelog entries --- =git log= is sufficient.
 
 ** Diagrams
 
 Use =#+begin_src plantuml= for all diagrams.  Do not use Unicode
-box-drawing characters or =#+begin_example= blocks — they do not export
+box-drawing characters --- they do not export
 cleanly to LaTeX/PDF.
 
 PlantUML diagram types used in this document:
 
-- =@startuml= / =@enduml= — sequence diagrams and flowcharts (activity diagrams)
-- =@startsalt= / =@endsalt= — UI wireframes and directory trees
+- =@startuml= / =@enduml= --- sequence diagrams and flowcharts (activity diagrams)
+- =@startsalt= / =@endsalt= --- UI wireframes and directory trees
 
 Requires =plantuml.jar=: install it, then set =org-plantuml-jar-path= in your
 Emacs config and add =(plantuml . t)= to =org-babel-load-languages=.
