@@ -4233,11 +4233,14 @@ journal that is searchable on-demand.
   ++ USER.org          (User identity and preferences)
   ++ MEMORY.org        (Curated long-term facts - main sessions only)
   ++ journal/
-  +++ 2026-03-02.org   (Today's raw daily log - append-only)
-  +++ 2026-03-01.org   (Yesterday's daily log)
+  +++ 2026-03-02.org   (daily log - today, append-only)
+  +++ 2026-03-01.org   (daily log - yesterday)
 }
 @endsalt
 #+end_src
+
+#+RESULTS:
+[[file:state.png]]
 
 Directory permissions: =0700=.  File permissions: =0600=.
 
