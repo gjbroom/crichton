@@ -3922,7 +3922,7 @@ This matches Design Principle 1: /Skills must be isolated/.
 #+begin_src plantuml :file skills.png :exports results
 @startsalt
 {T
-  + ~/.crichton/skills/my-skill/
+  + ~~/.crichton/skills/my-skill/
   ++ skill.toml      (Manifest - required)
   ++ skill.wasm      (Compiled WASM binary - required)
   ++ skill.wat       (WAT source - optional, human-readable)
@@ -4152,7 +4152,7 @@ Generate a signing keypair via the SLIME/SLY REPL:
 #+begin_src plantuml :file keys.png :exports results
 @startsalt
 {T
-  + ~/.crichton/
+  + ~~/.crichton/
   ++ signing-key.priv           (Ed25519 private key - secret)
   ++ trusted-keys/abc123.pub     (Your own public key - auto-installed)
   ++ trusted-keys/vendor-xyz.pub (Third-party key you chose to trust)
@@ -4227,7 +4227,7 @@ journal that is searchable on-demand.
 #+begin_src plantuml :file state.png :exports results
 @startsalt
 {T
-  + ~/.crichton/state/
+  + ~~/.crichton/state/
   ++ SOUL.org          (Persona, values, behavioural tone)
   ++ USER.org          (User identity and preferences)
   ++ MEMORY.org        (Curated long-term facts - main sessions only)
@@ -4442,6 +4442,9 @@ on every call.  Layout is derived from =model-width= / =model-height=
 }
 @endsalt
 #+end_src
+
+#+RESULTS:
+[[file:render.png]]
 
 LLM responses are rendered with lightweight Markdown-to-ANSI conversion:
 =**bold**=, =*italic*=, =`code`=, fenced code blocks, bullet and numbered
