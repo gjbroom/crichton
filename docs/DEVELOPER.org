@@ -1460,14 +1460,17 @@ that apply =with-retry= automatically.
 Three timeouts govern streaming LLM calls (configured in =config.toml=
 under =[llm]=):
 
-| Config key (=[llm]=)     | Default | Description                                                              |
-|--------------------------+---------+--------------------------------------------------------------------------|
-| =api-timeout=            | 300 s   | Elapsed ceiling for the entire LLM API call. Thread-interrupt watchdog.  |
-|                          |         | Lisp: =*llm-api-timeout*=                                                |
-| =tool-timeout=           | 60 s    | All tool calls in one agent iteration. Thread-interrupt watchdog.        |
-|                          |         | Lisp: =*tool-execution-timeout*=                                         |
-| =sse-stream-timeout=     | 120 s   | Idle silence on an SSE stream before fd-close. See SSE Idle Watchdog.   |
-|                          |         | Lisp: =*sse-stream-timeout*=                                             |
+| Config key (=[llm]=) | Default | Description                                    |
+|--------------------+---------+------------------------------------------------|
+| =api-timeout=        | 300 s   | Elapsed ceiling for the entire LLM API call.   |
+|                    |         | Thread-interrupt watchdog.                     |
+|                    |         | Lisp: =*llm-api-timeout*=                        |
+| =tool-timeout=       | 60 s    | All tool calls in one agent iteration.         |
+|                    |         | Thread-interrupt watchdog.                     |
+|                    |         | Lisp: =*tool-execution-timeout*=                 |
+| =sse-stream-timeout= | 120 s   | Idle silence on an SSE stream before fd-close. |
+|                    |         | See SSE Idle Watchdog.                         |
+|                    |         | Lisp: =*sse-stream-timeout*=                     |
 
 The SSE idle timeout fires first on a stalled stream; the api-timeout is
 the fallback if the stream hangs in a way the idle watchdog cannot detect.
@@ -1743,15 +1746,18 @@ All RSS functions produce items using a single canonical plist schema (via
 }
 #+end_src
 
-| Field         | Plist key      | JSON key      | Type   | Required | Notes                             |
-|---------------+----------------+---------------+--------+----------+-----------------------------------|
-| Identifier    | =:id=          | =id=          | string | yes      | From RSS =<guid>= or =<link>=    |
-| Title         | =:title=       | =title=       | string | yes      |                                   |
-| Description   | =:description= | =description= | string | no       | RSS =<description>= / Atom =<summary>= |
-| Content       | (not produced) | =content=     | string | no       | Reserved for full-text (future)   |
-| Link          | =:link=        | =link=        | string | no       | URL to the full article           |
-| Published     | =:published=   | =published=   | string | no       | Date string (format varies by feed) |
-| Feed name     | =:feed-name=   | =feed_name=   | string | no       | Title of the source feed          |
+All fields are strings.  JSON keys are the plist key names lowercased
+with hyphens replaced by underscores (e.g. =:feed-name= → =feed_name=).
+
+| Field       | Plist key      | Req? | Notes                                               |
+|-------------+----------------+------+-----------------------------------------------------|
+| Identifier  | =:id=          | yes  | From RSS =<guid>= or =<link>=                       |
+| Title       | =:title=       | yes  |                                                     |
+| Description | =:description= | no   | RSS =<description>= / Atom =<summary>=              |
+| Content     | —              | no   | Reserved for full-text (future). JSON: =content=    |
+| Link        | =:link=        | no   | URL to the full article                             |
+| Published   | =:published=   | no   | Date string; format varies by feed                  |
+| Feed name   | =:feed-name=   | no   | Title of source feed. JSON: =feed_name=             |
 
 *** =rss_fetch= Output (Built-in)
 
