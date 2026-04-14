@@ -183,17 +183,21 @@ lives in the first four groups.
 
 ** Trust Boundaries
 
-#+begin_example
-Trust Level 1: User's local system
-  |
-  +-> Trust Level 2: Daemon process
-  |     |
-  |     +-> Trust Level 3: Runner process
-  |           |
-  |           +-> Trust Level 4: WASM skills (untrusted)
-  |
-  +-> Trust Level 2: Encrypted storage (age)
-#+end_example
+#+begin_src plantuml :file trust.png :exports results
+@startuml
+skinparam rectangleBorderThickness 2
+skinparam rectangleFontSize 13
+
+rectangle "Trust Level 1 — User's local system" {
+  rectangle "Trust Level 2 — Daemon process" {
+    rectangle "Trust Level 3 — Runner process" {
+      rectangle "Trust Level 4 — WASM Skills\n(untrusted, capability-constrained)" as W
+    }
+  }
+  rectangle "Trust Level 2 — Encrypted storage\n(age — credentials, session data)" as S
+}
+@enduml
+#+end_src
 
 - *Trust Level 1* (User): Local system, file permissions, systemd
 - *Trust Level 2* (Daemon): Credential access, LLM API keys, session management
