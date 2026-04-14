@@ -2696,7 +2696,7 @@ cargo test
 *** System Requirements
 
 - *OS*: Linux (tested on Debian/Ubuntu)
-- *Lisp*: SBCL >= 2.0
+- *Lisp*: SBCL $\geq$ 2.0
 - *Build tools*: gcc, make, git
 - *Optional*: Emacs with SLIME/SLY for interactive development
 
@@ -3367,7 +3367,7 @@ crichton-client --eval '(format t "~A~%" (crichton/skills:export-user-tasks))'
 test suite covering:
 
 - =user-task-p= predicate accuracy
-- Serialization / deserialization roundtrip (plist <-> JSON bytes)
+- Serialization / deserialization roundtrip (plist $\leftrightarrow$ JSON bytes)
 - Encryption roundtrip (=save-user-tasks= → =load-user-tasks=)
 - Edge cases: corrupt file, missing action, past one-shot task
 - Full persist / restart-simulation / restore cycle
