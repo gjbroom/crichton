@@ -3919,19 +3919,12 @@ This matches Design Principle 1: /Skills must be isolated/.
 
 ** Skill Bundle Structure
 
-#+begin_src plantuml :file skills.png :exports results
-@startsalt
-{T
-  + ~~/.crichton/skills/my-skill/
-  ++ skill.toml      (Manifest - required)
-  ++ skill.wasm      (Compiled WASM binary - required)
-  ++ skill.wat       (WAT source - optional, human-readable)
-}
-@endsalt
-#+end_src
-
-#+RESULTS:
-[[file:skills.png]]
+#+begin_example
+~/.crichton/skills/my-skill/
+  skill.toml   (Manifest - required)
+  skill.wasm   (Compiled WASM binary - required)
+  skill.wat    (WAT source - optional, human-readable)
+#+end_example
 
 The =skill.toml= manifest must be present.  =skill.wasm= is the runnable
 binary.  =skill.wat= is optional source; commit it for version control but
@@ -4149,16 +4142,13 @@ Generate a signing keypair via the SLIME/SLY REPL:
 
 ** Trusted Keys Directory
 
-#+begin_src plantuml :file keys.png :exports results
-@startsalt
-{T
-  + ~~/.crichton/
-  ++ signing-key.priv           (Ed25519 private key - secret)
-  ++ trusted-keys/abc123.pub     (Your own public key - auto-installed)
-  ++ trusted-keys/vendor-xyz.pub (Third-party key you chose to trust)
-}
-@endsalt
-#+end_src
+#+begin_example
+~/.crichton/
+  signing-key.priv              (Ed25519 private key - secret)
+  trusted-keys/
+    abc123.pub                  (Your own public key - auto-installed)
+    vendor-xyz.pub              (Third-party key you chose to trust)
+#+end_example
 
 At startup the daemon loads all =*.pub= files in =trusted-keys/=.  A skill
 whose =signature= field matches any trusted key will be allowed to run.
@@ -4224,21 +4214,15 @@ journal that is searchable on-demand.
 
 ** File Layout
 
-#+begin_src plantuml :file state.png :exports results
-@startsalt
-{T
-  + ~~/.crichton/state/
-  ++ SOUL.org          (Persona, values, behavioural tone)
-  ++ USER.org          (User identity and preferences)
-  ++ MEMORY.org        (Curated long-term facts - main sessions only)
-  ++ journal/2026-03-02.org   (daily log - today, append-only)
-  ++ journal/2026-03-01.org   (daily log - yesterday)
-}
-@endsalt
-#+end_src
-
-#+RESULTS:
-[[file:state.png]]
+#+begin_example
+~/.crichton/state/
+  SOUL.org     (Persona, values, behavioural tone)
+  USER.org     (User identity and preferences)
+  MEMORY.org   (Curated long-term facts - main sessions only)
+  journal/
+    2026-03-02.org   (daily log - today, append-only)
+    2026-03-01.org   (daily log - yesterday)
+#+end_example
 
 Directory permissions: =0700=.  File permissions: =0600=.
 
