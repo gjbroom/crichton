@@ -285,7 +285,7 @@ and thread interaction are the interesting part.
 Shows the full message flow for a streaming chat request that includes one
 tool-use iteration.  Key points: tool iterations use non-streaming
 =send-message=; only the final text response streams deltas; =chat_done= is
-sent /before/ the closing =ok= response; the Emacs =❯= prompt does not
+sent /before/ the closing =ok= response; the Emacs =>= prompt does not
 appear until =chat_done= arrives.
 
 #+begin_src plantuml :file streaming-happy-path.png :exports results
@@ -340,7 +340,7 @@ A --> D : (text, messages, response)
 deactivate A
 
 D -> C : {op:"chat_done", id:2, text:"The weather is sunny.", session_id:"s1"}
-note right of C : prompt ❯ appears here;\ndepends on chat_done arriving
+note right of C : prompt > appears here;\ndepends on chat_done arriving
 D -> D : save session history\nrelease claim
 D -> C : {id:2, ok:true, result:{text:"...", session_id:"s1"}}
 deactivate D
@@ -2381,7 +2381,7 @@ assumed (legacy behaviour).
 - =entry_point= (string): WASM export name (defaults to the table key)
 - =abi= (string): ="json"= or ="i32"= (default ="i32"=).  When set to
   ="json"=, =invoke-skill= automatically uses the JSON-through-memory calling
-  convention even if =:params= is not supplied (an empty ={​}= is passed).
+  convention even if =:params= is not supplied (an empty ={}= is passed).
 - =description= (string): Human-readable description of the function
 - =input_type= (string): Semantic type tag for pipeline wiring (metadata only, not enforced)
 - =output_type= (string): Semantic type tag for pipeline wiring (metadata only, not enforced)
@@ -2696,7 +2696,7 @@ cargo test
 *** System Requirements
 
 - *OS*: Linux (tested on Debian/Ubuntu)
-- *Lisp*: SBCL ≥ 2.0
+- *Lisp*: SBCL >= 2.0
 - *Build tools*: gcc, make, git
 - *Optional*: Emacs with SLIME/SLY for interactive development
 
@@ -3367,7 +3367,7 @@ crichton-client --eval '(format t "~A~%" (crichton/skills:export-user-tasks))'
 test suite covering:
 
 - =user-task-p= predicate accuracy
-- Serialization / deserialization roundtrip (plist ↔ JSON bytes)
+- Serialization / deserialization roundtrip (plist <-> JSON bytes)
 - Encryption roundtrip (=save-user-tasks= → =load-user-tasks=)
 - Edge cases: corrupt file, missing action, past one-shot task
 - Full persist / restart-simulation / restore cycle
