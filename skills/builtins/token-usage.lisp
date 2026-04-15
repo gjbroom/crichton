@@ -394,7 +394,7 @@
                      :total-cost (coerce (or (get-field "TOTAL-COST") 0) 'double-float)
                      :call-count (or (get-field "CALL-COUNT") 0)
                      :history nil
-                     :max-history 1000))))
+                     :max-history 1000))))))
 
 (defun save-meters ()
   "Persist all meters to storage. Thread-safe."
