@@ -216,14 +216,14 @@
 (define-tool rss
     (:description "Fetch, check, and monitor RSS/Atom feeds; or write/publish your own RSS feeds.
 Reading: 'fetch' reads all items from a URL, 'check' returns only new items since last check, 'monitor_start' starts periodic polling, 'monitor_stop' stops a monitor, 'list_monitors' shows active monitors with backoff status.
-Muting: 'mute_monitor' silences a feed indefinitely (skips polls, keeps registration); 'unmute_monitor' resumes it and resets the failure counter.
+Muting: 'mute_monitor' silences a feed indefinitely (skips polls, keeps registration); 'unmute_monitor' resumes it and resets the failure counter.  'reset_all_backoff' clears automatic backoff on every non-user-muted monitor at once — useful after a bug fix that put feeds into backoff.
 Bulk import/export: 'opml_import' parses an OPML file and registers all feeds as monitors in a single call — use this instead of looping monitor_start.  'opml_export' generates an OPML 2.0 file from all registered monitors.
 Writing: 'publish_item' adds an item to a named feed (creating it implicitly), 'configure_feed' sets feed metadata (title/description/link/max-items), 'get_feed_xml' returns the RSS 2.0 XML for serving, 'list_feed_items' shows the current item list, 'list_feeds' shows all feeds, 'clear_feed' removes all items (keeps config), 'delete_feed' removes feed entirely.
 Monitors automatically back off on failure (exponential, capped at 7 days) and post a notification after 10 consecutive failures.  Monitors can filter items by keywords via the rss-filter WASM skill.  Published feeds persist across restarts via encrypted storage.")
   ((action "string"
            "The RSS action: fetch, check, monitor_start, monitor_stop, list_monitors, mute_monitor, unmute_monitor, opml_import, opml_export, publish_item, configure_feed, get_feed_xml, list_feed_items, list_feeds, clear_feed, delete_feed."
            :enum ("fetch" "check" "monitor_start" "monitor_stop" "list_monitors"
-                  "mute_monitor" "unmute_monitor"
+                  "mute_monitor" "unmute_monitor" "reset_all_backoff"
                   "opml_import" "opml_export"
                   "publish_item" "configure_feed" "get_feed_xml"
                   "list_feed_items" "list_feeds" "clear_feed" "delete_feed")
@@ -340,6 +340,10 @@ Monitors automatically back off on failure (exponential, capped at 7 days) and p
        (handler-case
            (crichton/skills:rss-monitor-unmute task-name)
          (error (c) (format nil "Error: ~A" c)))))
+    ((string-equal action "reset_all_backoff")
+     (handler-case
+         (crichton/skills:rss-reset-all-backoff)
+       (error (c) (format nil "Error: ~A" c))))
     ;; --- Feed writing actions ---
     ((string-equal action "publish_item")
      (if (null name)

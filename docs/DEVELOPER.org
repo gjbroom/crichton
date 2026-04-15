@@ -1286,7 +1286,7 @@ Print a combined health report: directory accessibility, integrity results, quot
   per-invocation =skill-context-id=.
 - *Encryption*: All files are age-encrypted at rest (same key as credentials and
   sessions).
-- *Permissions*: Files are written with 0600 permissions
+- *Permissions*: Files are written with 0600 permissions \\
   via =crichton/crypto:encrypt-to-file=.
 - *Atomic writes*: Encryption writes via temp file + rename to prevent partial
   writes.
@@ -1841,9 +1841,9 @@ filter and keyword parameters:
 }
 #+end_src
 
-Note: * = required.
+*Note*: Fields marked with an asterisk (*) are required.
 
-| Field            | Default                   | Description                             |
+| Field *          | Default                   | Description                             |
 |------------------+---------------------------+-----------------------------------------|
 | =items= *        | ---                         | Array of RSS items (canonical schema)   |
 | =keywords= *     | ---                         | Array of strings to match               |
@@ -2105,7 +2105,7 @@ Called automatically by =run-agent= / =run-agent/stream= for all sessions.
 
 The =skills= tool exposes WASM skill management to the LLM agent.
 
-Note: * = required.
+*Note*: Parameters marked with an asterisk (*) are required.
 
 | Parameter *     | Description                                              |
 |-----------------+----------------------------------------------------------|
@@ -2136,7 +2136,7 @@ the JSON-through-memory ABI.  This is required for pure-function skills such as
 The =orgmode= tool provides org-mode file and org-roam integration.
 Gated by =[orgmode] enable = true= in =config.toml=.
 
-Note: * = required.
+*Note*: Parameters marked with an asterisk (*) are required.
 
 | Parameter *     | Description                                                |
 |-----------------+------------------------------------------------------------|
@@ -2192,7 +2192,7 @@ allow_write = true
 - =allow_write= defaults to false; must be set explicitly to permit mutations
 - No credentials required --- accesses the local filesystem directly
 
-Note: * = required.
+*Note*: Parameters marked with an asterisk (*) are required.
 
 | Parameter *     | Description                                              |
 |-----------------+----------------------------------------------------------|

@@ -938,6 +938,70 @@ Show me the XML for my daily-digest feed so I can save it.
 (age-encrypted).  The most recent /N/ items are retained (default 100;
 configurable via =configure_feed= with =max-items=).
 
+*** Interest-based curation and morning briefing
+
+Crichton can score incoming feed articles against your interests and save the
+best ones to [[*Raindrop][Raindrop]].  A morning briefing notification summarises what was
+curated overnight.
+
+*How it works*:
+
+1. Every feed monitor deposits new articles into an internal inbox.
+2. Every two hours the curator pulls a batch of unscored articles, asks the LLM
+   to score each one against your interests profile (0.0--1.0), and writes the
+   scores back.
+3. Articles that score at or above the threshold (default 0.7) are saved to a
+   Raindrop collection called =crichton=, tagged with the topics the LLM
+   identified.
+4. Each morning at 08:00 a single briefing notification lists every article
+   that was saved to Raindrop since the last briefing.  The briefing is also
+   delivered via Pushover if credentials are configured.
+
+The scorer silently no-ops when no interests profile has been set, so there is
+no noise until you opt in.
+
+*Setting up*:
+
+#+begin_example
+My interests: Lisp, Common Lisp, Emacs, security research, distributed
+systems, programming language theory, and retro computing.
+Remember that as my RSS interests profile.
+#+end_example
+
+Once a profile is stored Crichton starts scoring on the next two-hour cycle.
+
+*Example interactions*:
+
+#+begin_example
+Set my RSS interests profile to: Lisp, distributed systems, security.
+What's in my RSS inbox?
+What articles have been curated for me today?
+Show me my unread articles from the LWN feed.
+#+end_example
+
+*Configuration* (=~/.crichton/config.toml=):
+
+#+begin_src toml
+[rss-curator]
+score-interval-seconds = 7200  # How often to score (default 2 h)
+briefing-hour          = 8     # Hour for daily briefing (default 8)
+briefing-minute        = 0     # Minute for daily briefing (default 0)
+#+end_src
+
+*Credentials* --- Raindrop credentials are required to save bookmarks; see
+[[*Raindrop][Raindrop]].  The LLM must be configured for scoring to work.
+
+*Recovering from backoff*: If all monitors ended up in automatic backoff (e.g.
+after a bug that has since been fixed) you can reset them all in one step:
+
+#+begin_example
+Reset all RSS feed backoff.
+#+end_example
+
+This clears the failure counters and backoff timers on every non-user-muted
+monitor so they resume polling on their next scheduled tick.  User-muted feeds
+are not affected.
+
 ** Battery Monitor
 
 Monitors laptop battery charge level and sends proactive push notifications

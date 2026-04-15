@@ -287,6 +287,26 @@ Returns a status string."
   (log:info "RSS monitor unmuted: ~A" name)
   (format nil "Monitor ~A unmuted; failure count reset." name))
 
+(defun rss-reset-all-backoff ()
+  "Clear automatic backoff from every non-user-muted monitor.
+Resets consecutive-failures, muted-until, and last-failure so that
+all affected feeds resume polling on their next scheduled tick.
+User-muted monitors are not touched.
+Returns a human-readable summary string."
+  (let ((cleared 0))
+    (bt:with-lock-held (*rss-monitors-lock*)
+      (maphash (lambda (name config)
+                 (unless (getf config :user-muted)
+                   (setf (getf config :consecutive-failures) 0
+                         (getf config :muted-until) nil
+                         (getf config :last-failure) nil)
+                   (setf (gethash name *rss-monitors*) config)
+                   (incf cleared)))
+               *rss-monitors*))
+    (persist-rss-monitors)
+    (log:info "RSS backoff reset: cleared ~D monitor~:P" cleared)
+    (format nil "Backoff cleared on ~D monitor~:P. User-muted feeds unchanged." cleared)))
+
 ;;; --- OPML import ---
 
 (defun split-commas (s)

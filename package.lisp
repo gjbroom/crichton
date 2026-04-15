@@ -219,6 +219,7 @@
            #:rss-monitor-stop
            #:rss-monitor-mute
            #:rss-monitor-unmute
+           #:rss-reset-all-backoff
            #:rss-monitor-configs
            #:rss-list-monitors
            #:opml-import-monitors
