@@ -99,7 +99,7 @@
     (let ((attrs (xmls:node-attrs node)))
       (when attrs
         (let ((pair (assoc attr-name attrs :test #'string-equal)))
-          (when pair (cdr pair)))))))
+          (when pair (second pair)))))))
 
 ;;; --- Feed parsing ---
 

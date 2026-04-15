@@ -351,26 +351,50 @@
 ;;; ====================================================================
 
 (defun meter-to-plist (meter)
-  "Convert a METER object to a plist for serialization.
+  "Serialise a METER to a hash-table for JSON storage.
+   Returns a hash-table with lowercase string keys so it round-trips
+   through shasht as a JSON object rather than an array.
    History is not persisted (too large and ephemeral)."
   (bt:with-lock-held ((meter-lock meter))
-    (list :name (meter-name meter)
-          :start-time (meter-start-time meter)
-          :total-input (meter-total-input meter)
-          :total-output (meter-total-output meter)
-          :total-cost (meter-total-cost meter)
-          :call-count (meter-call-count meter))))
+    (let ((ht (make-hash-table :test #'equal)))
+      (setf (gethash "name"         ht) (meter-name meter)
+            (gethash "start-time"   ht) (meter-start-time meter)
+            (gethash "total-input"  ht) (meter-total-input meter)
+            (gethash "total-output" ht) (meter-total-output meter)
+            (gethash "total-cost"   ht) (meter-total-cost meter)
+            (gethash "call-count"   ht) (meter-call-count meter))
+      ht)))
 
-(defun plist-to-meter (plist)
-  "Create a METER object from a persisted plist."
-  (make-meter :name (getf plist :name)
-               :start-time (getf plist :start-time (get-universal-time))
-               :total-input (getf plist :total-input 0)
-               :total-output (getf plist :total-output 0)
-               :total-cost (coerce (getf plist :total-cost 0) 'double-float)
-               :call-count (getf plist :call-count 0)
-               :history nil
-               :max-history 1000))
+(defun plist-to-meter (data)
+  "Create a METER object from persisted DATA.
+   Accepts the current hash-table format (string keys) and the legacy
+   vector format produced when plists were stored as JSON arrays."
+  (etypecase data
+    (hash-table
+     (make-meter :name       (gethash "name"         data)
+                 :start-time (gethash "start-time"   data (get-universal-time))
+                 :total-input  (gethash "total-input"  data 0)
+                 :total-output (gethash "total-output" data 0)
+                 :total-cost (coerce (gethash "total-cost" data 0) 'double-float)
+                 :call-count (gethash "call-count"   data 0)
+                 :history nil
+                 :max-history 1000))
+    ((or list vector)
+     ;; Legacy: plist was serialised as a JSON array with uppercase string keys.
+     ;; Convert to a list and do case-insensitive getf-style lookup.
+     (let ((seq (if (vectorp data) (coerce data 'list) data)))
+       (flet ((get-field (key)
+                (loop for (k v) on seq by #'cddr
+                      when (and k (string-equal (string k) key))
+                      return v)))
+         (make-meter :name       (get-field "NAME")
+                     :start-time (or (get-field "START-TIME") (get-universal-time))
+                     :total-input  (or (get-field "TOTAL-INPUT") 0)
+                     :total-output (or (get-field "TOTAL-OUTPUT") 0)
+                     :total-cost (coerce (or (get-field "TOTAL-COST") 0) 'double-float)
+                     :call-count (or (get-field "CALL-COUNT") 0)
+                     :history nil
+                     :max-history 1000))))
 
 (defun save-meters ()
   "Persist all meters to storage. Thread-safe."
