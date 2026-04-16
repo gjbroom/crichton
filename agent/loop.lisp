@@ -93,19 +93,32 @@ Override with [llm] tool-timeout = N in config.toml.")
       result))
 
 (defun execute-tool-calls (content)
-  "Dispatch all tool-use blocks in CONTENT, return tool-result blocks."
-  (let ((tool-uses (crichton/llm:blocks-tool-uses content)))
+  "Dispatch all tool-use blocks in CONTENT in parallel, return tool-result blocks
+   in the same order.  Each tool runs in its own thread; we join all threads
+   before returning so the caller sees a complete, ordered result list."
+  (let* ((tool-uses (crichton/llm:blocks-tool-uses content))
+         (n         (length tool-uses))
+         (results   (make-array n)))
     (log:info "Tool calls: ~{~A~^, ~}"
               (mapcar (lambda (tu) (getf tu :name)) tool-uses))
-    (mapcar (lambda (tu)
-              (let* ((name   (getf tu :name))
-                     (result (cap-tool-result
-                              (dispatch-tool name (getf tu :input))
-                              name)))
-                (log:debug "Tool ~A result: ~A..." name
-                           (truncate-for-log result))
-                (crichton/llm:make-tool-result-block (getf tu :id) result)))
-            tool-uses)))
+    (let ((threads
+            (loop for tu in tool-uses
+                  for i from 0
+                  collect (let ((tu tu) (i i))
+                            (bt:make-thread
+                             (lambda ()
+                               (let* ((name   (getf tu :name))
+                                      (result (cap-tool-result
+                                               (dispatch-tool name (getf tu :input))
+                                               name)))
+                                 (log:debug "Tool ~A result: ~A..." name
+                                            (truncate-for-log result))
+                                 (setf (aref results i)
+                                       (crichton/llm:make-tool-result-block
+                                        (getf tu :id) result))))
+                             :name (format nil "tool/~A" (getf tu :name)))))))
+      (mapc #'bt:join-thread threads))
+    (coerce results 'list)))
 
 (defun initialize-messages (user-input messages)
   "Build the initial message list for an agent loop invocation."
