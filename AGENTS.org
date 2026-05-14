@@ -207,7 +207,7 @@ If an agent claims success but verification fails, the agent *did not actually c
 - Microkernel architecture: daemon starts fresh via systemd (=assets/crichton.service=), client connects via =daemon.sock= RPC. No save-lisp-and-die for the daemon.
 - The daemon RPC server listens on =~/.crichton/daemon.sock=. Chat, status, stop ops.
 - =crichton-client= is a minimal binary (shasht + sb-bsd-sockets + cl-readline, no cl+ssl/wasmtime).
-- 6 built-in skills: weather, system-info, timing, scheduler, RSS, token-usage (general-purpose metering).
+- 24 built-in skills in =skills/builtins/=: weather, system-info, timing, scheduler, RSS (fetch/monitor/publish/curate/inbox), token-usage, battery, ephemeris, books, orgmode, orgmode-roam, orgmode-api, raindrop, github, git, hoobs, pushover, amp-orchestrator, log-inspector, task-store.
 - Built-in skills follow a dual interface: plist-returning function for programmatic use, formatted report function for humans.
 - *Hot-loading* (preferred for development): After code changes, reload via Swank (SLIME/SLY =M-x slime-connect= to port 4005):
   #+begin_src lisp
@@ -225,6 +225,49 @@ If an agent claims success but verification fails, the agent *did not actually c
 
 - *Load/compile check*: =sbcl --noinform --non-interactive --eval '(require :asdf)' --eval '(push #p"/home/gjbroom/devel/crichton/" asdf:*central-registry*)' --eval '(asdf:load-system :crichton :force t)'=
 - Target: zero STYLE-WARNING conditions from =(asdf:load-system :crichton :force t)=. Fix all warnings as encountered (boy-scout rule).
+- *Unit tests*: =make test= — runs all pure-function test suites in a fresh SBCL image and exits 0 on success, 1 on any failure.  Run this after touching =agent/sanitize.lisp=, =config/loader.lisp=, =config/util.lisp=, =llm/anthropic.lisp=, or =agent/tools.lisp=.
+
+* Testing Methodology
+
+Crichton uses a REPL-first development workflow with targeted unit tests for pure functions at security and protocol boundaries.  The test suite lives in =tests/=.
+
+** Test files
+
+| File | What it covers |
+|------+----------------|
+| =tests/harness.lisp= | Shared test harness: =check=, =check=​=, =check-signals=, =check-error=, =check-no-error=, =print-summary= |
+| =tests/test-sanitize.lisp= | =strip-control-chars=, =count-injection-markers=, =sanitize-user-input= |
+| =tests/test-config.lisp= | =deep-merge-plist=, =toml-key-to-keyword=, =toml-value-to-lisp=, JSON codec, =safe-intern-keyword=, =plistp= |
+| =tests/test-llm-anthropic.lisp= | LLM wire serialization: content blocks, messages, tool choice, response parsing |
+| =tests/test-tools.lisp= | =hget=, =symbol-to-underscored=, =make-json-schema= |
+| =tests/run-all-tests.lisp= | Top-level runner |
+| =tests/test-kv-store.lisp= | KV store CRUD, quota, cache, backup/restore, integrity (integration) |
+| =tests/test-task-persistence.lisp= | Scheduler task serialization and encrypt/decrypt roundtrip (integration) |
+| =tests/test-rss-filter.lisp= | RSS filter WASM skill invocation (integration) |
+
+** Running tests
+
+From the shell (fresh SBCL image — preferred for CI-style confidence):
+#+begin_src bash
+make test
+#+end_src
+
+From SLIME/SLY (load into the live daemon image for fast iteration):
+#+begin_src lisp
+(load "tests/run-all-tests.lisp")
+(crichton/tests:run-all)
+
+;; Or a single suite:
+(load "tests/harness.lisp")
+(load "tests/test-sanitize.lisp")
+(crichton/tests/sanitize:run-all)
+#+end_src
+
+** What to test and what not to
+
+Test functions that are (1) pure or nearly pure, (2) have a clear contract expressible as input→output assertions, and (3) sit on a security or wire-protocol boundary.
+
+Do *not* write unit tests for tool handlers, the agent loop, WASM skill execution, RPC server lifecycle, or anything that requires network calls or a live daemon.  Those are better validated through the existing integration-style tests or REPL exploration.
 
 * Landing the Plane (Session Completion)
 
@@ -238,7 +281,7 @@ If an agent claims success but verification fails, the agent *did not actually c
 4. *PUSH TO REMOTE* - This is MANDATORY:
    #+begin_src bash
    git pull --rebase
-   bd sync
+   bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    #+end_src

@@ -55,6 +55,7 @@ For development details, see the git commit history and BEADS issue tracker.
 
 ** Fixed
 
+- *Parallel tool execution*: when the LLM returns multiple tool calls in a single response turn, they now execute concurrently instead of serially.  Conversations that invoke several tools at once (e.g. weather + system info + RSS) complete significantly faster.
 - *TUI erase-and-rewrite glitch* (cricht-jd2): the chat viewport no longer erases a streaming response and rewrites a shorter version after the final "done" message arrives.  The done-message text is now used only as a fallback when no streamed text was accumulated.
 - *RSS filter integration test* (cricht-8ee): added =tests/test-rss-filter.lisp=, loadable from SLIME/SLY, verifying that =run-rss-filter= correctly matches items against keywords and returns the right =matched_keywords= field.
 - *Session busy on reconnect* (cricht-9kb): after pressing Ctrl-C and reconnecting with =crichton-reconnect= + =crichton-chat=, the daemon no longer incorrectly reports "Session is busy --- a previous request is still processing."  Session claims now carry a 60-second force-release timeout; reconnecting after an abandoned request succeeds immediately.
