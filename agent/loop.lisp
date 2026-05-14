@@ -156,6 +156,15 @@ Override with [llm] tool-timeout = N in config.toml.")
       (setf msgs (nconc msgs (list (list :role :assistant :content content))))
       (log:info "Stop reason: ~A" stop-reason)
       (unless (eq stop-reason :tool-use)
+        ;; Guard: if the LLM was cut off mid-tool-use (max_tokens), the content
+        ;; may contain tool_use blocks with no corresponding tool_result.
+        ;; Committing that would poison the session, so strip the partial turn.
+        (when (crichton/llm:blocks-tool-uses content)
+          (log:warn "~A: stop=~A but content has tool_use blocks — stripping partial turn to keep session valid"
+                    label stop-reason)
+          (setf msgs (butlast msgs))
+          (return (values (format nil "[Response cut off (token limit reached while planning tool calls). Please try again.]")
+                          msgs nil)))
         (let ((text (crichton/llm:response-text response)))
           (log:info "~A done: ~A" label (truncate-for-log text))
           (return (values text msgs response))))
