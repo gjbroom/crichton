@@ -129,11 +129,45 @@
   (print-summary "max-tokens-text-only")
   (zerop crichton/tests/harness:*fail-count*))
 
+(defun test-error-propagation-leaves-input-unchanged ()
+  "When an error propagates out of run-agent-loop (simulating a tool timeout
+   or LLM failure mid-loop), the original input msgs must be unchanged so the
+   caller's snapshot remains valid for session rollback.
+
+   We simulate the failure by having send-fn succeed on the first call
+   (returning tool-use, which triggers real tool dispatch — unknown tools
+   return an error string rather than signalling), then error on the second
+   call (after tool results are fed back).  This mirrors the tool-timeout
+   scenario without needing a real timer."
+  (format t "~%  [test-error-propagation-leaves-input-unchanged]~%")
+  (crichton/tests/harness:reset-counts)
+
+  (let* ((calls 0)
+         (original-msgs (initial-msgs "hello"))
+         (snapshot (copy-list original-msgs))
+         (send-fn (lambda (msgs)
+                    (declare (ignore msgs))
+                    (incf calls)
+                    (if (= calls 1)
+                        (make-tool-use-response "tu-err" "nonexistent-tool")
+                        (error "Simulated failure after tool execution")))))
+
+    (check-signals "error propagates out of run-agent-loop" error
+      (run-agent-loop original-msgs send-fn "test" 10))
+
+    (check= "input msgs unchanged — snapshot safe for rollback"
+            original-msgs snapshot)
+    (check= "send-fn called twice (tool-use then failure)" calls 2))
+
+  (print-summary "error-propagation-leaves-input-unchanged")
+  (zerop crichton/tests/harness:*fail-count*))
+
 ;;; --- runner ---
 
 (defun run-all ()
   (format t "~%Agent Loop tests:~%")
   (let ((results (list (test-normal-flow)
                        (test-max-tokens-with-tool-use)
-                       (test-max-tokens-text-only))))
+                       (test-max-tokens-text-only)
+                       (test-error-propagation-leaves-input-unchanged))))
     (every #'identity results)))
