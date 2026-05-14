@@ -14,16 +14,16 @@
       "Error: 'steps' array is required for pipeline action."))
   (handler-case
       (let* ((step-list (coerce steps 'list))
-             (results (crichton/skills:execute-pipeline step-list))
+             (results (execute-pipeline step-list))
              (step-count (hash-table-count results)))
         (with-output-to-string (s)
           (format s "Pipeline completed (~D step~:P):~%" step-count)
           (maphash (lambda (id result)
                      (format s "  ~A: ~S~%" id result))
                    results)))
-    (crichton/skills:pipeline-error (c)
+    (pipeline-error (c)
       (format nil "Pipeline failed at step '~A': ~A"
-              (crichton/skills:pipeline-error-step-id c) c))
+              (pipeline-error-step-id c) c))
     (error (c)
       (format nil "Pipeline error: ~A" c))))
 
@@ -46,13 +46,13 @@
           "Pipeline steps array (for 'pipeline' and 'save_pipeline' actions). Each step is an object with: id (string, required), kind ('wasm'/'builtin'/'auto'), skill (string, for WASM steps), builtin (string, for builtin steps like 'rss_fetch', 'rss_check', 'weather'), entry_point (string), params (object, may contain {\"ref\": \"step_id.key\"} references to earlier step outputs)."))
   (cond
     ((string-equal action "list")
-     (crichton/skills:discover-skills)            ; refresh before listing
+     (discover-skills)            ; refresh before listing
      (with-output-to-string (s)
-       (crichton/skills:skill-report :stream s)))
+       (skill-report :stream s)))
     ((string-equal action "info")
      (unless name
        (return-from handler "Error: 'name' is required for info action."))
-     (let ((info (crichton/skills:skill-info name)))
+     (let ((info (skill-info name)))
        (if info
            (format nil "~S" info)
            (format nil "Skill '~A' not found." name))))
@@ -60,7 +60,7 @@
      (unless name
        (return-from handler "Error: 'name' is required for invoke action."))
      (handler-case
-         (let ((result (crichton/skills:invoke-skill name
+         (let ((result (invoke-skill name
                          :entry-point entry-point
                          :params params)))
            (format nil "Skill '~A' returned: ~A" name result))
@@ -73,17 +73,17 @@
        (return-from handler "Error: 'name' is required for save_pipeline."))
      (unless steps
        (return-from handler "Error: 'steps' is required for save_pipeline."))
-     (crichton/skills:save-pipeline name steps)
+     (save-pipeline name steps)
      (format nil "Pipeline '~A' saved (~D step~:P). Schedulable as action 'pipeline:~A'."
              name (length steps) name))
     ((string-equal action "delete_pipeline")
      (unless name
        (return-from handler "Error: 'name' is required for delete_pipeline."))
-     (if (crichton/skills:delete-pipeline name)
+     (if (delete-pipeline name)
          (format nil "Pipeline '~A' deleted." name)
          (format nil "Pipeline '~A' not found." name)))
     ((string-equal action "list_pipelines")
-     (let ((pipelines (crichton/skills:list-saved-pipelines)))
+     (let ((pipelines (list-saved-pipelines)))
        (if pipelines
            (with-output-to-string (s)
              (format s "Saved pipelines:~%")
@@ -92,7 +92,7 @@
                        (getf p :name) (getf p :step-count) (getf p :name))))
            "No saved pipelines.")))
     ((string-equal action "refresh")
-     (let ((count (crichton/skills:discover-skills)))
+     (let ((count (discover-skills)))
        (format nil "Discovered ~D skill~:P." count)))
     (t
      (format nil "Unknown skills action: ~A" action))))

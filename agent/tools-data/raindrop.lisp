@@ -43,61 +43,61 @@
        (unless url
          (return-from handler "Error: 'url' is required for save."))
        (with-output-to-string (s)
-         (crichton/skills:raindrop-save-report
+         (raindrop-save-report
           url :title title :excerpt excerpt :tags tag-list
               :collection-id collection-id :stream s)))
       ((string-equal action "search")
        (unless query
          (return-from handler "Error: 'query' is required for search."))
        (with-output-to-string (s)
-         (crichton/skills:raindrop-find-report
+         (raindrop-find-report
           query :collection-id (or collection-id 0)
                 :max-items per-page :stream s)))
       ((string-equal action "list")
        (with-output-to-string (s)
          (multiple-value-bind (items total)
-             (crichton/skills:raindrop-list
+             (raindrop-list
               (or collection-id 0) :page page :per-page per-page)
-           (crichton/skills:format-raindrop-list
+           (format-raindrop-list
             items :stream s :total total))))
       ((string-equal action "get")
        (unless id
          (return-from handler "Error: 'id' is required for get."))
-       (let ((item (crichton/skills:raindrop-get-one id)))
+       (let ((item (raindrop-get-one id)))
          (if item
              (with-output-to-string (s)
-               (crichton/skills:format-raindrop item s))
+               (format-raindrop item s))
              (format nil "Bookmark ~D not found." id))))
       ((string-equal action "update")
        (unless id
          (return-from handler "Error: 'id' is required for update."))
-       (let ((result (crichton/skills:raindrop-update
+       (let ((result (raindrop-update
                       id :title title :excerpt excerpt
                          :tags tag-list :link url
                          :collection-id collection-id
                          :important important)))
          (with-output-to-string (s)
            (format s "Updated bookmark:~%")
-           (crichton/skills:format-raindrop result s))))
+           (format-raindrop result s))))
       ((string-equal action "delete")
        (unless id
          (return-from handler "Error: 'id' is required for delete."))
-       (if (crichton/skills:raindrop-remove id)
+       (if (raindrop-remove id)
            (format nil "Bookmark ~D moved to Trash." id)
            (format nil "Failed to delete bookmark ~D." id)))
       ((string-equal action "collections")
        (with-output-to-string (s)
-         (crichton/skills:raindrop-collections-report :stream s)))
+         (raindrop-collections-report :stream s)))
       ((string-equal action "create_collection")
        (unless title
          (return-from handler "Error: 'title' is required for create_collection."))
-       (let ((result (crichton/skills:raindrop-create-collection
+       (let ((result (raindrop-create-collection
                       title :parent-id collection-id)))
          (format nil "Created collection: ~A (id: ~D)"
                  (getf result :title) (getf result :id))))
       ((string-equal action "tags")
        (with-output-to-string (s)
-         (crichton/skills:raindrop-tags-report
+         (raindrop-tags-report
           :collection-id collection-id :stream s)))
       (t
        (format nil "Unknown raindrop action: ~A" action)))))

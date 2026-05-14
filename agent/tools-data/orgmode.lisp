@@ -50,22 +50,22 @@
   (handler-case
       (cond
         ((string-equal action "status")
-         (format nil "~S" (crichton/skills:orgmode-status)))
+         (format nil "~S" (orgmode-status)))
         ((string-equal action "read")
          (unless path
            (return-from handler "Error: 'path' is required for read."))
-         (format nil "~S" (crichton/skills:orgmode-read path :include-raw include-raw)))
+         (format nil "~S" (orgmode-read path :include-raw include-raw)))
         ((string-equal action "read_file")
          (unless path
            (return-from handler "Error: 'path' is required for read_file."))
-         (crichton/skills:orgmode-read-file path :max-chars (or max-chars 50000)))
+         (orgmode-read-file path :max-chars (or max-chars 50000)))
         ((string-equal action "search")
          (unless query
            (return-from handler "Error: 'query' is required for search."))
-         (let ((results (crichton/skills:orgmode-search query :tag tag :limit limit)))
+         (let ((results (orgmode-search query :tag tag :limit limit)))
            (format nil "~D result~:P:~%~{~S~^~%~}" (length results) results)))
         ((string-equal action "list_tags")
-         (let ((tags (crichton/skills:orgmode-list-tags)))
+         (let ((tags (orgmode-list-tags)))
            (format nil "~D tag~:P: ~{~A~^, ~}" (length tags) tags)))
         ((string-equal action "backlinks")
          (unless path
@@ -75,13 +75,13 @@
                           ((string-equal direction "forward") :forward)
                           ((string-equal direction "both") :both)
                           (t :backlinks)))
-                (results (crichton/skills:orgmode-backlinks path :direction dir-kw :limit limit)))
+                (results (orgmode-backlinks path :direction dir-kw :limit limit)))
            (format nil "~D link~:P:~%~{~S~^~%~}" (length results) results)))
         ((string-equal action "create_note")
          (unless title
            (return-from handler "Error: 'title' is required for create_note."))
          (let ((ft-list (when filetags (coerce filetags 'list))))
-           (let ((created-path (crichton/skills:orgmode-create-note title
+           (let ((created-path (orgmode-create-note title
                                  :root root :body body :filetags ft-list)))
              (format nil "Created: ~A" created-path))))
         ((string-equal action "append")
@@ -89,13 +89,13 @@
            (return-from handler "Error: 'path' is required for append."))
          (unless text
            (return-from handler "Error: 'text' is required for append."))
-         (let ((result (crichton/skills:orgmode-append path text :headline headline)))
+         (let ((result (orgmode-append path text :headline headline)))
            (format nil "Appended to: ~A" result)))
         ((string-equal action "list_files")
-         (let ((results (crichton/skills:orgmode-list-files :root root :limit limit)))
+         (let ((results (orgmode-list-files :root root :limit limit)))
            (format nil "~D file~:P:~%~{~S~^~%~}" (length results) results)))
         ((string-equal action "list_todos")
-         (let ((results (crichton/skills:orgmode-list-todos
+         (let ((results (orgmode-list-todos
                          :state state :priority priority :tag tag
                          :file path :include-done include-done :limit limit)))
            (format nil "~D TODO~:P:~%~{~S~^~%~}" (length results) results)))
@@ -104,13 +104,13 @@
            (return-from handler "Error: 'path' is required for set_todo."))
          (unless headline
            (return-from handler "Error: 'headline' is required for set_todo."))
-         (let ((result (crichton/skills:orgmode-set-todo path headline state)))
+         (let ((result (orgmode-set-todo path headline state)))
            (format nil "Updated: ~A (headline ~S → ~A)" result headline (or state "cleared"))))
         ((string-equal action "set_filetags")
          (unless path
            (return-from handler "Error: 'path' is required for set_filetags."))
          (let* ((ft-list (if filetags (coerce filetags 'list) nil))
-                (result (crichton/skills:orgmode-set-filetags path ft-list)))
+                (result (orgmode-set-filetags path ft-list)))
            (format nil "Updated filetags: ~A → ~{:~A~}:" result ft-list)))
         (t (format nil "Unknown orgmode action: ~A" action)))
     (error (c)

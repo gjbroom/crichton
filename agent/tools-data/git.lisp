@@ -38,39 +38,39 @@
   (handler-case
       (cond
         ((string-equal action "config_status")
-         (format nil "~S" (crichton/skills:git-config-status)))
+         (format nil "~S" (git-config-status)))
         ((string-equal action "status")
          (unless repo-path
            (return-from handler "Error: 'repo_path' is required."))
-         (crichton/skills:git-status repo-path))
+         (git-status repo-path))
         ((string-equal action "log")
          (unless repo-path
            (return-from handler "Error: 'repo_path' is required."))
-         (crichton/skills:git-log repo-path :count count :path file-path))
+         (git-log repo-path :count count :path file-path))
         ((string-equal action "diff")
          (unless repo-path
            (return-from handler "Error: 'repo_path' is required."))
-         (crichton/skills:git-diff repo-path :ref ref :path file-path :staged staged))
+         (git-diff repo-path :ref ref :path file-path :staged staged))
         ((string-equal action "branches")
          (unless repo-path
            (return-from handler "Error: 'repo_path' is required."))
-         (crichton/skills:git-branches repo-path :all all-branches))
+         (git-branches repo-path :all all-branches))
         ((string-equal action "worktrees")
          (unless repo-path
            (return-from handler "Error: 'repo_path' is required."))
-         (crichton/skills:git-worktrees repo-path))
+         (git-worktrees repo-path))
         ((string-equal action "read_file")
          (unless repo-path
            (return-from handler "Error: 'repo_path' is required."))
          (unless file-path
            (return-from handler "Error: 'file_path' is required for read_file."))
-         (crichton/skills:git-read-file repo-path file-path))
+         (git-read-file repo-path file-path))
         ((string-equal action "show")
          (unless repo-path
            (return-from handler "Error: 'repo_path' is required."))
          (unless file-path
            (return-from handler "Error: 'file_path' is required for show."))
-         (crichton/skills:git-show repo-path ref file-path))
+         (git-show repo-path ref file-path))
         ((string-equal action "write_file")
          (unless repo-path
            (return-from handler "Error: 'repo_path' is required."))
@@ -78,7 +78,7 @@
            (return-from handler "Error: 'file_path' is required for write_file."))
          (when (null content)
            (return-from handler "Error: 'content' is required for write_file."))
-         (let ((written (crichton/skills:git-write-file repo-path file-path content)))
+         (let ((written (git-write-file repo-path file-path content)))
            (format nil "Written: ~A" written)))
         ((string-equal action "stage")
          (unless repo-path
@@ -87,7 +87,7 @@
            (return-from handler "Error: 'paths' is required for stage."))
          (let ((path-list (mapcar (lambda (p) (string-trim '(#\Space) p))
                                   (cl-ppcre:split "," paths))))
-           (crichton/skills:git-stage repo-path path-list)
+           (git-stage repo-path path-list)
            (format nil "Staged: ~{~A~^, ~}" path-list)))
         ((string-equal action "unstage")
          (unless repo-path
@@ -96,27 +96,27 @@
            (return-from handler "Error: 'paths' is required for unstage."))
          (let ((path-list (mapcar (lambda (p) (string-trim '(#\Space) p))
                                   (cl-ppcre:split "," paths))))
-           (crichton/skills:git-unstage repo-path path-list)
+           (git-unstage repo-path path-list)
            (format nil "Unstaged: ~{~A~^, ~}" path-list)))
         ((string-equal action "commit")
          (unless repo-path
            (return-from handler "Error: 'repo_path' is required."))
          (unless message
            (return-from handler "Error: 'message' is required for commit."))
-         (crichton/skills:git-commit repo-path message))
+         (git-commit repo-path message))
         ((string-equal action "create_branch")
          (unless repo-path
            (return-from handler "Error: 'repo_path' is required."))
          (unless branch-name
            (return-from handler "Error: 'branch_name' is required for create_branch."))
-         (crichton/skills:git-create-branch repo-path branch-name :from-ref ref)
+         (git-create-branch repo-path branch-name :from-ref ref)
          (format nil "Created and checked out branch: ~A~@[ (from ~A)~]" branch-name ref))
         ((string-equal action "checkout")
          (unless repo-path
            (return-from handler "Error: 'repo_path' is required."))
          (unless branch-name
            (return-from handler "Error: 'branch_name' is required for checkout."))
-         (crichton/skills:git-checkout repo-path branch-name)
+         (git-checkout repo-path branch-name)
          (format nil "Checked out: ~A" branch-name))
         (t (format nil "Unknown git action: ~A" action)))
     (error (c)

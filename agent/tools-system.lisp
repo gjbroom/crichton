@@ -12,7 +12,7 @@
   ((city "string"
          "Canadian city name for weather lookup. Default: configured city or Victoria."))
   (with-output-to-string (s)
-    (crichton/skills:weather-report :city city :stream s)))
+    (weather-report :city city :stream s)))
 
 ;;; --- System info tool ---
 
@@ -27,11 +27,11 @@
       ((string-equal a "status")
        (with-output-to-string (s)
          (format s "Crichton ~A~%" crichton/config:*crichton-version*)
-         (crichton/skills:system-report :stream s :mounts '("/" "/home"))))
+         (system-report :stream s :mounts '("/" "/home"))))
       ((string-equal a "start_monitoring")
-       (let* ((config (crichton/skills:system-monitor-config))
+       (let* ((config (system-monitor-config))
               (interval (getf config :interval)))
-         (if (crichton/skills:start-system-monitoring :interval interval)
+         (if (start-system-monitoring :interval interval)
              (format nil "System monitoring started (every ~Ds). Will alert when: memory >=~A%, load/CPU >=~,1F, any disk >=~A% full, any thermal zone >=~,1F°C."
                      interval
                      (getf config :mem-alert-percent)
@@ -40,7 +40,7 @@
                      (getf config :temp-alert-celsius))
              "System monitoring is already running.")))
       ((string-equal a "stop_monitoring")
-       (if (crichton/skills:stop-system-monitoring)
+       (if (stop-system-monitoring)
            "System monitoring stopped."
            "System monitoring was not running."))
       (t (format nil "Unknown system_info action: ~A" a)))))
@@ -54,13 +54,13 @@
       "Error: 'action_name' is required. Use action 'actions' to list available."))
   (unless interval-seconds
     (return-from scheduler-schedule-every "Error: 'interval_seconds' is required."))
-  (let ((act (crichton/skills:get-schedulable-action action-name)))
+  (let ((act (get-schedulable-action action-name)))
     (unless act
       (return-from scheduler-schedule-every
         (format nil "Error: unknown action '~A'. Use action 'actions' to list available." action-name)))
-    (crichton/skills:schedule-every task-name interval-seconds (getf act :fn)
+    (schedule-every task-name interval-seconds (getf act :fn)
                                     :replace t :action-name action-name)
-    (crichton/skills:persist-user-tasks)
+    (persist-user-tasks)
     (format nil "Scheduled '~A' every ~Ds as task '~A'." action-name interval-seconds task-name)))
 
 (defun scheduler-schedule-daily (action-name hour minute task-name)
@@ -69,14 +69,14 @@
     (return-from scheduler-schedule-daily "Error: 'action_name' is required."))
   (unless hour
     (return-from scheduler-schedule-daily "Error: 'hour' is required for schedule_daily."))
-  (let ((act (crichton/skills:get-schedulable-action action-name))
+  (let ((act (get-schedulable-action action-name))
         (min (or minute 0)))
     (unless act
       (return-from scheduler-schedule-daily
         (format nil "Error: unknown action '~A'." action-name)))
-    (crichton/skills:schedule-daily task-name hour min (getf act :fn)
+    (schedule-daily task-name hour min (getf act :fn)
                                     :replace t :action-name action-name)
-    (crichton/skills:persist-user-tasks)
+    (persist-user-tasks)
     (format nil "Scheduled '~A' daily at ~2,'0D:~2,'0D as task '~A'." action-name hour min task-name)))
 
 (defun scheduler-schedule-once (action-name delay-seconds task-name)
@@ -85,13 +85,13 @@
     (return-from scheduler-schedule-once "Error: 'action_name' is required."))
   (unless delay-seconds
     (return-from scheduler-schedule-once "Error: 'delay_seconds' is required."))
-  (let ((act (crichton/skills:get-schedulable-action action-name)))
+  (let ((act (get-schedulable-action action-name)))
     (unless act
       (return-from scheduler-schedule-once
         (format nil "Error: unknown action '~A'." action-name)))
-    (crichton/skills:schedule-at task-name (+ (get-universal-time) delay-seconds) (getf act :fn)
+    (schedule-at task-name (+ (get-universal-time) delay-seconds) (getf act :fn)
                                  :replace t :action-name action-name)
-    (crichton/skills:persist-user-tasks)
+    (persist-user-tasks)
     (format nil "Scheduled '~A' to run once in ~Ds as task '~A'." action-name delay-seconds task-name)))
 
 ;;; --- Scheduler tool ---
@@ -120,11 +120,11 @@
                                (format nil "user:~A" action-name)))))
     (cond
       ((string-equal action "status")
-       (format nil "~S" (crichton/skills:scheduler-status)))
+       (format nil "~S" (scheduler-status)))
       ((string-equal action "list")
-       (format nil "~S" (crichton/skills:list-tasks)))
+       (format nil "~S" (list-tasks)))
       ((string-equal action "actions")
-       (let ((actions (crichton/skills:list-schedulable-actions)))
+       (let ((actions (list-schedulable-actions)))
          (if actions
              (with-output-to-string (s)
                (format s "Available schedulable actions:~%")
@@ -143,8 +143,8 @@
        (unless interval-seconds
          (return-from handler "Error: 'interval_seconds' is required for schedule_prompt_every."))
        (let ((task-name (or name (format nil "user:prompt-~A" (crichton/rpc:next-id)))))
-         (crichton/skills:schedule-prompt-every task-name interval-seconds prompt :replace t)
-         (crichton/skills:persist-user-tasks)
+         (schedule-prompt-every task-name interval-seconds prompt :replace t)
+         (persist-user-tasks)
          (format nil "Scheduled prompt task '~A' every ~Ds." task-name interval-seconds)))
       ((string-equal action "schedule_prompt_daily")
        (unless prompt
@@ -153,8 +153,8 @@
          (return-from handler "Error: 'hour' is required for schedule_prompt_daily."))
        (let ((task-name (or name (format nil "user:prompt-~A" (crichton/rpc:next-id))))
              (min (or minute 0)))
-         (crichton/skills:schedule-prompt-daily task-name hour min prompt :replace t)
-         (crichton/skills:persist-user-tasks)
+         (schedule-prompt-daily task-name hour min prompt :replace t)
+         (persist-user-tasks)
          (format nil "Scheduled prompt task '~A' daily at ~2,'0D:~2,'0D." task-name hour min)))
       ((string-equal action "schedule_prompt_once")
        (unless prompt
@@ -162,22 +162,22 @@
        (unless delay-seconds
          (return-from handler "Error: 'delay_seconds' is required for schedule_prompt_once."))
        (let ((task-name (or name (format nil "user:prompt-~A" (crichton/rpc:next-id)))))
-         (crichton/skills:schedule-prompt-at task-name (+ (get-universal-time) delay-seconds) prompt :replace t)
-         (crichton/skills:persist-user-tasks)
+         (schedule-prompt-at task-name (+ (get-universal-time) delay-seconds) prompt :replace t)
+         (persist-user-tasks)
          (format nil "Scheduled prompt task '~A' to run once in ~Ds." task-name delay-seconds)))
       ((string-equal action "cancel")
        (unless name
          (return-from handler "Error: 'name' is required for cancel."))
-       (if (crichton/skills:cancel-task name)
+       (if (cancel-task name)
            (progn
-             (crichton/skills:persist-user-tasks)
+             (persist-user-tasks)
              (format nil "Cancelled task '~A'." name))
            (format nil "No task found with name '~A'." name)))
       ((string-equal action "persist")
-       (let ((count (crichton/skills:persist-user-tasks)))
+       (let ((count (persist-user-tasks)))
          (format nil "Persisted ~D user task~:P to encrypted storage." count)))
       ((string-equal action "list_unrestorable")
-       (let ((tasks (crichton/skills:list-unrestorable-tasks)))
+       (let ((tasks (list-unrestorable-tasks)))
          (if tasks
              (with-output-to-string (s)
                (format s "~D task~:P would be lost on restart (action not registered):~%"
@@ -197,8 +197,8 @@
     (:description "Get the current date and time.  Returns the current date and time in both human-readable and Unix timestamp formats.  Useful for understanding when events happen relative to the current moment.")
   ()
   (with-output-to-string (s)
-    (crichton/skills:current-time-report :stream s)
-    (let ((pl (crichton/skills:current-time-plist)))
+    (current-time-report :stream s)
+    (let ((pl (current-time-plist)))
       (format s "Unix timestamp: ~D~%" (getf pl :unix-seconds)))))
 
 ;;; --- Ephemeris tool (solar + lunar) ---
@@ -209,7 +209,7 @@
   (let ((lat (crichton/config:config-section-get :location :latitude 48.43))
         (lon (crichton/config:config-section-get :location :longitude -123.37)))
     (with-output-to-string (s)
-      (crichton/skills:ephemeris-report lat lon :stream s))))
+      (ephemeris-report lat lon :stream s))))
 
 ;;; --- RSS tool ---
 
@@ -261,19 +261,19 @@ Monitors automatically back off on failure (exponential, capped at 7 days) and p
      (if (null url)
          "Error: 'url' is required for fetch"
          (with-output-to-string (s)
-           (crichton/skills:rss-report url :stream s))))
+           (rss-report url :stream s))))
     ((string-equal action "check")
      (if (null url)
          "Error: 'url' is required for check"
          (with-output-to-string (s)
-           (crichton/skills:rss-check-report url :stream s))))
+           (rss-check-report url :stream s))))
     ((string-equal action "monitor_start")
      (if (null url)
          "Error: 'url' is required for monitor_start"
          (let ((task-name (or name (format nil "rss:~A" url)))
                (kw-list (when keywords (coerce keywords 'list)))
                (sf-list (when search-fields (coerce search-fields 'list))))
-           (crichton/skills:rss-monitor-start task-name url interval-seconds
+           (rss-monitor-start task-name url interval-seconds
                                               :keywords kw-list
                                               :match-mode match-mode
                                               :search-fields sf-list)
@@ -283,25 +283,25 @@ Monitors automatically back off on failure (exponential, capped at 7 days) and p
      (if (null file-path)
          "Error: 'file_path' is required for opml_import"
          (handler-case
-             (crichton/skills:opml-import-monitors
+             (opml-import-monitors
               file-path
               :interval-seconds interval-seconds)
            (error (c)
              (format nil "OPML import failed: ~A" c)))))
     ((string-equal action "opml_export")
      (handler-case
-         (crichton/skills:opml-export-monitors
+         (opml-export-monitors
           :file-path file-path
           :title (or name "RSS Feeds"))
        (error (c)
          (format nil "OPML export failed: ~A" c))))
     ((string-equal action "monitor_stop")
      (let ((task-name (or name "?")))
-       (if (crichton/skills:rss-monitor-stop task-name)
+       (if (rss-monitor-stop task-name)
            (format nil "Monitor stopped: ~A" task-name)
            (format nil "Monitor not found: ~A" task-name))))
     ((string-equal action "list_monitors")
-     (let ((configs (crichton/skills:rss-monitor-configs)))
+     (let ((configs (rss-monitor-configs)))
        (if configs
            (with-output-to-string (s)
              (format s "~D active RSS monitor~:P:~%" (length configs))
@@ -333,22 +333,22 @@ Monitors automatically back off on failure (exponential, capped at 7 days) and p
     ((string-equal action "mute_monitor")
      (let ((task-name (or name "?")))
        (handler-case
-           (crichton/skills:rss-monitor-mute task-name)
+           (rss-monitor-mute task-name)
          (error (c) (format nil "Error: ~A" c)))))
     ((string-equal action "unmute_monitor")
      (let ((task-name (or name "?")))
        (handler-case
-           (crichton/skills:rss-monitor-unmute task-name)
+           (rss-monitor-unmute task-name)
          (error (c) (format nil "Error: ~A" c)))))
     ((string-equal action "reset_all_backoff")
      (handler-case
-         (crichton/skills:rss-reset-all-backoff)
+         (rss-reset-all-backoff)
        (error (c) (format nil "Error: ~A" c))))
     ;; --- Feed writing actions ---
     ((string-equal action "publish_item")
      (if (null name)
          "Error: 'name' is required for publish_item"
-         (let ((guid (crichton/skills:rss-feed-publish
+         (let ((guid (rss-feed-publish
                       name
                       :title       (or title "")
                       :description (or description "")
@@ -360,7 +360,7 @@ Monitors automatically back off on failure (exponential, capped at 7 days) and p
      (if (null name)
          "Error: 'name' is required for configure_feed"
          (progn
-           (crichton/skills:rss-feed-configure
+           (rss-feed-configure
             name
             :title       title
             :description description
@@ -370,11 +370,11 @@ Monitors automatically back off on failure (exponential, capped at 7 days) and p
     ((string-equal action "get_feed_xml")
      (if (null name)
          "Error: 'name' is required for get_feed_xml"
-         (crichton/skills:rss-feed-xml name)))
+         (rss-feed-xml name)))
     ((string-equal action "list_feed_items")
      (if (null name)
          "Error: 'name' is required for list_feed_items"
-         (let ((items (crichton/skills:rss-feed-items name)))
+         (let ((items (rss-feed-items name)))
            (if items
                (with-output-to-string (s)
                  (format s "Feed '~A': ~D item~:P~%" name (length items))
@@ -385,7 +385,7 @@ Monitors automatically back off on failure (exponential, capped at 7 days) and p
                    (format s "    ~A~%" (getf item :pub-date))))
                (format nil "Feed '~A' has no items." name)))))
     ((string-equal action "list_feeds")
-     (let ((feeds (crichton/skills:rss-feed-list)))
+     (let ((feeds (rss-feed-list)))
        (if feeds
            (format nil "Published feeds:~%~{  ~A~%~}" feeds)
            "No published feeds configured.")))
@@ -393,13 +393,13 @@ Monitors automatically back off on failure (exponential, capped at 7 days) and p
      (if (null name)
          "Error: 'name' is required for clear_feed"
          (progn
-           (crichton/skills:rss-feed-clear name)
+           (rss-feed-clear name)
            (format nil "Feed '~A' items cleared." name))))
     ((string-equal action "delete_feed")
      (if (null name)
          "Error: 'name' is required for delete_feed"
          (progn
-           (crichton/skills:rss-feed-delete name)
+           (rss-feed-delete name)
            (format nil "Feed '~A' deleted." name))))
     (t (format nil "Unknown RSS action: ~A" action))))
 
@@ -414,13 +414,13 @@ Monitors automatically back off on failure (exponential, capped at 7 days) and p
   (cond
     ((string-equal action "status")
      (with-output-to-string (s)
-       (crichton/skills:battery-report s)))
+       (battery-report s)))
     ((string-equal action "start_monitoring")
-     (if (crichton/skills:start-battery-monitoring)
+     (if (start-battery-monitoring)
          "Battery monitoring started. Will check periodically and alert on low battery."
          "Battery monitoring not available (no batteries detected)."))
     ((string-equal action "stop_monitoring")
-     (if (crichton/skills:stop-battery-monitoring)
+     (if (stop-battery-monitoring)
          "Battery monitoring stopped."
          "Battery monitoring was not running."))
     (t
@@ -443,14 +443,14 @@ Monitors automatically back off on failure (exponential, capped at 7 days) and p
   (cond
     ((string-equal action "summary")
      (with-output-to-string (s)
-       (crichton/skills:usage-report :stream s)))
+       (usage-report :stream s)))
     ((string-equal action "meter")
      (if (null meter)
          "Error: 'meter' parameter required for meter action"
          (with-output-to-string (s)
-           (crichton/skills:meter-report meter :stream s))))
+           (meter-report meter :stream s))))
     ((string-equal action "list")
-     (let ((names (crichton/skills:list-meters)))
+     (let ((names (list-meters)))
        (if names
            (format nil "Active meters: ~{~A~^, ~}" names)
            "No active meters.")))
@@ -458,5 +458,5 @@ Monitors automatically back off on failure (exponential, capped at 7 days) and p
      (if (null meter)
          "Error: 'meter' parameter required for recent action"
          (format nil "~{~S~^~%~}"
-                 (crichton/skills:meter-recent meter count))))
+                 (meter-recent meter count))))
     (t (format nil "Unknown action: ~A" action))))

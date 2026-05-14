@@ -280,7 +280,7 @@ Same snapshot/commit/restore pattern as the streaming handler."
 ;;; --- Rate limiting ---
 
 (defvar *rpc-rate-limiter*
-  (make-instance 'crichton/skills:rate-limiter
+  (make-instance 'rate-limiter
                  :requests-per-window 600
                  :window-seconds 60)
   "Rate limiter for RPC requests (600 requests per 60 seconds).")
@@ -292,7 +292,7 @@ Same snapshot/commit/restore pattern as the streaming handler."
   (let ((id (crichton/rpc:msg-id msg))
         (op (crichton/rpc:msg-op msg)))
     (multiple-value-bind (allowed-p retry-after)
-        (crichton/skills:check-rate-limit *rpc-rate-limiter* "local")
+        (check-rate-limit *rpc-rate-limiter* "local")
       (unless allowed-p
         (return-from rpc-dispatch
           (crichton/rpc:make-error-response
@@ -321,7 +321,7 @@ Same snapshot/commit/restore pattern as the streaming handler."
 
           ("rss-interests-get"
            (crichton/rpc:make-ok-response
-            id (or (crichton/skills:get-interests-profile) "")))
+            id (or (get-interests-profile) "")))
 
           ("rss-interests-set"
            (let ((text (crichton/rpc:msg-get msg "text")))
@@ -329,12 +329,12 @@ Same snapshot/commit/restore pattern as the streaming handler."
                (return-from rpc-dispatch
                  (crichton/rpc:make-error-response
                   id "bad_request" "Missing required field: text")))
-             (crichton/skills:set-interests-profile text)
+             (set-interests-profile text)
              (crichton/rpc:make-ok-response id t)))
 
           ("rss-inbox-query"
            (let* ((feed   (crichton/rpc:msg-get msg "feed_name"))
-                  (items  (crichton/skills:rss-inbox-query :feed-name feed))
+                  (items  (rss-inbox-query :feed-name feed))
                   (result (make-hash-table :test #'equal)))
              (setf (gethash "count" result) (length items)
                    (gethash "items" result)

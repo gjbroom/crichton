@@ -61,5 +61,5 @@
   (register-hoobs-tool)
   (register-git-tool)
   ;; Register pipeline built-in functions
-  (crichton/skills:register-default-pipeline-builtins)
+  (register-default-pipeline-builtins)
   (log:info "Registered ~D agent tools" (hash-table-count *agent-tools*)))

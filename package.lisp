@@ -55,9 +55,313 @@
            #:write-audit-event
            #:redact-channel-output))
 
+(defpackage #:crichton/skills
+  (:use #:cl)
+  (:local-nicknames (#:bt #:bordeaux-threads))
+  (:export ;; skill manifest / signing (used by runner and external tools)
+           #:parse-skill-manifest
+           #:validate-capabilities
+           #:manifest-skill-name
+           #:manifest-skill-version
+           #:manifest-capabilities
+           #:manifest-function-info
+           #:manifest-function-abi
+           #:manifest-function-input-type
+           #:manifest-function-output-type
+           #:manifest-function-description
+           #:manifest-error
+           #:manifest-error-path
+           #:manifest-error-problems
+           #:generate-signing-keypair
+           #:sign-skill-bytes
+           #:verify-skill-signature
+           #:load-trusted-keys
+           #:verify-skill-bundle
+           ;; skill registry (framework, not domain tools)
+           #:skill-entry
+           #:list-skills
+           #:load-skill
+           #:unload-skill
+           #:*max-skill-json-input-bytes*
+           ;; pipeline framework (extension points)
+           #:pipeline-error-step-skill
+           #:register-pipeline-builtin
+           #:get-saved-pipeline
+           ;; ephemeris primitives
+           #:ephemeris-plist
+           #:current-ephemeris
+           #:lunar-phase-for-date
+           #:lunar-phase-description
+           ;; rss low-level (used directly by rss subsystem)
+           #:rss-fetch
+           #:rss-check
+           #:rss-list-monitors
+           #:run-rss-filter
+           ;; rss curation engine
+           #:run-interest-scorer
+           #:rss-morning-briefing
+           #:format-inbox-query-result
+           #:start-rss-curator
+           #:persist-rss-state
+           ;; task persistence internals (serialization layer)
+           #:user-task-p
+           #:save-user-tasks
+           #:load-user-tasks
+           #:export-user-tasks
+           ;; scheduler extension point
+           #:register-schedulable-action
+           ;; token-usage metering (used by llm/protocol.lisp)
+           #:register-pricing
+           #:record-usage
+           ;; log inspector (path/summary only; report fn is domain)
+           #:log-file-path
+           #:log-summary
+           ;; kv-store (public API for skill implementations)
+           #:kv-get
+           #:kv-set
+           #:kv-delete
+           #:kv-exists-p
+           #:kv-list
+           #:kv-clear-skill
+           #:kv-skill-usage
+           #:kv-global-usage
+           #:preload-kv-cache
+           #:flush-all-kv
+           #:clear-kv-cache
+           #:kv-usage-report
+           #:kv-quota-exceeded
+           #:kv-dir-path
+           #:backup-kv-store
+           #:restore-kv-backup
+           #:check-kv-integrity
+           #:repair-corrupt-kv
+           #:kv-health-check
+           ;; amp orchestrator (control plane, not domain report)
+           #:amp-available-p
+           #:amp-enabled-p
+           #:amp-invoke
+           ;; raindrop low-level (primitive operations)
+           #:raindrop-save
+           #:raindrop-find
+           #:raindrop-search
+           #:raindrop-list-collections
+           #:raindrop-list-tags
+           ;; provider availability checks
+           #:books-enabled-p
+           #:books-db-path
+           #:orgmode-enabled-p
+           #:git-enabled-p
+           ;; pushover primitive
+           #:pushover-send
+           ;; github low-level (primitive operations)
+           #:github-list-repos
+           #:github-get-repo
+           #:github-list-issues
+           #:github-list-prs
+           #:github-list-workflow-runs
+           #:github-list-releases
+           #:github-search-code
+           ;; hoobs low-level
+           #:hoobs-accessories
+           #:hoobs-service-status
+           ;; retry / cancellation (shared with llm)
+           #:operation-cancelled
+           #:with-retry)
+  (:intern ;; domain tool symbols — internal to crichton/skills, imported explicitly
+           ;; by crichton/agent and crichton/daemon via (:import-from ...)
+           ;; rate limiting (daemon)
+           #:rate-limiter
+           #:check-rate-limit
+           ;; interests profile (daemon)
+           #:get-interests-profile
+           #:set-interests-profile
+           ;; rss inbox query (daemon)
+           #:rss-inbox-query
+           ;; meters (daemon+agent)
+           #:load-meters
+           #:save-meters
+           #:list-meters
+           #:meter-recent
+           #:meter-report
+           #:usage-report
+           ;; scheduler control (daemon+agent)
+           #:start-scheduler
+           #:stop-scheduler
+           #:schedule-at
+           #:schedule-every
+           #:schedule-daily
+           #:schedule-prompt-at
+           #:schedule-prompt-every
+           #:schedule-prompt-daily
+           #:cancel-task
+           #:list-tasks
+           #:scheduler-status
+           #:get-schedulable-action
+           #:list-schedulable-actions
+           ;; task persistence (daemon+agent)
+           #:persist-user-tasks
+           #:restore-user-tasks
+           #:list-unrestorable-tasks
+           ;; restore / startup hooks (daemon)
+           #:restore-saved-pipelines
+           #:restore-rss-monitors
+           #:restore-rss-curator
+           #:restore-system-monitoring
+           #:restore-battery-monitoring
+           ;; monitoring control (daemon+agent)
+           #:weather-report
+           #:system-report
+           #:system-monitor-config
+           #:start-system-monitoring
+           #:stop-system-monitoring
+           #:battery-report
+           #:start-battery-monitoring
+           #:stop-battery-monitoring
+           ;; time / ephemeris (agent)
+           #:current-time-plist
+           #:current-time-report
+           #:ephemeris-report
+           ;; rss monitors (agent)
+           #:rss-report
+           #:rss-check-report
+           #:rss-monitor-start
+           #:rss-monitor-stop
+           #:rss-monitor-mute
+           #:rss-monitor-unmute
+           #:rss-reset-all-backoff
+           #:rss-monitor-configs
+           #:opml-import-monitors
+           #:opml-export-monitors
+           ;; rss feeds (agent)
+           #:rss-feed-configure
+           #:rss-feed-publish
+           #:rss-feed-items
+           #:rss-feed-xml
+           #:rss-feed-clear
+           #:rss-feed-delete
+           #:rss-feed-list
+           ;; log inspector (agent)
+           #:read-log-tail
+           #:search-log
+           #:log-report
+           ;; amp domain tools (agent)
+           #:amp-status
+           #:amp-code-task
+           #:amp-test-task
+           #:amp-report
+           ;; raindrop domain tools (agent)
+           #:format-raindrop
+           #:format-raindrop-list
+           #:raindrop-get-one
+           #:raindrop-update
+           #:raindrop-remove
+           #:raindrop-list
+           #:raindrop-create-collection
+           #:raindrop-save-report
+           #:raindrop-find-report
+           #:raindrop-collections-report
+           #:raindrop-tags-report
+           ;; books domain tools (agent)
+           #:books-search
+           #:books-by-tag
+           #:books-by-tags
+           #:books-by-author
+           #:books-by-collection
+           #:books-by-series
+           #:books-get
+           #:books-list-tags
+           #:books-list-collections
+           #:books-list-series
+           #:books-status
+           ;; orgmode domain tools (agent)
+           #:orgmode-status
+           #:orgmode-read
+           #:orgmode-read-file
+           #:orgmode-search
+           #:orgmode-list-tags
+           #:orgmode-backlinks
+           #:orgmode-create-note
+           #:orgmode-append
+           #:orgmode-list-files
+           #:orgmode-list-todos
+           #:orgmode-set-todo
+           #:orgmode-set-filetags
+           ;; pushover domain tool (agent)
+           #:pushover-report
+           ;; github domain tools (agent)
+           #:github-create-issue
+           #:github-report
+           ;; hoobs domain tools (agent)
+           #:hoobs-get-accessory
+           #:hoobs-set-accessory
+           #:hoobs-rooms
+           #:hoobs-report
+           ;; git domain tools (agent)
+           #:git-config-status
+           #:git-status
+           #:git-log
+           #:git-diff
+           #:git-branches
+           #:git-worktrees
+           #:git-read-file
+           #:git-show
+           #:git-write-file
+           #:git-stage
+           #:git-unstage
+           #:git-commit
+           #:git-create-branch
+           #:git-checkout
+           ;; retry / timeout (agent)
+           #:with-timeout
+           ;; skills / pipeline (agent+daemon)
+           #:discover-skills
+           #:skill-info
+           #:invoke-skill
+           #:skill-report
+           #:execute-pipeline
+           #:pipeline-error
+           #:pipeline-error-step-id
+           #:register-default-pipeline-builtins
+           #:save-pipeline
+           #:delete-pipeline
+           #:list-saved-pipelines))
+
 (defpackage #:crichton/daemon
   (:use #:cl)
   (:local-nicknames (#:bt #:bordeaux-threads))
+  (:import-from #:crichton/skills
+                ;; rate limiting
+                #:rate-limiter
+                #:check-rate-limit
+                ;; kv / storage
+                #:preload-kv-cache
+                #:flush-all-kv
+                ;; meters
+                #:load-meters
+                #:save-meters
+                ;; interests profile
+                #:get-interests-profile
+                #:set-interests-profile
+                ;; scheduler
+                #:start-scheduler
+                #:stop-scheduler
+                #:schedule-every
+                ;; task persistence
+                #:persist-user-tasks
+                #:restore-user-tasks
+                ;; restore / startup hooks
+                #:restore-saved-pipelines
+                #:restore-rss-monitors
+                #:restore-rss-curator
+                #:restore-system-monitoring
+                #:restore-battery-monitoring
+                ;; monitoring control
+                #:start-battery-monitoring
+                #:stop-battery-monitoring
+                #:stop-system-monitoring
+                ;; discovery and rss
+                #:discover-skills
+                #:rss-inbox-query)
   (:export #:start-daemon
            #:stop-daemon
            #:daemon-status
@@ -113,259 +417,6 @@
            #:make-functype
            #:*test-host-log-wat*))
 
-(defpackage #:crichton/skills
-  (:use #:cl)
-  (:local-nicknames (#:bt #:bordeaux-threads))
-  (:export #:parse-skill-manifest
-           #:validate-capabilities
-           #:manifest-skill-name
-           #:manifest-skill-version
-           #:manifest-capabilities
-           #:manifest-function-info
-           #:manifest-function-abi
-           #:manifest-function-input-type
-           #:manifest-function-output-type
-           #:manifest-function-description
-           #:manifest-error
-           #:manifest-error-path
-           #:manifest-error-problems
-           #:generate-signing-keypair
-           #:sign-skill-bytes
-           #:verify-skill-signature
-           #:load-trusted-keys
-           #:verify-skill-bundle
-           ;; skill registry
-           #:skill-entry
-           #:discover-skills
-           #:list-skills
-           #:skill-info
-           #:load-skill
-           #:invoke-skill
-           #:unload-skill
-           #:*max-skill-json-input-bytes*
-           #:skill-report
-           ;; pipeline executor
-           #:execute-pipeline
-           #:pipeline-error
-           #:pipeline-error-step-id
-           #:pipeline-error-step-skill
-           #:register-pipeline-builtin
-           #:register-default-pipeline-builtins
-           ;; saved pipelines
-           #:save-pipeline
-           #:delete-pipeline
-           #:list-saved-pipelines
-           #:get-saved-pipeline
-           #:restore-saved-pipelines
-           #:weather-report
-           #:system-report
-           #:system-monitor-config
-           #:start-system-monitoring
-           #:stop-system-monitoring
-           #:restore-system-monitoring
-           ;; scheduler
-           #:start-scheduler
-           #:stop-scheduler
-           #:schedule-at
-           #:schedule-every
-           #:schedule-daily
-           #:schedule-prompt-at
-           #:schedule-prompt-every
-           #:schedule-prompt-daily
-           #:cancel-task
-           #:list-tasks
-           #:scheduler-status
-           #:register-schedulable-action
-           #:get-schedulable-action
-           #:list-schedulable-actions
-           ;; task persistence
-           #:user-task-p
-           #:persist-user-tasks
-           #:restore-user-tasks
-           #:save-user-tasks
-           #:load-user-tasks
-           #:list-unrestorable-tasks
-           #:export-user-tasks
-           ;; current time
-           #:current-time-plist
-           #:current-time-report
-           ;; ephemeris (sunrise/sunset/solar data + lunar phases)
-           #:ephemeris-plist
-           #:current-ephemeris
-           #:ephemeris-report
-           #:lunar-phase-for-date
-           #:lunar-phase-description
-           ;; rss
-           #:rss-fetch
-           #:rss-check
-           #:rss-report
-           #:rss-check-report
-           #:rss-monitor-start
-           #:rss-monitor-stop
-           #:rss-monitor-mute
-           #:rss-monitor-unmute
-           #:rss-reset-all-backoff
-           #:rss-monitor-configs
-           #:rss-list-monitors
-           #:opml-import-monitors
-           #:opml-export-monitors
-           #:restore-rss-monitors
-           #:run-rss-filter
-           ;; rss curation (scorer, briefing, query)
-           #:get-interests-profile
-           #:set-interests-profile
-           #:run-interest-scorer
-           #:rss-morning-briefing
-           #:rss-inbox-query
-           #:format-inbox-query-result
-           #:start-rss-curator
-           #:restore-rss-curator
-           #:persist-rss-state
-           ;; rss feed writing/generation
-           #:rss-feed-configure
-           #:rss-feed-publish
-           #:rss-feed-items
-           #:rss-feed-xml
-           #:rss-feed-clear
-           #:rss-feed-delete
-           #:rss-feed-list
-           ;; token-usage / metered resources
-           #:register-pricing
-           #:record-usage
-           #:list-meters
-           #:meter-recent
-           #:meter-report
-           #:usage-report
-           #:save-meters
-           #:load-meters
-           ;; battery monitoring
-           #:battery-report
-           #:start-battery-monitoring
-           #:stop-battery-monitoring
-           #:restore-battery-monitoring
-           ;; log inspector
-           #:log-file-path
-           #:read-log-tail
-           #:search-log
-           #:log-summary
-           #:log-report
-           ;; kv-store
-           #:kv-get
-           #:kv-set
-           #:kv-delete
-           #:kv-exists-p
-           #:kv-list
-           #:kv-clear-skill
-           #:kv-skill-usage
-           #:kv-global-usage
-           #:preload-kv-cache
-           #:flush-all-kv
-           #:clear-kv-cache
-           #:kv-usage-report
-           #:kv-quota-exceeded
-           ;; kv-store operational tools
-           #:kv-dir-path
-           #:backup-kv-store
-           #:restore-kv-backup
-           #:check-kv-integrity
-           #:repair-corrupt-kv
-           #:kv-health-check
-           ;; amp orchestrator
-           #:amp-available-p
-           #:amp-enabled-p
-           #:amp-status
-           #:amp-invoke
-           #:amp-code-task
-           #:amp-test-task
-           #:amp-report
-           ;; raindrop.io bookmarks
-           #:raindrop-save
-           #:raindrop-find
-           #:format-raindrop
-           #:format-raindrop-list
-           #:raindrop-get-one
-           #:raindrop-update
-           #:raindrop-remove
-           #:raindrop-list
-           #:raindrop-search
-           #:raindrop-list-collections
-           #:raindrop-list-tags
-           #:raindrop-create-collection
-           #:raindrop-save-report
-           #:raindrop-find-report
-           #:raindrop-collections-report
-           #:raindrop-tags-report
-           ;; books
-           #:books-enabled-p
-           #:books-db-path
-           #:books-search
-           #:books-by-tag
-           #:books-by-tags
-           #:books-by-author
-           #:books-by-collection
-           #:books-by-series
-           #:books-get
-           #:books-list-tags
-           #:books-list-collections
-           #:books-list-series
-           #:books-status
-           ;; orgmode
-           #:orgmode-enabled-p
-           #:orgmode-status
-           #:orgmode-read
-           #:orgmode-read-file
-           #:orgmode-search
-           #:orgmode-list-tags
-           #:orgmode-backlinks
-           #:orgmode-create-note
-           #:orgmode-append
-           #:orgmode-list-files
-           #:orgmode-list-todos
-           #:orgmode-set-todo
-           #:orgmode-set-filetags
-           ;; pushover
-           #:pushover-send
-           #:pushover-report
-           ;; github
-           #:github-list-repos
-           #:github-get-repo
-           #:github-list-issues
-           #:github-create-issue
-           #:github-list-prs
-           #:github-list-workflow-runs
-           #:github-list-releases
-           #:github-search-code
-           #:github-report
-           ;; hoobs
-           #:hoobs-accessories
-           #:hoobs-get-accessory
-           #:hoobs-set-accessory
-           #:hoobs-rooms
-           #:hoobs-service-status
-           #:hoobs-report
-           ;; git
-           #:git-enabled-p
-           #:git-config-status
-           #:git-status
-           #:git-log
-           #:git-diff
-           #:git-branches
-           #:git-worktrees
-           #:git-read-file
-           #:git-show
-           #:git-write-file
-           #:git-stage
-           #:git-unstage
-           #:git-commit
-           #:git-create-branch
-           #:git-checkout
-           ;; retry infrastructure
-           #:operation-cancelled
-           #:with-retry
-           #:with-timeout
-           #:rate-limiter
-           #:check-rate-limit))
-
 (defpackage #:crichton/llm
   (:use #:cl)
   (:local-nicknames (#:bt #:bordeaux-threads))
@@ -412,6 +463,146 @@
 
 (defpackage #:crichton/agent
   (:use #:cl)
+  (:import-from #:crichton/skills
+                ;; skill registry / pipeline
+                #:discover-skills
+                #:skill-info
+                #:invoke-skill
+                #:skill-report
+                #:execute-pipeline
+                #:pipeline-error
+                #:pipeline-error-step-id
+                #:register-default-pipeline-builtins
+                #:save-pipeline
+                #:delete-pipeline
+                #:list-saved-pipelines
+                ;; scheduler
+                #:start-scheduler
+                #:schedule-at
+                #:schedule-every
+                #:schedule-daily
+                #:schedule-prompt-at
+                #:schedule-prompt-every
+                #:schedule-prompt-daily
+                #:cancel-task
+                #:list-tasks
+                #:scheduler-status
+                #:get-schedulable-action
+                #:list-schedulable-actions
+                ;; task persistence
+                #:persist-user-tasks
+                #:list-unrestorable-tasks
+                ;; weather / system
+                #:weather-report
+                #:system-report
+                #:system-monitor-config
+                #:start-system-monitoring
+                #:stop-system-monitoring
+                ;; battery
+                #:battery-report
+                #:start-battery-monitoring
+                #:stop-battery-monitoring
+                ;; time / ephemeris
+                #:current-time-plist
+                #:current-time-report
+                #:ephemeris-report
+                ;; rss monitors
+                #:rss-report
+                #:rss-check-report
+                #:rss-monitor-start
+                #:rss-monitor-stop
+                #:rss-monitor-mute
+                #:rss-monitor-unmute
+                #:rss-reset-all-backoff
+                #:rss-monitor-configs
+                #:opml-import-monitors
+                #:opml-export-monitors
+                ;; rss feeds
+                #:rss-feed-configure
+                #:rss-feed-publish
+                #:rss-feed-items
+                #:rss-feed-xml
+                #:rss-feed-clear
+                #:rss-feed-delete
+                #:rss-feed-list
+                ;; meters / usage
+                #:list-meters
+                #:meter-recent
+                #:meter-report
+                #:usage-report
+                ;; log inspector
+                #:read-log-tail
+                #:search-log
+                #:log-report
+                ;; amp
+                #:amp-status
+                #:amp-code-task
+                #:amp-test-task
+                #:amp-report
+                ;; raindrop
+                #:format-raindrop
+                #:format-raindrop-list
+                #:raindrop-get-one
+                #:raindrop-update
+                #:raindrop-remove
+                #:raindrop-list
+                #:raindrop-create-collection
+                #:raindrop-save-report
+                #:raindrop-find-report
+                #:raindrop-collections-report
+                #:raindrop-tags-report
+                ;; books
+                #:books-search
+                #:books-by-tag
+                #:books-by-tags
+                #:books-by-author
+                #:books-by-collection
+                #:books-by-series
+                #:books-get
+                #:books-list-tags
+                #:books-list-collections
+                #:books-list-series
+                #:books-status
+                ;; orgmode
+                #:orgmode-status
+                #:orgmode-read
+                #:orgmode-read-file
+                #:orgmode-search
+                #:orgmode-list-tags
+                #:orgmode-backlinks
+                #:orgmode-create-note
+                #:orgmode-append
+                #:orgmode-list-files
+                #:orgmode-list-todos
+                #:orgmode-set-todo
+                #:orgmode-set-filetags
+                ;; pushover
+                #:pushover-report
+                ;; github
+                #:github-create-issue
+                #:github-report
+                ;; hoobs
+                #:hoobs-get-accessory
+                #:hoobs-set-accessory
+                #:hoobs-rooms
+                #:hoobs-report
+                ;; git
+                #:git-config-status
+                #:git-status
+                #:git-log
+                #:git-diff
+                #:git-branches
+                #:git-worktrees
+                #:git-read-file
+                #:git-show
+                #:git-write-file
+                #:git-stage
+                #:git-unstage
+                #:git-commit
+                #:git-create-branch
+                #:git-checkout
+                ;; retry / timeout
+                #:with-timeout)
   (:export #:run-agent
            #:run-agent/stream
            #:ask

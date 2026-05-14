@@ -148,7 +148,7 @@ Override with [llm] tool-timeout = N in config.toml.")
     (log:info "~A iteration ~D/~D" label (1+ i) max-iterations)
     (let* ((api-timeout (or (crichton/config:config-section-get :llm :api-timeout)
                             *llm-api-timeout*))
-           (response    (crichton/skills:with-timeout
+           (response    (with-timeout
                             (api-timeout :error-message "LLM API call timed out")
                           (funcall send-fn msgs)))
            (content     (getf response :content))
@@ -171,7 +171,7 @@ Override with [llm] tool-timeout = N in config.toml.")
       (let ((tool-timeout (or (crichton/config:config-section-get :llm :tool-timeout)
                                *tool-execution-timeout*)))
         (setf msgs (nconc msgs (list (list :role :user
-                                           :content (crichton/skills:with-timeout
+                                           :content (with-timeout
                                                         (tool-timeout
                                                          :error-message "Tool execution timed out")
                                                       (execute-tool-calls content)))))))))))

@@ -23,7 +23,7 @@
            "Target device name.  Omit to send to all devices.")
    (sound "string"
           "Notification sound name (e.g. 'pushover', 'magic', 'alien')."))
-  (crichton/skills:pushover-report message
+  (pushover-report message
                                    :title title
                                    :priority priority
                                    :url url

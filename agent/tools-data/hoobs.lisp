@@ -19,9 +19,9 @@
   (cond
     ((string-equal action "status")
      (with-output-to-string (s)
-       (crichton/skills:hoobs-report :stream s)))
+       (hoobs-report :stream s)))
     ((string-equal action "rooms")
-     (let ((rooms (crichton/skills:hoobs-rooms)))
+     (let ((rooms (hoobs-rooms)))
        (if rooms
            (format nil "~{~A (id: ~A)~^~%~}"
                    (loop for r in rooms
@@ -30,11 +30,11 @@
            "No rooms found.")))
     ((string-equal action "accessories")
      (with-output-to-string (s)
-       (crichton/skills:hoobs-report :stream s)))
+       (hoobs-report :stream s)))
     ((string-equal action "get_accessory")
      (unless accessory-id
        (return-from handler "Error: 'accessory_id' is required for get_accessory."))
-     (let ((data (crichton/skills:hoobs-get-accessory accessory-id)))
+     (let ((data (hoobs-get-accessory accessory-id)))
        (if data
            (format nil "~S" data)
            (format nil "Accessory '~A' not found." accessory-id))))
@@ -45,7 +45,7 @@
        (return-from handler "Error: 'characteristics' is required for set_accessory."))
      (handler-case
          (progn
-           (crichton/skills:hoobs-set-accessory accessory-id characteristics)
+           (hoobs-set-accessory accessory-id characteristics)
            (format nil "Accessory '~A' updated." accessory-id))
        (error (c)
          (format nil "Error: ~A" c))))

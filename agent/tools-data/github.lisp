@@ -42,13 +42,13 @@
             (label-list (when labels
                           (mapcar (lambda (s) (string-trim '(#\Space) s))
                                   (cl-ppcre:split "," labels))))
-            (result (crichton/skills:github-create-issue
+            (result (github-create-issue
                      owner repo title :body body :labels label-list)))
        (format nil "Created issue #~D: ~A~%  ~A"
                (getf result :number) (getf result :title) (getf result :url))))
     (t
      (with-output-to-string (s)
-       (crichton/skills:github-report
+       (github-report
         action owner-repo
         :state state
         :per-page per-page

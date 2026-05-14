@@ -37,18 +37,18 @@
   (cond
     ((string-equal action "summary")
      (with-output-to-string (s)
-       (crichton/skills:log-report :stream s :count count)))
+       (log-report :stream s :count count)))
     ((string-equal action "recent")
      (format-log-entries
-      (crichton/skills:read-log-tail :count count)))
+      (read-log-tail :count count)))
      ((string-equal action "errors")
       (format-log-entries
-      (crichton/skills:search-log :level "ERROR" :count count)))
+      (search-log :level "ERROR" :count count)))
      ((string-equal action "search")
       (if (and (null pattern) (null level))
           "Error: 'pattern' and/or 'level' required for search action."
           (format-log-entries
-          (crichton/skills:search-log :pattern pattern
+          (search-log :pattern pattern
                                       :level level
                                       :count count))))
     (t
@@ -59,7 +59,7 @@
 (define-tool amp-check
     (:description "Check whether the Amp CLI coding agent is available and enabled on this system.  Returns availability and configuration status.  Use this before attempting amp_code or amp_test tasks.")
   ()
-  (let ((status (crichton/skills:amp-status)))
+  (let ((status (amp-status)))
     (cond
       ((not (getf status :enabled))
        "Amp orchestration is DISABLED in config. Set [amp] enable = true in config.toml.")
@@ -89,14 +89,14 @@
                      (mapcar (lambda (f)
                                (string-trim '(#\Space) f))
                              (cl-ppcre:split "," files)))))
-    (let ((result (crichton/skills:amp-code-task
+    (let ((result (amp-code-task
                    description
                    :repo-path repo-path
                    :files file-list
                    :context context
                    :timeout-seconds timeout-seconds)))
       (with-output-to-string (s)
-        (crichton/skills:amp-report result :stream s)))))
+        (amp-report result :stream s)))))
 
 (define-tool amp-test
     (:description "Run a test suite and optionally use the Amp CLI agent to fix failures.  Executes the test runner directly (no shell).  If tests fail and fix_failures is true, Amp is invoked with the failure context to attempt repairs, iterating up to max_iterations.  Requires Amp to be enabled in config for fix mode.")
@@ -118,7 +118,7 @@
   (let ((args-list (when test-args
                      (mapcar (lambda (a) (string-trim '(#\Space) a))
                              (cl-ppcre:split "," test-args)))))
-    (let ((result (crichton/skills:amp-test-task
+    (let ((result (amp-test-task
                    test-runner
                    :test-args args-list
                    :repo-path repo-path
@@ -126,7 +126,7 @@
                    :max-iterations max-iterations
                    :timeout-seconds timeout-seconds)))
       (with-output-to-string (s)
-        (crichton/skills:amp-report result :stream s)))))
+        (amp-report result :stream s)))))
 
 ;;; --- Amp JSON tools ---
 
@@ -158,7 +158,7 @@
     (:description "Check Amp CLI status and return structured JSON. Includes enabled state, binary availability, binary path, and allowed repo roots."
      :tool-name "amp_check_json")
   ()
-  (json-string (crichton/skills:amp-status)))
+  (json-string (amp-status)))
 
 (define-tool amp-code-json
     (:description "Delegate a coding task to the Amp CLI agent and return structured JSON result. Includes success, output, error, exit code, elapsed time, changed files, and truncation flags."
@@ -179,7 +179,7 @@
   (let ((file-list (when files
                      (mapcar (lambda (f) (string-trim '(#\Space) f))
                              (cl-ppcre:split "," files)))))
-    (json-string (crichton/skills:amp-code-task
+    (json-string (amp-code-task
                    description
                    :repo-path repo-path
                    :files file-list
@@ -207,7 +207,7 @@
   (let ((args-list (when test-args
                      (mapcar (lambda (a) (string-trim '(#\Space) a))
                              (cl-ppcre:split "," test-args)))))
-    (json-string (crichton/skills:amp-test-task
+    (json-string (amp-test-task
                    test-runner
                    :test-args args-list
                    :repo-path repo-path

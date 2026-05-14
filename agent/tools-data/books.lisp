@@ -37,15 +37,15 @@
   (handler-case
       (cond
         ((string-equal action "status")
-         (format nil "~S" (crichton/skills:books-status)))
+         (format nil "~S" (books-status)))
         ((string-equal action "search")
          (unless query
            (return-from handler "Error: 'query' is required for search."))
-         (crichton/skills:books-search query :limit (or limit 20)))
+         (books-search query :limit (or limit 20)))
         ((string-equal action "by_tag")
          (unless tag
            (return-from handler "Error: 'tag' is required for by_tag."))
-         (crichton/skills:books-by-tag tag :limit (or limit 50)))
+         (books-by-tag tag :limit (or limit 50)))
         ((string-equal action "by_tags")
          (unless tags
            (return-from handler "Error: 'tags' is required for by_tags."))
@@ -57,29 +57,29 @@
                (mode-kw  (if (string-equal tags-mode "or") :or :and)))
            (if (null tag-list)
                "Error: 'tags' must contain at least one non-empty tag."
-               (crichton/skills:books-by-tags tag-list :mode mode-kw :limit (or limit 50)))))
+               (books-by-tags tag-list :mode mode-kw :limit (or limit 50)))))
         ((string-equal action "by_author")
          (unless author
            (return-from handler "Error: 'author' is required for by_author."))
-         (crichton/skills:books-by-author author :limit (or limit 50)))
+         (books-by-author author :limit (or limit 50)))
         ((string-equal action "by_collection")
          (unless collection
            (return-from handler "Error: 'collection' is required for by_collection."))
-         (crichton/skills:books-by-collection collection :limit (or limit 100)))
+         (books-by-collection collection :limit (or limit 100)))
         ((string-equal action "by_series")
          (unless series
            (return-from handler "Error: 'series' is required for by_series."))
-         (crichton/skills:books-by-series series :limit (or limit 50)))
+         (books-by-series series :limit (or limit 50)))
         ((string-equal action "get")
          (unless title
            (return-from handler "Error: 'title' is required for get."))
-         (crichton/skills:books-get title))
+         (books-get title))
         ((string-equal action "tags")
-         (crichton/skills:books-list-tags :limit (or limit 200)))
+         (books-list-tags :limit (or limit 200)))
         ((string-equal action "collections")
-         (crichton/skills:books-list-collections))
+         (books-list-collections))
         ((string-equal action "series")
-         (crichton/skills:books-list-series :limit (or limit 200)))
+         (books-list-series :limit (or limit 200)))
         (t (format nil "Unknown books action: ~A" action)))
     (error (c)
       (format nil "Books error: ~A" c))))

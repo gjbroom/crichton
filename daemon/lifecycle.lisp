@@ -47,38 +47,38 @@
   (guarded "KV cache preload at startup failed"
     (ensure-directories-exist
      (merge-pathnames "kv/" crichton/config:*agent-home*))
-    (crichton/skills:preload-kv-cache))
+    (preload-kv-cache))
   (guarded "Storage preload at startup failed"
     (ensure-directories-exist
      (merge-pathnames "data/" crichton/config:*agent-home*))
     (crichton/storage:preload-storage))
   (guarded "Meter restoration at startup failed"
-    (crichton/skills:load-meters)))
+    (load-meters)))
 
 (defun init-skills ()
   "Initialize skill subsystems: scheduler, tasks, discovery, battery monitoring."
-  (crichton/skills:start-scheduler)
+  (start-scheduler)
   (guarded "Periodic storage sync startup failed"
-    (crichton/skills:schedule-every "storage-sync" 60
+    (schedule-every "storage-sync" 60
       (lambda () (crichton/storage:flush-all-storage))
       :replace t))
   (guarded "Task restoration at startup failed"
-    (crichton/skills:restore-user-tasks))
+    (restore-user-tasks))
   (guarded "RSS monitor restoration at startup failed"
-    (crichton/skills:restore-rss-monitors))
+    (restore-rss-monitors))
   (guarded "RSS curator startup failed"
-    (crichton/skills:restore-rss-curator))
+    (restore-rss-curator))
   (guarded "Saved pipeline restoration at startup failed"
-    (crichton/skills:restore-saved-pipelines))
+    (restore-saved-pipelines))
   (guarded "Skill discovery at startup failed"
-    (crichton/skills:discover-skills))
+    (discover-skills))
   (guarded "Battery monitoring restoration failed"
-    (crichton/skills:restore-battery-monitoring))
+    (restore-battery-monitoring))
   (guarded "Battery monitoring startup failed"
     (let ((interval (or (crichton/config:config-section-get :battery :interval) 300)))
-      (crichton/skills:start-battery-monitoring :interval interval)))
+      (start-battery-monitoring :interval interval)))
   (guarded "System monitoring restoration failed"
-    (crichton/skills:restore-system-monitoring)))
+    (restore-system-monitoring)))
 
 (defun init-network ()
   "Initialize network subsystems: RPC server, external channels."
@@ -130,11 +130,11 @@
 (defun persist-all-storage ()
   "Persist all the memory data structures back to permanent storage."
   (guarded "KV cache flush at shutdown failed"
-    (crichton/skills:flush-all-kv))
+    (flush-all-kv))
   (guarded "Task persistence at shutdown failed"
-    (crichton/skills:persist-user-tasks))
+    (persist-user-tasks))
   (guarded "Meter persistence at shutdown failed"
-    (crichton/skills:save-meters))
+    (save-meters))
   (guarded "Storage flush at shutdown failed"
     (crichton/storage:flush-all-storage)))
 
@@ -148,11 +148,11 @@
   (guarded "RPC server shutdown error"
     (stop-rpc-server))
   (guarded "Battery monitoring shutdown error"
-    (crichton/skills:stop-battery-monitoring))
+    (stop-battery-monitoring))
   (guarded "System monitoring shutdown error"
-    (crichton/skills:stop-system-monitoring))
+    (stop-system-monitoring))
   (persist-all-storage)
-  (crichton/skills:stop-scheduler)
+  (stop-scheduler)
   (setf *running* nil)
   (bt:with-lock-held (*shutdown-lock*)
     (bt:condition-notify *shutdown-cv*))
