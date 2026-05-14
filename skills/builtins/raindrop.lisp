@@ -19,7 +19,8 @@
 (defvar *raindrop-credential-name* "raindrop-api"
   "Credential store name for the Raindrop.io API token.")
 
-(defvar *raindrop-user-agent* "Crichton/0.3"
+(defvar *raindrop-user-agent*
+  (format nil "Crichton/~a" crichton/config:*crichton-version*)
   "User-Agent header sent with Raindrop.io API requests.")
 
 ;;; --- Authentication ---
