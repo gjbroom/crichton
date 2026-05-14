@@ -158,28 +158,11 @@
            #:get-saved-pipeline
            #:restore-saved-pipelines
            #:weather-report
-           #:weather-conditions
-           #:system-loadavg
-           #:system-memory
-           #:system-thermal-zones
-           #:system-disk-usage
-           #:system-snapshot
            #:system-report
            #:system-monitor-config
            #:start-system-monitoring
            #:stop-system-monitoring
            #:restore-system-monitoring
-           ;; timing
-           #:with-timing
-           #:make-stopwatch
-           #:stopwatch-record
-           #:stopwatch-reset
-           #:stopwatch-snapshot
-           #:with-stopwatch
-           #:get-stopwatch
-           #:list-stopwatches
-           #:clear-stopwatches
-           #:format-duration-us
            ;; scheduler
            #:start-scheduler
            #:stop-scheduler
@@ -228,16 +211,6 @@
            #:opml-export-monitors
            #:restore-rss-monitors
            #:run-rss-filter
-           ;; rss article inbox
-           #:inbox-insert-articles
-           #:inbox-get-unscored
-           #:inbox-get-unsaved
-           #:inbox-by-feed
-           #:inbox-saved-since
-           #:inbox-save-scores
-           #:inbox-mark-saved
-           #:inbox-mark-reviewed
-           #:inbox-stats
            ;; rss curation (scorer, briefing, query)
            #:get-interests-profile
            #:set-interests-profile
@@ -247,13 +220,7 @@
            #:format-inbox-query-result
            #:start-rss-curator
            #:restore-rss-curator
-           #:clear-seen
            #:persist-rss-state
-           #:load-rss-state
-           #:clear-all-rss-state
-           #:rss-state-stats
-           #:enable-rss-persistence
-           #:disable-rss-persistence
            ;; rss feed writing/generation
            #:rss-feed-configure
            #:rss-feed-publish
@@ -265,29 +232,14 @@
            ;; token-usage / metered resources
            #:register-pricing
            #:record-usage
-           #:ensure-meter
            #:list-meters
-           #:reset-meter
-           #:reset-all-meters
-           #:meter-snapshot
-           #:all-meters-snapshot
            #:meter-recent
-           #:aggregate-snapshot
            #:meter-report
            #:usage-report
            #:save-meters
            #:load-meters
-           #:persist-meter
-           #:enable-meter-persistence
-           #:disable-meter-persistence
            ;; battery monitoring
-           #:has-battery-p
-           #:list-batteries
-           #:battery-snapshot
-           #:all-batteries-snapshot
-           #:battery-status-plist
            #:battery-report
-           #:battery-check-thresholds
            #:start-battery-monitoring
            #:stop-battery-monitoring
            #:restore-battery-monitoring
@@ -411,18 +363,8 @@
            #:operation-cancelled
            #:with-retry
            #:with-timeout
-           #:http-get-with-retry
-           #:http-post-with-retry
-           #:http-put-with-retry
-           #:http-delete-with-retry
-           #:get-retry-config
-           #:transient-error-p
            #:rate-limiter
-           #:check-rate-limit
-           #:cleanup-rate-limiter
-           #:*default-max-retries*
-           #:*default-backoff-base*
-           #:*default-max-backoff*))
+           #:check-rate-limit))
 
 (defpackage #:crichton/llm
   (:use #:cl)
