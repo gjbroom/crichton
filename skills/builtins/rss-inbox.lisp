@@ -153,18 +153,29 @@
 
 ;;; --- Read operations ---
 
+(defparameter *inbox-scoring-excluded-feeds*
+  '("raindrop-bookmarks")
+  "Feed names excluded from LLM interest scoring.
+   Items from these feeds are stored in the inbox but never scored or saved to
+   Raindrop — e.g. the user's own Raindrop bookmarks feed, which is redundant.")
+
 (defun inbox-get-unscored (&optional (limit 20))
   "Return up to LIMIT unscored articles (oldest first) for LLM scoring.
+   Feeds in *inbox-scoring-excluded-feeds* are skipped.
    Returns plists with :guid :feed-name :title :description :link :pub-date"
   (with-inbox-db (db)
-    (mapcar #'inbox-score-row->plist
-            (sqlite:execute-to-list db
-              "SELECT guid, feed_name, title, description, link, pub_date
-               FROM articles
-               WHERE interest_score IS NULL
-               ORDER BY first_seen ASC
-               LIMIT ?"
-              limit))))
+    (let ((placeholders (format nil "~{?~^,~}" (make-list (length *inbox-scoring-excluded-feeds*)))))
+      (mapcar #'inbox-score-row->plist
+              (apply #'sqlite:execute-to-list db
+                     (format nil
+                             "SELECT guid, feed_name, title, description, link, pub_date
+                              FROM articles
+                              WHERE interest_score IS NULL
+                                AND feed_name NOT IN (~A)
+                              ORDER BY first_seen ASC
+                              LIMIT ?"
+                             placeholders)
+                     (append *inbox-scoring-excluded-feeds* (list limit)))))))
 
 (defun inbox-get-unsaved (&optional (threshold 0.7))
   "Return articles scored at or above THRESHOLD that have not been saved to Raindrop yet.
