@@ -348,6 +348,7 @@
            #:books-db-path
            #:books-search
            #:books-by-tag
+           #:books-by-tags
            #:books-by-author
            #:books-by-collection
            #:books-by-series

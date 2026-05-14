@@ -133,6 +133,46 @@ Returns a formatted result string."
                   (mapcar #'book-summary-line rows))
           (format nil "No books tagged ~S." tag)))))
 
+(defun books-by-tags (tags &key (mode :and) (limit 50))
+  "List books matching all (MODE :AND) or any (MODE :OR) of TAGS (a list of strings)."
+  (when (null tags)
+    (return-from books-by-tags "Error: at least one tag is required."))
+  (with-books-db (db)
+    (let* ((n (length tags))
+           (ph (format nil "~{?~^,~}" (make-list n :initial-element nil)))
+           (sql (ecase mode
+                  (:and
+                   (format nil
+                     "SELECT b.id,b.title,b.primary_author,b.year,b.rating,
+                             b.pages,b.format,b.language
+                      FROM books b
+                      JOIN book_tags bt ON bt.book_id=b.id
+                      JOIN tags t ON t.id=bt.tag_id
+                      WHERE t.name IN (~A)
+                      GROUP BY b.id HAVING COUNT(DISTINCT t.id)=~D
+                      ORDER BY b.sort_title LIMIT ~D"
+                     ph n limit))
+                  (:or
+                   (format nil
+                     "SELECT DISTINCT b.id,b.title,b.primary_author,b.year,b.rating,
+                             b.pages,b.format,b.language
+                      FROM books b
+                      JOIN book_tags bt ON bt.book_id=b.id
+                      JOIN tags t ON t.id=bt.tag_id
+                      WHERE t.name IN (~A)
+                      ORDER BY b.sort_title LIMIT ~D"
+                     ph limit))))
+           (rows (apply #'sqlite:execute-to-list db sql tags)))
+      (if rows
+          (format nil "~D book~:P tagged ~A of ~{~S~^, ~}:~%~{  ~A~^~%~}"
+                  (length rows)
+                  (ecase mode (:and "all") (:or "any"))
+                  tags
+                  (mapcar #'book-summary-line rows))
+          (format nil "No books tagged ~A of ~{~S~^, ~}."
+                  (ecase mode (:and "all") (:or "any"))
+                  tags)))))
+
 (defun books-by-author (author &key (limit 50))
   "List books where primary_author contains AUTHOR (case-insensitive partial match)."
   (with-books-db (db)
