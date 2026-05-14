@@ -8,8 +8,11 @@
 ;;; --- Conditions ---
 
 (define-condition llm-error (error)
-  ((provider :initarg :provider :reader llm-error-provider)
-   (message :initarg :message :reader llm-error-message))
+  ((provider :initarg :provider :reader llm-error-provider
+             :documentation "The llm-provider instance that raised the error.")
+   (message :initarg :message :reader llm-error-message
+            :documentation "Human-readable description of the error."))
+  (:documentation "Base condition for all LLM provider errors.")
   (:report (lambda (c s)
              (format s "LLM error (~A): ~A"
                      (if (slot-boundp c 'provider)
@@ -18,8 +21,11 @@
                      (llm-error-message c)))))
 
 (define-condition llm-api-error (llm-error)
-  ((status :initarg :status :reader llm-api-error-status)
-   (body :initarg :body :reader llm-api-error-body))
+  ((status :initarg :status :reader llm-api-error-status
+           :documentation "HTTP status code returned by the provider.")
+   (body :initarg :body :reader llm-api-error-body
+         :documentation "Raw response body from the provider, for diagnostics."))
+  (:documentation "Condition for LLM errors that carry an HTTP status code.")
   (:report (lambda (c s)
              (format s "LLM API error (~A) HTTP ~D: ~A"
                      (if (slot-boundp c 'provider)
@@ -29,6 +35,7 @@
                      (llm-error-message c)))))
 
 (define-condition llm-auth-error (llm-api-error) ()
+  (:documentation "Condition signaled when the provider rejects the API key (HTTP 401/403).")
   (:report (lambda (c s)
              (format s "LLM authentication failed (~A): ~A"
                      (if (slot-boundp c 'provider)
@@ -40,6 +47,9 @@
   ((retry-after :initarg :retry-after :reader llm-rate-limit-retry-after
                 :initform nil
                 :documentation "Suggested retry delay in seconds, or NIL if unknown."))
+  (:documentation "Condition signaled when the provider returns HTTP 429.
+The daemon's with-llm-error-handling macro retries up to 3 times using
+retry-after (with a fallback backoff) before propagating the error.")
   (:report (lambda (c s)
              (format s "LLM rate limited (~A): ~A"
                      (if (slot-boundp c 'provider)
@@ -48,7 +58,9 @@
                      (llm-error-message c)))))
 
 (define-condition llm-feature-not-supported (llm-error)
-  ((feature :initarg :feature :reader llm-unsupported-feature))
+  ((feature :initarg :feature :reader llm-unsupported-feature
+            :documentation "Keyword naming the unsupported feature (e.g. :streaming, :list-models)."))
+  (:documentation "Condition signaled by default method implementations for optional protocol features.")
   (:report (lambda (c s)
              (format s "LLM feature ~A not supported by ~A"
                      (llm-unsupported-feature c)
@@ -60,9 +72,14 @@
 
 (defclass llm-provider ()
   ((provider-id :initarg :provider-id :reader provider-id
-                :type keyword)
+                :type keyword
+                :documentation "Stable keyword identifier for this provider (e.g. :anthropic).")
    (model :initarg :model :accessor provider-model
-          :type string)))
+          :type string
+          :documentation "Model name string used in API requests (e.g. \"claude-sonnet-4-6\")."))
+  (:documentation "Abstract base class for LLM provider backends.
+Concrete providers subclass this and specialize send-message (required)
+and optionally stream-message and list-models."))
 
 ;;; --- Generic protocol ---
 
@@ -90,10 +107,12 @@
 ;;; --- Default methods ---
 
 (defmethod stream-message ((p llm-provider) messages on-event &key &allow-other-keys)
+  "Default: signals llm-feature-not-supported. Providers that support streaming override this."
   (declare (ignore messages on-event))
   (error 'llm-feature-not-supported :feature :streaming :provider p))
 
 (defmethod list-models ((p llm-provider))
+  "Default: signals llm-feature-not-supported. Providers that support model enumeration override this."
   (error 'llm-feature-not-supported :feature :list-models :provider p))
 
 ;;; --- Message helpers ---
@@ -188,6 +207,8 @@
    :name "llm-usage-persist"))
 
 (defmethod send-message :around ((provider llm-provider) messages &key &allow-other-keys)
+  "Around method that fires a background usage-persist thread after every send-message call.
+Runs for all providers; token counts come from the result's :usage plist."
   (let ((result (call-next-method)))
     (let* ((usage (getf result :usage))
            (model (or (getf result :model)
@@ -200,6 +221,7 @@
 
 (defmethod stream-message :around ((provider llm-provider) messages on-event
                                    &key &allow-other-keys)
+  "Around method that fires a background usage-persist thread after every stream-message call."
   (declare (ignore messages on-event))
   (let ((result (call-next-method)))
     (let* ((usage (getf result :usage))
