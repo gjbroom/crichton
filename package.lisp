@@ -18,6 +18,8 @@
            #:toml-key-to-keyword
            #:toml-value-to-lisp
            #:toml-table-to-plist
+           #:deep-merge-plist
+           #:plistp
            ;; shared utilities (config/util.lisp)
            #:iso8601-now
            #:safe-intern-keyword
@@ -450,6 +452,12 @@
            #:llm-rate-limit-error
            #:llm-rate-limit-retry-after
            #:llm-feature-not-supported
+           ;; anthropic serialization (pure functions, also useful for tests)
+           #:content-block-to-anthropic
+           #:messages-to-anthropic
+           #:parse-anthropic-response
+           #:tool-choice-to-anthropic
+           #:build-anthropic-request
            ;; anthropic
            #:anthropic-provider
            #:make-anthropic-provider
@@ -471,6 +479,11 @@
            #:dispatch-tool
            #:register-tool
            #:sanitize-user-input
+           #:strip-control-chars
+           #:count-injection-markers
+           #:hget
+           #:make-json-schema
+           #:symbol-to-underscored
            #:+max-channel-input-length+
            #:+max-direct-input-length+))
 

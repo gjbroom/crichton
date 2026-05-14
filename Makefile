@@ -1,5 +1,14 @@
 all: build-crichton-tui reload-daemon
 
+test:
+	sbcl --noinform --non-interactive \
+	--eval '(require :asdf)' \
+	--eval '(push #p"/home/gjbroom/devel/crichton/" asdf:*central-registry*)' \
+	--eval '(asdf:load-system :crichton)' \
+	--eval '(load "tests/run-all-tests.lisp")' \
+	--eval '(unless (crichton/tests:run-all) (sb-ext:exit :code 1))' \
+	--eval '(sb-ext:exit :code 0)'
+
 reload-daemon:
 	sbcl --noinform --non-interactive \
 	--eval '(require :swank-client)' \
