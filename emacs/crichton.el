@@ -397,16 +397,25 @@ Streams text directly into the chat buffer as it arrives."
 (defun crichton--handle-chat-done (msg)
   "Handle a chat_done push message — finalise the response in the chat buffer."
   (let ((text (alist-get 'text msg))
-        (session (alist-get 'session_id msg)))
+        (session (alist-get 'session_id msg))
+        (is-error (alist-get 'error msg)))
     (when session
       (setq crichton--session-id session))
-    (when text
+    (when (and text (not is-error))
       (setq crichton--last-response text))
     (crichton--remove-thinking)
     (when crichton--streaming-buffer
-      ;; If no deltas arrived (non-streaming fallback), output the text now.
-      (when (and text (not crichton--delta-received))
-        (crichton--output text))
+      (cond
+       ;; Error: always display with a distinctive face, even if deltas arrived.
+       (is-error
+        (when crichton--delta-received
+          (crichton--output "\n"))
+        (when text
+          (crichton--output
+           (propertize (concat "[Error] " text) 'face 'error))))
+       ;; Normal non-streaming fallback: output text if no deltas were streamed.
+       ((and text (not crichton--delta-received))
+        (crichton--output text)))
       (crichton--output "\n\n❯ "))
     (setq crichton--streaming-buffer nil)
     (setq crichton--streaming-done t)))
