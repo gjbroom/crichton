@@ -201,19 +201,23 @@ and full cleanup on unwind."
 (defmacro defhost-callback (name arg-bindings &body body)
   "Define a CFFI callback and a testable -impl function for a WASM host
 function.  ARG-BINDINGS is a list of symbols bound to successive i32 args.
+If the first form in BODY is a string it becomes the docstring for NAME-impl.
 Generates:
   (defun NAME-impl (caller results nresults ARG-BINDINGS...) ...)
   (cffi:defcallback NAME ...)
 The -impl function contains the real logic and is callable from Lisp tests.
 The callback is a thin wrapper that validates nargs, extracts i32 values,
 delegates to -impl, and catches errors."
-  (let ((nargs-required (length arg-bindings))
-        (impl-name (intern (format nil "~A-IMPL" (symbol-name name)))))
+  (let* ((docstring (when (and body (stringp (first body))) (first body)))
+         (real-body (if docstring (rest body) body))
+         (nargs-required (length arg-bindings))
+         (impl-name (intern (format nil "~A-IMPL" (symbol-name name)))))
     `(progn
        (defun ,impl-name (caller results nresults ,@arg-bindings)
+         ,@(when docstring (list docstring))
          (declare (ignorable caller results nresults))
          (block ,name
-           ,@body))
+           ,@real-body))
        (cffi:defcallback ,name :pointer
            ((env :pointer) (caller :pointer)
             (args :pointer) (nargs :size)
@@ -279,6 +283,9 @@ delegates to -impl, and catches errors."
       "")))
 
 (defhost-callback host-log-callback (level ptr len)
+  "WASM host: log(level, ptr, len) → void.
+Reads a UTF-8 string from linear memory and emits it via log4cl.
+Levels: 0=debug 1=info 2=warn 3=error.  Validates all arguments before reading."
   ;; Validate level is a reasonable integer (0-3 standard, but be permissive)
   (unless (and (>= level 0) (<= level 255))
     (log:debug "host-log-callback: level ~A out of range [0, 255]" level)
@@ -397,6 +404,9 @@ instead of a WAT string.  Returns i32 result (or NIL if nresults=0)."
 ;;; Returns: 0=found, -1=not found, -2=error
 
 (defhost-callback host-kv-get-callback (key-ptr key-len)
+  "WASM host: kv_get(key_ptr, key_len) → i32.
+Reads key from linear memory, looks up the value in the skill-scoped KV store.
+Returns 0=found, -1=not found, -2=error."
   (let ((key (read-wasm-string caller key-ptr key-len)))
     (handler-case
         (let* ((ctx (crichton/runner:current-skill-context))
@@ -415,6 +425,9 @@ instead of a WAT string.  Returns i32 result (or NIL if nresults=0)."
 ;;; Returns: 0=success, -1=quota exceeded, -2=other error
 
 (defhost-callback host-kv-set-callback (key-ptr key-len val-ptr val-len)
+  "WASM host: kv_set(key_ptr, key_len, val_ptr, val_len) → i32.
+Reads key and value strings from linear memory, writes to skill-scoped KV store.
+Returns 0=success, -1=quota exceeded, -2=other error."
   (let ((key (read-wasm-string caller key-ptr key-len))
         (val (read-wasm-string caller val-ptr val-len)))
     (handler-case
@@ -435,6 +448,9 @@ instead of a WAT string.  Returns i32 result (or NIL if nresults=0)."
 ;;; Returns: 0=deleted, 1=not found, -1=error
 
 (defhost-callback host-kv-delete-callback (key-ptr key-len)
+  "WASM host: kv_delete(key_ptr, key_len) → i32.
+Removes the key from the skill-scoped KV store.
+Returns 0=deleted, 1=key not found, -1=error."
   (let ((key (read-wasm-string caller key-ptr key-len)))
     (handler-case
         (let* ((ctx (crichton/runner:current-skill-context))
@@ -453,6 +469,9 @@ instead of a WAT string.  Returns i32 result (or NIL if nresults=0)."
 ;;; Returns: 1=exists, 0=not exists, -1=error
 
 (defhost-callback host-kv-exists-callback (key-ptr key-len)
+  "WASM host: kv_exists(key_ptr, key_len) → i32.
+Checks whether the key is present in the skill-scoped KV store.
+Returns 1=exists, 0=not found, -1=error."
   (let ((key (read-wasm-string caller key-ptr key-len)))
     (handler-case
         (let* ((ctx (crichton/runner:current-skill-context))
@@ -471,6 +490,10 @@ instead of a WAT string.  Returns i32 result (or NIL if nresults=0)."
 ;;; Returns: count of matching keys, or -1 on error
 
 (defhost-callback host-kv-list-callback (prefix-ptr prefix-len)
+  "WASM host: kv_list(prefix_ptr, prefix_len) → i32.
+Lists keys in the skill-scoped KV store matching the given prefix.
+An empty prefix (prefix_len=0) returns all keys.
+Returns the count of matching keys, or -1 on error."
   (let ((prefix (if (zerop prefix-len)
                     nil
                     (read-wasm-string caller prefix-ptr prefix-len))))
@@ -493,6 +516,10 @@ instead of a WAT string.  Returns i32 result (or NIL if nresults=0)."
 (defhost-callback host-http-request-callback
     (method-ptr method-len url-ptr url-len
      headers-ptr headers-len body-ptr body-len)
+  "WASM host: http_request(method, url, headers, body) → i32 status code.
+All four arguments are (ptr, len) pairs pointing into linear memory.
+Not yet fully implemented — currently returns 403 for all requests pending
+allowlist validation.  Will eventually enforce network egress policy."
   (let ((method (read-wasm-string caller method-ptr method-len))
         (url (read-wasm-string caller url-ptr url-len))
         (headers (read-wasm-string caller headers-ptr headers-len))
@@ -508,6 +535,10 @@ instead of a WAT string.  Returns i32 result (or NIL if nresults=0)."
 ;;; WASM signature: (i32 name_ptr, i32 name_len) -> (i32 value_ptr or -1 if not found)
 
 (defhost-callback host-get-secret-callback (name-ptr name-len)
+  "WASM host: get_secret(name_ptr, name_len) → i32 value_ptr or -1.
+Resolves a named credential for the running skill.
+Not yet fully implemented — currently returns -1 pending RPC credential
+resolution.  Will eventually call back to the daemon's credential mediator."
   (let ((name (read-wasm-string caller name-ptr name-len)))
     ;; TODO: contact daemon via RPC to resolve credential
     (declare (ignore name))
