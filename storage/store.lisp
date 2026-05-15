@@ -204,20 +204,31 @@
 ;;; --- Persistence ---
 
 (defun flush-all-storage ()
-  "Save all dirty namespaces to disk."
-  (bt:with-lock-held (*storage-lock*)
-    (let ((count 0))
-      (maphash (lambda (namespace dirty-p)
-                 (declare (ignore dirty-p))
-                 (handler-case
-                     (progn
-                       (flush-namespace namespace)
-                       (incf count))
-                   (error (c)
-                     (log:warn "Failed to flush storage for ~A: ~A" namespace c))))
-               *dirty-namespaces*)
-      (log:info "Flushed ~D storage namespace~:P" count)
-      count)))
+  "Save all dirty namespaces to disk.
+   Releases storage-lock during I/O to avoid starving concurrent persistence ops."
+  (let ((dirty-names (bt:with-lock-held (*storage-lock*)
+                       (loop for ns being the hash-keys of *dirty-namespaces* collect ns)))
+        (count 0))
+    (dolist (namespace dirty-names)
+      (let ((json (bt:with-lock-held (*storage-lock*)
+                    ;; Clear dirty flag and snapshot data atomically.
+                    ;; Any concurrent write after this re-marks dirty and flushes next cycle.
+                    (let ((data-ht (gethash namespace *storage-cache*)))
+                      (remhash namespace *dirty-namespaces*)
+                      (when data-ht
+                        (storage-to-json-string namespace data-ht))))))
+        (when json
+          (handler-case
+              (let* ((plaintext (sb-ext:string-to-octets json :external-format :utf-8))
+                     (path (storage-file-path namespace)))
+                (ensure-directories-exist path)
+                (crichton/crypto:encrypt-to-file plaintext path)
+                (log:debug "Storage saved for namespace ~A" namespace)
+                (incf count))
+            (error (c)
+              (log:warn "Failed to flush storage for ~A: ~A" namespace c))))))
+    (log:info "Flushed ~D storage namespace~:P" count)
+    count))
 
 (defun preload-storage ()
   "Scan ~/.crichton/data/*.age and load all into cache."
