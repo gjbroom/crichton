@@ -241,7 +241,11 @@ Crichton uses a REPL-first development workflow with targeted unit tests for pur
 | =tests/test-config.lisp= | =deep-merge-plist=, =toml-key-to-keyword=, =toml-value-to-lisp=, JSON codec, =safe-intern-keyword=, =plistp= |
 | =tests/test-llm-anthropic.lisp= | LLM wire serialization: content blocks, messages, tool choice, response parsing |
 | =tests/test-tools.lisp= | =hget=, =symbol-to-underscored=, =make-json-schema= |
-| =tests/run-all-tests.lisp= | Top-level runner |
+| =tests/test-agent-loop.lisp= | Agent loop message serialization and tool-call round-trips |
+| =tests/test-storage.lisp= | Storage CRUD, list-keys, batch ops, dirty tracking, namespace isolation, JSON serialization, usage reporting, clear |
+| =tests/test-sessions.lisp= | Session ID generation, timestamp plausibility, serialization round-trip |
+| =tests/test-rss-monitor.lisp= | =rss-monitor-stop-many=: batch removal, partial overlap, unknown names, empty list, bystander preservation |
+| =tests/run-all-tests.lisp= | Top-level runner (8 suites) |
 | =tests/test-kv-store.lisp= | KV store CRUD, quota, cache, backup/restore, integrity (integration) |
 | =tests/test-task-persistence.lisp= | Scheduler task serialization and encrypt/decrypt roundtrip (integration) |
 | =tests/test-rss-filter.lisp= | RSS filter WASM skill invocation (integration) |

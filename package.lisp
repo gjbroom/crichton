@@ -226,6 +226,7 @@
            #:rss-check-report
            #:rss-monitor-start
            #:rss-monitor-stop
+           #:rss-monitor-stop-many
            #:rss-monitor-mute
            #:rss-monitor-unmute
            #:rss-reset-all-backoff
@@ -511,6 +512,7 @@
                 #:rss-check-report
                 #:rss-monitor-start
                 #:rss-monitor-stop
+                #:rss-monitor-stop-many
                 #:rss-monitor-mute
                 #:rss-monitor-unmute
                 #:rss-reset-all-backoff

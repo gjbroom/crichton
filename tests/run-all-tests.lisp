@@ -19,7 +19,8 @@
   (load (merge-pathnames "test-tools.lisp" here))
   (load (merge-pathnames "test-agent-loop.lisp" here))
   (load (merge-pathnames "test-storage.lisp" here))
-  (load (merge-pathnames "test-sessions.lisp" here)))
+  (load (merge-pathnames "test-sessions.lisp" here))
+  (load (merge-pathnames "test-rss-monitor.lisp" here)))
 
 (defpackage #:crichton/tests
   (:use #:cl)
@@ -39,7 +40,8 @@
                (crichton/tests/tools:run-all)
                (crichton/tests/agent-loop:run-all)
                (crichton/tests/storage:run-all)
-               (crichton/tests/sessions:run-all))))
+               (crichton/tests/sessions:run-all)
+               (crichton/tests/rss-monitor:run-all))))
     (let ((all-passed (every #'identity results))
           (suite-count (length results))
           (pass-count  (count t results)))

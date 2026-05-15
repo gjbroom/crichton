@@ -234,6 +234,26 @@ WASM skill before reporting."
     (persist-rss-monitors)
     found))
 
+(defun rss-monitor-stop-many (names &key (persist t))
+  "Cancel and remove all monitors in NAMES in a single batch operation.
+   Cancels each scheduler task, then removes all entries from *rss-monitors*
+   under one lock acquisition, then calls persist-rss-monitors exactly once.
+   More efficient than calling rss-monitor-stop for each name when removing
+   many monitors (e.g. after a bad OPML import).
+   Returns the count of monitors that were actually present in the registry.
+   When PERSIST is NIL, skips the storage write (useful for testing)."
+  (dolist (name names)
+    (cancel-task name))
+  (let ((removed 0))
+    (bt:with-lock-held (*rss-monitors-lock*)
+      (dolist (name names)
+        (when (remhash name *rss-monitors*)
+          (incf removed))))
+    (when persist
+      (persist-rss-monitors))
+    (log:info "RSS monitors removed: ~D of ~D requested" removed (length names))
+    removed))
+
 (defun rss-list-monitors ()
   "List all RSS monitor tasks (tasks whose names start with 'rss:')."
   (remove-if-not (lambda (task)
