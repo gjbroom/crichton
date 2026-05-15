@@ -9,10 +9,8 @@
 ;;; --- Predicates ---
 
 (defun user-task-p (task)
-  "Return T if TASK is a user-defined task (name starts with 'user:')."
-  (and (stringp (scheduled-task-name task))
-       (>= (length (scheduled-task-name task)) 5)
-       (string= "user:" (subseq (scheduled-task-name task) 0 5))))
+  "Return T if TASK has an agent-prompt and is therefore persistable across restarts."
+  (not (null (scheduled-task-agent-prompt task))))
 
 ;;; --- File path ---
 

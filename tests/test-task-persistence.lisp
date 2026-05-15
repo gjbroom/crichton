@@ -33,6 +33,8 @@
                 #:schedule-every
                 #:schedule-daily
                 #:schedule-at
+                #:schedule-prompt-every
+                #:schedule-prompt-daily
                 #:cancel-task
                 #:list-tasks
                 #:register-schedulable-action
@@ -83,13 +85,14 @@
 
 ;;; --- Helpers ---
 
-(defun make-test-task (name kind &key (interval 3600) (hour 9) (minute 0) (next-ut nil))
+(defun make-test-task (name kind &key (interval 3600) (hour 9) (minute 0) (next-ut nil) agent-prompt)
   "Create a scheduled-task for testing."
   (make-scheduled-task
    :name name
    :kind kind
    :fn (constantly :test-result)
    :action-name (format nil "test-action-~A" name)
+   :agent-prompt agent-prompt
    :interval-seconds (when (eq kind :every) interval)
    :daily-hour (when (eq kind :daily) hour)
    :daily-minute (when (eq kind :daily) minute)
@@ -108,21 +111,19 @@
 ;;; --- Suite 1: user-task-p predicate ---
 
 (defun test-user-task-predicate ()
-  "Test the user-task-p predicate."
+  "Test the user-task-p predicate: tasks with an agent-prompt are persistable."
   (reset-counts)
   (format t "~&--- Suite: user-task-p predicate ---~%")
 
-  (let ((user-task   (make-test-task "user:rss-monitor" :every))
-        (system-task (make-test-task "battery-monitor"  :every))
-        (user-daily  (make-test-task "user:daily-check" :daily))
-        (short-name  (make-test-task "usr"              :every))
-        (user-exact  (make-test-task "user:"            :one-shot)))
+  (let ((prompt-every    (make-test-task "rss:curator"        :every    :agent-prompt "Curate RSS feeds"))
+        (prompt-daily    (make-test-task "user:daily-check"   :daily    :agent-prompt "Run daily check"))
+        (no-prompt-every (make-test-task "battery-monitor"    :every))
+        (no-prompt-daily (make-test-task "rss:morning-brief"  :daily)))
 
-    (check= "user:rss-monitor → true"  (user-task-p user-task)   t)
-    (check= "user:daily-check → true"  (user-task-p user-daily)  t)
-    (check= "battery-monitor → false"  (user-task-p system-task) nil)
-    (check= "short name 'usr' → false" (user-task-p short-name)  nil)
-    (check= "bare 'user:' → true"      (user-task-p user-exact)  t))
+    (check= "with prompt, every → true"    (user-task-p prompt-every)    t)
+    (check= "with prompt, daily → true"    (user-task-p prompt-daily)    t)
+    (check= "no prompt, every → false"     (user-task-p no-prompt-every) nil)
+    (check= "no prompt, daily → false"     (user-task-p no-prompt-daily) nil))
 
   (print-summary "user-task-p"))
 
@@ -182,7 +183,8 @@
   (format t "~&--- Suite: encryption roundtrip (writes to disk) ---~%")
 
   (let* ((future-ut (+ (get-universal-time) 7200))
-         (task (make-test-task "user:enc-test" :every :interval 3600 :next-ut future-ut)))
+         (task (make-test-task "user:enc-test" :every :interval 3600 :next-ut future-ut
+                               :agent-prompt "Run the enc test")))
 
     ;; Save one task
     (let ((count (save-user-tasks (list task))))
@@ -313,11 +315,9 @@
   ;; Register test action
   (register-schedulable-action "cycle-action" "Cycle test action" (constantly :cycle))
 
-  ;; Schedule two user tasks
-  (schedule-every "user:cycle-every" 1800 (constantly :cycle)
-                  :replace t :action-name "cycle-action")
-  (schedule-daily "user:cycle-daily" 8 0 (constantly :cycle)
-                  :replace t :action-name "cycle-action")
+  ;; Schedule two user tasks (with agent-prompt so they are persistable)
+  (schedule-prompt-every "user:cycle-every" 1800 "Run cycle every test" :replace t)
+  (schedule-prompt-daily "user:cycle-daily" 8 0 "Run cycle daily test" :replace t)
 
   (let ((before (list-tasks)))
     (check "two tasks scheduled before persist"
@@ -400,10 +400,8 @@
   (reset-counts)
   (format t "~&--- Suite: export-user-tasks ---~%")
 
-  ;; Schedule a task to export
-  (register-schedulable-action "export-action" "Export test" (constantly :export))
-  (schedule-every "user:export-test" 900 (constantly :export)
-                  :replace t :action-name "export-action")
+  ;; Schedule a task to export (with agent-prompt so it appears in export)
+  (schedule-prompt-every "user:export-test" 900 "Run export test" :replace t)
 
   (let ((json (export-user-tasks)))
     (check "export returns a string" (stringp json))
