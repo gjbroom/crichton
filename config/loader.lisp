@@ -5,7 +5,7 @@
 
 (in-package #:crichton/config)
 
-(defparameter *crichton-version* "0.5.3"
+(defparameter *crichton-version* "0.5.4"
   "Crichton daemon version string. Must match crichton.asd :version.")
 
 (defvar *config* nil

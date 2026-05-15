@@ -138,6 +138,20 @@
         (error "age-keygen -y returned empty recipient"))
       recipient)))
 
+;;; --- Secure temp file helpers ---
+
+(defun secure-temp-dir ()
+  "Return ~/.crichton/tmp/ as a namestring, creating it (0700) if needed."
+  (let ((dir (merge-pathnames "tmp/" crichton/config:*agent-home*)))
+    (ensure-directories-exist dir)
+    (sb-posix:chmod (namestring dir) #o700)
+    (namestring dir)))
+
+(defun make-secure-temp-file (prefix)
+  "Create a temp file via mkstemp in ~/.crichton/tmp/.
+   Returns (values fd path-string). File has 0600 permissions, O_EXCL guarantee."
+  (sb-posix:mkstemp (format nil "~A~A-XXXXXX" (secure-temp-dir) prefix)))
+
 ;;; --- Encrypt / Decrypt via pipes ---
 ;;;
 ;;; We use two separate process invocations:
@@ -150,36 +164,37 @@
 (defun age-encrypt (plaintext-bytes)
   "Encrypt PLAINTEXT-BYTES (an octet vector) using age with the identity recipient.
    Returns ciphertext as an octet vector (ASCII-armored).
-   Uses temp files for both input and output to avoid pipe buffer deadlocks
-   on large payloads (> 64KB)."
-  (let* ((recipient (identity-recipient))
-         (tag (format nil "~A-~A" (get-universal-time) (random 1000000)))
-         (tmp-dir (uiop:temporary-directory))
-         (in-path  (merge-pathnames (format nil ".crichton-age-in-~A.tmp"  tag) tmp-dir))
-         (out-path (merge-pathnames (format nil ".crichton-age-out-~A.tmp" tag) tmp-dir)))
-    (unwind-protect
-         (progn
-           (with-open-file (s in-path :direction :output
-                                      :element-type '(unsigned-byte 8)
-                                      :if-exists :supersede)
-             (write-sequence plaintext-bytes s))
-           (let* ((process (sb-ext:run-program
-                            (age-binary)
-                            (list "--encrypt" "--recipient" recipient "--armor"
-                                  "--output" (namestring out-path)
-                                  (namestring in-path))
-                            :output nil
-                            :error :stream
-                            :wait t)))
-             (unless (zerop (sb-ext:process-exit-code process))
-               (let ((err (read-process-error-string process)))
+   Uses mkstemp temp files (0600, O_EXCL) in ~/.crichton/tmp/ to avoid both
+   pipe buffer deadlocks on large payloads (>64KB) and world-readable temp files."
+  (let ((recipient (identity-recipient)))
+    (multiple-value-bind (in-fd in-path)
+        (make-secure-temp-file "age-in")
+      (multiple-value-bind (out-fd out-path)
+          (make-secure-temp-file "age-out")
+        (unwind-protect
+             (progn
+               (let ((in-stream (sb-sys:make-fd-stream in-fd :output t
+                                                       :element-type '(unsigned-byte 8))))
+                 (write-sequence plaintext-bytes in-stream)
+                 (close in-stream))
+               (sb-posix:close out-fd)
+               (let ((process (sb-ext:run-program
+                               (age-binary)
+                               (list "--encrypt" "--recipient" recipient "--armor"
+                                     "--output" out-path
+                                     in-path)
+                               :output nil
+                               :error :stream
+                               :wait t)))
+                 (unless (zerop (sb-ext:process-exit-code process))
+                   (let ((err (read-process-error-string process)))
+                     (sb-ext:process-close process)
+                     (error "age encrypt failed (exit ~D): ~A"
+                            (sb-ext:process-exit-code process) err)))
                  (sb-ext:process-close process)
-                 (error "age encrypt failed (exit ~D): ~A"
-                        (sb-ext:process-exit-code process) err)))
-             (sb-ext:process-close process)
-             (read-file-bytes out-path)))
-      (ignore-errors (delete-file in-path))
-      (ignore-errors (delete-file out-path)))))
+                 (read-file-bytes out-path)))
+          (ignore-errors (delete-file in-path))
+          (ignore-errors (delete-file out-path)))))))
 
 (defun age-decrypt (ciphertext-bytes)
   "Decrypt CIPHERTEXT-BYTES (an octet vector) using age with the identity key.
