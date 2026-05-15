@@ -150,31 +150,36 @@
 (defun age-encrypt (plaintext-bytes)
   "Encrypt PLAINTEXT-BYTES (an octet vector) using age with the identity recipient.
    Returns ciphertext as an octet vector (ASCII-armored).
-   Passes plaintext via stdin, reads ciphertext from stdout.
-   NOTE: PLAINTEXT-BYTES must be valid UTF-8 (fine for JSON payloads).
-   For arbitrary binary data, use encrypt-to-file with a temp file approach."
+   Uses temp files for both input and output to avoid pipe buffer deadlocks
+   on large payloads (> 64KB)."
   (let* ((recipient (identity-recipient))
-         (process (sb-ext:run-program
-                   (age-binary)
-                   (list "--encrypt" "--recipient" recipient "--armor")
-                   :input :stream
-                   :output :stream
-                   :error :stream
-                   :wait nil)))
+         (tag (format nil "~A-~A" (get-universal-time) (random 1000000)))
+         (tmp-dir (uiop:temporary-directory))
+         (in-path  (merge-pathnames (format nil ".crichton-age-in-~A.tmp"  tag) tmp-dir))
+         (out-path (merge-pathnames (format nil ".crichton-age-out-~A.tmp" tag) tmp-dir)))
     (unwind-protect
          (progn
-           (let ((input-string (sb-ext:octets-to-string plaintext-bytes
-                                                        :external-format :utf-8)))
-             (write-string input-string (sb-ext:process-input process)))
-           (close (sb-ext:process-input process))
-           (sb-ext:process-wait process)
-           (let ((output (read-process-output-string process)))
+           (with-open-file (s in-path :direction :output
+                                      :element-type '(unsigned-byte 8)
+                                      :if-exists :supersede)
+             (write-sequence plaintext-bytes s))
+           (let* ((process (sb-ext:run-program
+                            (age-binary)
+                            (list "--encrypt" "--recipient" recipient "--armor"
+                                  "--output" (namestring out-path)
+                                  (namestring in-path))
+                            :output nil
+                            :error :stream
+                            :wait t)))
              (unless (zerop (sb-ext:process-exit-code process))
                (let ((err (read-process-error-string process)))
+                 (sb-ext:process-close process)
                  (error "age encrypt failed (exit ~D): ~A"
                         (sb-ext:process-exit-code process) err)))
-             (sb-ext:string-to-octets output :external-format :utf-8)))
-      (sb-ext:process-close process))))
+             (sb-ext:process-close process)
+             (read-file-bytes out-path)))
+      (ignore-errors (delete-file in-path))
+      (ignore-errors (delete-file out-path)))))
 
 (defun age-decrypt (ciphertext-bytes)
   "Decrypt CIPHERTEXT-BYTES (an octet vector) using age with the identity key.
