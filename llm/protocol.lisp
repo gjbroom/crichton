@@ -68,6 +68,15 @@ retry-after (with a fallback backoff) before propagating the error.")
                          (provider-id (llm-error-provider c))
                          "unknown")))))
 
+(define-condition llm-offline-error (llm-error) ()
+  (:documentation "Condition signaled by offline-provider for LLM operations not yet implemented locally.")
+  (:report (lambda (c s)
+             (format s "LLM offline mode (~A): not implemented yet — ~A"
+                     (if (slot-boundp c 'provider)
+                         (provider-id (llm-error-provider c))
+                         "unknown")
+                     (llm-error-message c)))))
+
 ;;; --- Base class ---
 
 (defclass llm-provider ()

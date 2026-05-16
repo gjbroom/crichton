@@ -277,6 +277,20 @@ Same snapshot/commit/restore pattern as the streaming handler."
       (handle-streaming-chat-request id msg *current-rpc-stream* *current-rpc-stream-lock*)
       (handle-blocking-chat-request id msg)))
 
+(defun handle-invoke-tool-request (id msg)
+  "Directly invoke a registered tool by name, bypassing the agent loop.
+   Expects msg fields: tool (string), input (object, optional).
+   Returns {result: <string>} or an error response.
+   Enables non-LLM callers to access any daemon tool deterministically."
+  (let ((tool-name (crichton/rpc:msg-get msg "tool"))
+        (input (or (crichton/rpc:msg-get msg "input")
+                   (make-hash-table :test #'equal))))
+    (unless (and tool-name (plusp (length tool-name)))
+      (return-from handle-invoke-tool-request
+        (crichton/rpc:make-error-response id "bad_request" "Missing required field: tool")))
+    (let ((result (crichton/agent:dispatch-tool tool-name input)))
+      (crichton/rpc:make-ok-response id (ht "result" result)))))
+
 ;;; --- Rate limiting ---
 
 (defvar *rpc-rate-limiter*
@@ -305,6 +319,9 @@ Same snapshot/commit/restore pattern as the streaming handler."
 
           ("chat"
            (handle-chat-request id msg))
+
+          ("invoke-tool"
+           (handle-invoke-tool-request id msg))
 
           ("status"
            (crichton/rpc:make-ok-response id (daemon-status)))

@@ -39,12 +39,15 @@
     (ecase provider-id
       (:anthropic
        (let ((api-key (resolve-api-key cred-name)))
-         (make-anthropic-provider :api-key api-key :model model))))))
+         (make-anthropic-provider :api-key api-key :model model)))
+      (:offline
+       (make-offline-provider)))))
 
 (defun default-credential-name (provider-id)
-  "Return the conventional credential store name for a provider."
-  (ecase provider-id
-    (:anthropic "anthropic-api-key")))
+  "Return the conventional credential store name for a provider, or NIL if none needed."
+  (case provider-id
+    (:anthropic "anthropic-api-key")
+    (otherwise nil)))
 
 (defun ensure-llm-provider ()
   "Ensure the LLM provider is initialized. Creates from config if needed."

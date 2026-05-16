@@ -447,6 +447,10 @@
            #:llm-rate-limit-error
            #:llm-rate-limit-retry-after
            #:llm-feature-not-supported
+           #:llm-offline-error
+           ;; offline provider
+           #:offline-provider
+           #:make-offline-provider
            ;; anthropic serialization (pure functions, also useful for tests)
            #:content-block-to-anthropic
            #:messages-to-anthropic

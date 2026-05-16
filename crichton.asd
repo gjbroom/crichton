@@ -90,6 +90,7 @@ signing. Informed by a security audit of OpenClaw."
                 (:module "llm"
                  :components ((:file "protocol")
                               (:file "anthropic")
+                              (:file "offline")
                               (:file "registry")))
                 (:module "daemon"
                 :components ((:file "lifecycle")
