@@ -114,38 +114,93 @@ Scoring guide:
         nil))))
 
 (defun score-article-batch (articles interests-profile)
-  "Score ARTICLES with the LLM against INTERESTS-PROFILE.
+  "Score ARTICLES against INTERESTS-PROFILE.
    ARTICLES is a list of plists (:guid :feed-name :title :description).
+   Uses the local keyword scorer when the active provider is offline;
+   otherwise calls the LLM.
    Returns a list of (:guid :score :tags :reason) plists, or NIL on failure."
   (unless articles
     (return-from score-article-batch nil))
-  (let* ((items-json
-           (shasht:write-json
-            (coerce
-             (mapcar (lambda (a)
-                       (let ((ht (make-hash-table :test #'equal)))
-                         (setf (gethash "guid"        ht) (or (getf a :guid) "")
-                               (gethash "title"       ht) (or (getf a :title) "")
-                               (gethash "description" ht) (or (getf a :description) "")
-                               (gethash "feed_name"   ht) (or (getf a :feed-name) ""))
-                         ht))
-                     articles)
-             'vector)
-            nil))
-         (prompt (format nil "Interests profile:~%~A~%~%Articles:~%~A"
-                         interests-profile items-json)))
-    (handler-case
-        (let* ((provider (crichton/llm:ensure-llm-provider))
-               (response (crichton/llm:send-message
-                          provider
-                          (list (list :role :user :content prompt))
-                          :system *curator-system-prompt*
-                          :max-tokens 2048))
-               (text (crichton/llm:response-text response)))
-          (parse-score-response text))
-      (error (c)
-        (log:warn "RSS curator: LLM scoring failed: ~A" c)
-        nil))))
+  (let ((provider (crichton/llm:ensure-llm-provider)))
+    (when (typep provider 'crichton/llm:offline-provider)
+      (log:info "RSS curator: using local keyword scorer (offline mode)")
+      (return-from score-article-batch
+        (local-score-article-batch articles interests-profile)))
+    (let* ((items-json
+             (shasht:write-json
+              (coerce
+               (mapcar (lambda (a)
+                         (let ((ht (make-hash-table :test #'equal)))
+                           (setf (gethash "guid"        ht) (or (getf a :guid) "")
+                                 (gethash "title"       ht) (or (getf a :title) "")
+                                 (gethash "description" ht) (or (getf a :description) "")
+                                 (gethash "feed_name"   ht) (or (getf a :feed-name) ""))
+                           ht))
+                       articles)
+               'vector)
+              nil))
+           (prompt (format nil "Interests profile:~%~A~%~%Articles:~%~A"
+                           interests-profile items-json)))
+      (handler-case
+          (let* ((response (crichton/llm:send-message
+                            provider
+                            (list (list :role :user :content prompt))
+                            :system *curator-system-prompt*
+                            :max-tokens 2048))
+                 (text (crichton/llm:response-text response)))
+            (parse-score-response text))
+        (error (c)
+          (log:warn "RSS curator: LLM scoring failed: ~A" c)
+          nil)))))
+
+;;; --- Local (offline) keyword scorer ---
+
+(defparameter *stop-words*
+  '("a" "an" "the" "and" "or" "but" "in" "on" "at" "to" "for" "of" "with"
+    "by" "from" "is" "are" "was" "were" "be" "been" "being" "have" "has"
+    "had" "do" "does" "did" "will" "would" "could" "should" "may" "might"
+    "that" "this" "these" "those" "it" "its" "as" "not" "no" "so" "if"
+    "about" "into" "than" "then" "also" "how" "what" "when" "where" "who"
+    "which" "their" "they" "them" "we" "our" "you" "your" "he" "she" "his"
+    "her" "i" "my" "me" "us" "new" "can" "up" "out" "all" "more" "just")
+  "Common English words to exclude from keyword matching.")
+
+(defun tokenize-text (text)
+  "Split TEXT into lowercase alpha tokens, dropping stop-words and short tokens."
+  (let ((tokens '()))
+    (cl-ppcre:do-matches-as-strings (tok "[a-zA-Z]{3,}" text)
+      (let ((word (string-downcase tok)))
+        (unless (member word *stop-words* :test #'equal)
+          (push word tokens))))
+    (remove-duplicates tokens :test #'equal)))
+
+(defun local-score-article-batch (articles interests-profile)
+  "Score ARTICLES against INTERESTS-PROFILE using keyword overlap.
+   No LLM required. Returns the same (:guid :score :tags :reason) plist
+   format as score-article-batch so the rest of the pipeline is unchanged."
+  (let* ((profile-terms (tokenize-text interests-profile))
+         (total (max 1 (length profile-terms))))
+    (mapcar (lambda (article)
+              (let* ((text (format nil "~A ~A"
+                                   (or (getf article :title) "")
+                                   (or (getf article :description) "")))
+                     (article-terms (tokenize-text text))
+                     (matched (remove-if-not
+                               (lambda (t1) (member t1 article-terms :test #'equal))
+                               profile-terms))
+                     (score (min 1.0 (/ (float (length matched)) total)))
+                     (tags (mapcar #'string-capitalize
+                                   (subseq matched 0 (min 4 (length matched)))))
+                     (reason (if matched
+                                 (format nil "~D term~:P matched: ~{~A~^, ~}"
+                                         (length matched)
+                                         (subseq matched 0 (min 5 (length matched))))
+                                 "No profile terms matched")))
+                (list :guid   (getf article :guid)
+                      :score  score
+                      :tags   tags
+                      :reason reason)))
+            articles)))
 
 ;;; --- Scoring loop ---
 
